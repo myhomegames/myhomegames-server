@@ -447,8 +447,8 @@ if (process.env.NODE_ENV !== 'test') {
     }
   }
   
-  if (!API_TOKEN && !TWITCH_CLIENT_ID) {
-    console.warn("Warning: No authentication configured. Set either API_TOKEN (for dev) or TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET (for production).");
+  if (!API_TOKEN) {
+    console.warn("Warning: No API_TOKEN configured for development. For production, use Twitch OAuth (credentials passed via web requests).");
   }
 }
 
