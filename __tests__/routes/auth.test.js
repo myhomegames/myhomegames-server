@@ -12,9 +12,7 @@ jest.mock('https');
 let app;
 
 beforeAll(() => {
-  // Set Twitch credentials for testing
-  process.env.TWITCH_CLIENT_ID = 'test-twitch-client-id';
-  process.env.TWITCH_CLIENT_SECRET = 'test-twitch-client-secret';
+  // Note: Twitch credentials are now passed via web requests, not environment variables
   process.env.API_BASE = 'http://127.0.0.1:4000';
   
   // Clear module cache to ensure fresh server instance
@@ -42,10 +40,14 @@ afterAll(async () => {
   }
 });
 
-describe('GET /auth/twitch', () => {
-  test('should return auth URL when Twitch client ID is configured', async () => {
+describe('POST /auth/twitch', () => {
+  test('should return auth URL when Twitch credentials are provided in body', async () => {
     const response = await request(app)
-      .get('/auth/twitch')
+      .post('/auth/twitch')
+      .send({
+        clientId: 'test-twitch-client-id',
+        clientSecret: 'test-twitch-client-secret'
+      })
       .expect(200);
     
     expect(response.body).toHaveProperty('authUrl');
@@ -55,10 +57,15 @@ describe('GET /auth/twitch', () => {
     expect(response.body.authUrl).toContain('user:read:email');
   });
 
-  // Note: Testing the error case when TWITCH_CLIENT_ID is not configured
-  // is difficult because the value is read at module load time.
-  // The check is present in the code and will work correctly in production.
-  // We test the success case above which verifies the route works correctly.
+  test('should return 400 when credentials are missing', async () => {
+    const response = await request(app)
+      .post('/auth/twitch')
+      .send({})
+      .expect(400);
+    
+    expect(response.body).toHaveProperty('error');
+    expect(response.body.error).toContain('TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required');
+  });
 });
 
 describe('GET /auth/twitch/callback', () => {
@@ -80,11 +87,23 @@ describe('GET /auth/twitch/callback', () => {
 
   test('should exchange code for token and redirect with token', async () => {
     const mockCode = 'test-auth-code';
+    const mockState = 'test-state-123';
     const mockAccessToken = 'test-access-token';
     const mockRefreshToken = 'test-refresh-token';
     const mockUserId = '123456';
     const mockUserName = 'testuser';
     const mockUserImage = 'https://example.com/avatar.jpg';
+
+    // First, create a state by calling POST /auth/twitch
+    const authResponse = await request(app)
+      .post('/auth/twitch')
+      .send({
+        clientId: 'test-twitch-client-id',
+        clientSecret: 'test-twitch-client-secret'
+      })
+      .expect(200);
+    
+    const state = authResponse.body.state;
 
     // Mock Twitch token endpoint
     const mockTokenResponse = {
@@ -153,7 +172,7 @@ describe('GET /auth/twitch/callback', () => {
     });
 
     const response = await request(app)
-      .get(`/auth/twitch/callback?code=${mockCode}`)
+      .get(`/auth/twitch/callback?code=${mockCode}&state=${state}`)
       .set('Origin', 'http://localhost:5173')
       .expect(302);
 
@@ -261,6 +280,7 @@ describe('GET /auth/me', () => {
     const response = await request(app)
       .get('/auth/me')
       .set('X-Auth-Token', mockAccessToken)
+      .set('X-Twitch-Client-Id', 'test-twitch-client-id')
       .expect(200);
     
     expect(response.body).toHaveProperty('userId', mockUserId);
@@ -294,6 +314,7 @@ describe('GET /auth/me', () => {
     const response = await request(app)
       .get('/auth/me')
       .set('X-Auth-Token', 'invalid-token')
+      .set('X-Twitch-Client-Id', 'test-twitch-client-id')
       .expect(401);
     
     expect(response.body).toHaveProperty('error', 'Invalid token');
