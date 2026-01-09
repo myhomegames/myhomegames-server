@@ -17,5 +17,3 @@ myhomegames-web/certs/*.pem
 .env
 .env.local
 .env.*.local
-
-docs
