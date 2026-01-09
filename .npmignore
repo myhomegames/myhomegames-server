@@ -1,0 +1,21 @@
+# Test files
+__tests__/
+*.test.js
+*.spec.js
+jest.config.js
+coverage/
+
+# Development files
+.vscode/
+.idea/
+*.log
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Documentation (optional - uncomment if you don't want README in npm package)
+# README.md
+

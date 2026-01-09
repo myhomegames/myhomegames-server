@@ -1,0 +1,8 @@
+{
+  "title": "Test Collection 1",
+  "summary": "Test summary for collection 1",
+  "games": [
+    1,
+    2
+  ]
+}

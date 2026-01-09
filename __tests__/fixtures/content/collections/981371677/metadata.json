@@ -1,0 +1,9 @@
+{
+  "title": "My Favorites",
+  "summary": "My favorite games collection",
+  "games": [
+    1,
+    2,
+    3
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Test Game 3",
+  "summary": "Test summary for game 3",
+  "genre": [
+    "Puzzle",
+    "Strategy"
+  ],
+  "year": 2022,
+  "stars": 4.8
+}

@@ -1,0 +1,9 @@
+{
+  "title": "Test Game 1",
+  "summary": "Test summary for game 1",
+  "genre": [
+    "Adventure"
+  ],
+  "year": 2020,
+  "stars": 4.5
+}
