@@ -118,7 +118,7 @@ function requireToken(req, res, next) {
     req.header("X-Auth-Token") ||
     req.query.token ||
     req.header("Authorization");
-  
+
   if (!token) {
     return res.status(401).json({ error: "Unauthorized" });
   }
