@@ -230,7 +230,7 @@ function registerAuthRoutes(app, metadataPath) {
                 const json = JSON.parse(data);
                 resolve(json);
               } else {
-                reject(new Error("Failed to get access token"));
+                reject(new Error(`Failed to get access token: ${tokenRes.statusCode} ${tokenRes.statusMessage}`));
               }
             } catch (e) {
               reject(e);
