@@ -109,8 +109,19 @@ fs.writeFileSync(path.join(CONTENTS_PATH, 'Info.plist'), infoPlist);
 // Step 5: Create PkgInfo (optional but recommended)
 fs.writeFileSync(path.join(CONTENTS_PATH, 'PkgInfo'), 'APPL????');
 
+// Step 5.5: Create .env file with default configuration
+console.log('Step 5: Creating .env file...');
+const envContent = `HTTP_PORT=4000
+HTTPS_ENABLED=true
+HTTPS_PORT=41440
+API_BASE=https://localhost:41440
+FRONTEND_URL=https://myhomegames.vige.it/app/
+`;
+fs.writeFileSync(path.join(RESOURCES_PATH, '.env'), envContent);
+console.log('✅ .env file created with default configuration');
+
 // Step 6: Create icon from favicon design
-console.log('Step 5: Creating app icon...');
+console.log('Step 6: Creating app icon...');
 try {
   // Create icon.iconset directory structure
   const iconSetPath = path.join(BUILD_DIR, 'icon.iconset');
@@ -270,7 +281,7 @@ img.save(sys.argv[1], 'PNG')
 }
 
 // Step 7: Create .pkg installer
-console.log('Step 6: Creating .pkg installer...');
+console.log('Step 7: Creating .pkg installer...');
 const PKG_NAME = `${APP_NAME}-${packageJson.version}.pkg`;
 const PKG_PATH = path.join(BUILD_DIR, PKG_NAME);
 

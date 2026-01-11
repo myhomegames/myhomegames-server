@@ -2,12 +2,109 @@
 // Minimal MyHomeGames backend with a safe launcher
 
 // Load environment variables from .env file
-require("dotenv").config();
+// When running as macOS app bundle, look for .env in Resources directory
+const path = require("path");
+const fs = require("fs");
+let envPath = null;
+
+// When pkg creates an executable, __dirname doesn't work as expected.
+// Try multiple methods to find the .env file in the app bundle Resources directory
+// The executable is at: MyHomeGames.app/Contents/MacOS/MyHomeGames
+// The .env file should be at: MyHomeGames.app/Contents/Resources/.env
+
+// Method 1: Try relative to current working directory (when executed from MacOS directory)
+// If we're in MacOS directory, Resources is one level up
+const cwd = process.cwd();
+if (cwd.includes("/Contents/MacOS") || cwd.includes("\\Contents\\MacOS")) {
+  const resourcesPath = path.join(cwd, "..", "Resources", ".env");
+  const resolvedPath = path.resolve(resourcesPath);
+  if (fs.existsSync(resolvedPath)) {
+    envPath = resolvedPath;
+  }
+}
+
+// Method 2: Try using process.execPath (absolute path to executable)
+if (!envPath) {
+  try {
+    let execPath = process.execPath;
+    if (!path.isAbsolute(execPath)) {
+      execPath = path.resolve(process.cwd(), execPath);
+    }
+    
+    try {
+      execPath = fs.realpathSync(execPath);
+    } catch (e) {
+      // Continue with resolved path
+    }
+    
+    if (execPath.includes(".app/Contents/MacOS")) {
+      const macosIndex = execPath.indexOf("/Contents/MacOS/");
+      if (macosIndex !== -1) {
+        const appBundlePath = execPath.substring(0, macosIndex);
+        const resourcesEnvPath = path.join(appBundlePath, "Contents", "Resources", ".env");
+        if (fs.existsSync(resourcesEnvPath)) {
+          envPath = resourcesEnvPath;
+        }
+      }
+    }
+  } catch (error) {
+    // Continue to next method
+  }
+}
+
+// Method 3: Try using process.argv[0] (first argument, usually the executable)
+if (!envPath) {
+  try {
+    let argv0 = process.argv[0];
+    if (!path.isAbsolute(argv0)) {
+      argv0 = path.resolve(process.cwd(), argv0);
+    }
+    
+    try {
+      argv0 = fs.realpathSync(argv0);
+    } catch (e) {
+      // Continue
+    }
+    
+    if (argv0.includes(".app/Contents/MacOS")) {
+      const macosIndex = argv0.indexOf("/Contents/MacOS/");
+      if (macosIndex !== -1) {
+        const appBundlePath = argv0.substring(0, macosIndex);
+        const resourcesEnvPath = path.join(appBundlePath, "Contents", "Resources", ".env");
+        if (fs.existsSync(resourcesEnvPath)) {
+          envPath = resourcesEnvPath;
+        }
+      }
+    }
+  } catch (error) {
+    // Continue
+  }
+}
+
+// Method 4: Try relative to __dirname (for normal Node.js execution or if pkg preserves it)
+if (!envPath) {
+  try {
+    const resourcesPath = path.join(__dirname, "..", "Resources", ".env");
+    if (fs.existsSync(resourcesPath)) {
+      envPath = path.resolve(resourcesPath);
+    }
+  } catch (error) {
+    // Continue
+  }
+}
+
+// Load .env file (if path specified, use it; otherwise dotenv will look in current directory)
+if (envPath) {
+  const result = require("dotenv").config({ path: envPath });
+  if (result.error) {
+    console.error(`Failed to load .env file from ${envPath}: ${result.error.message}`);
+  }
+} else {
+  require("dotenv").config();
+}
 
 const express = require("express");
 const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
 const { spawn, execSync } = require("child_process");
 const https = require("https");
 const http = require("http");
