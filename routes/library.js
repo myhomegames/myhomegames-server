@@ -4,7 +4,7 @@ const multer = require("multer");
 const { ensureCategoryExists, loadCategories, deleteCategoryIfUnused } = require("./categories");
 const { removeGameFromRecommended } = require("./recommended");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("@mycms/utils");
 
 /**
  * Library routes module
@@ -943,7 +943,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       
       // Parse release date using utility function
       // Always extract day, month, and year from numeric date values when possible
-      const { createReleaseDate } = require("../utils/dateUtils");
+      const { createReleaseDate } = require("@mycms/utils");
       const releaseDateObj = createReleaseDate(releaseDate);
       const year = releaseDateObj ? releaseDateObj.year : null;
       const month = releaseDateObj ? releaseDateObj.month : null;

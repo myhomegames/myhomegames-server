@@ -103,12 +103,11 @@ if (envPath) {
   require("dotenv").config();
 }
 
-const express = require("express");
-const cors = require("cors");
 const { spawn, execSync } = require("child_process");
-const https = require("https");
-const http = require("http");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("./utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("@mycms/utils");
+const { SettingsManager } = require("@mycms/core");
+const { CMSServer, createAuthMiddleware } = require("@mycms/api");
+const { TokenManager } = require("@mycms/auth");
 
 // Import route modules
 const libraryRoutes = require("./routes/library");
@@ -118,9 +117,14 @@ const collectionsRoutes = require("./routes/collections");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
 
-const app = express();
-app.use(express.json());
-app.use(cors());
+// Create CMS server instance
+const server = new CMSServer({
+  enableCors: true,
+  corsOptions: {},
+});
+
+// Get Express app for direct access (for routes that need it)
+const app = server.getApp();
 
 const API_TOKEN = process.env.API_TOKEN;
 const PORT = process.env.PORT || 4000; // PORT can have a default
@@ -138,6 +142,17 @@ const METADATA_PATH =
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
+
+// Initialize settings manager
+const defaultSettings = { language: "en" };
+const settingsManager = new SettingsManager(METADATA_PATH, "settings.json", defaultSettings);
+
+// Initialize token manager and auth middleware
+const tokenManager = new TokenManager(METADATA_PATH);
+const requireToken = createAuthMiddleware({
+  tokenManager,
+  apiToken: API_TOKEN,
+});
 
 // Ensure metadata directory structure exists
 function ensureMetadataDirectories() {
@@ -204,34 +219,13 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 ensureMetadataDirectories();
 
 // Create settings.json with default settings if it doesn't exist
-const settings = readSettings();
+const settings = settingsManager.read();
 if (!fs.existsSync(SETTINGS_FILE)) {
-  writeSettings(settings);
+  settingsManager.write(settings);
 }
 
-// Token auth middleware - supports both development token and Twitch tokens
-function requireToken(req, res, next) {
-  const token =
-    req.header("X-Auth-Token") ||
-    req.query.token ||
-    req.header("Authorization");
-
-  if (!token) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  // Check if it's the development token (for development only)
-  if (API_TOKEN && token === API_TOKEN) {
-    return next();
-  }
-
-  // Check if it's a valid Twitch token
-  if (authRoutes.isValidToken(token, METADATA_PATH)) {
-    return next();
-  }
-
-  return res.status(401).json({ error: "Unauthorized" });
-}
+// Token auth middleware now uses createAuthMiddleware from @mycms/api
+// (requireToken function removed - use requireToken from createAuthMiddleware instead)
 
 // Load games whitelist from JSON files
 // Games JSON files are now stored in METADATA_PATH/content/games/, content/collections/, content/categories/, content/recommended/
@@ -258,7 +252,7 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
 );
 
 // Endpoint: serve game cover image (public, no auth required for images)
-app.get("/covers/:gameId", (req, res) => {
+server.get("/covers/:gameId", (req, res) => {
   const gameId = decodeURIComponent(req.params.gameId);
   const coverPath = path.join(METADATA_PATH, "content", "games", gameId, "cover.webp");
 
@@ -279,7 +273,7 @@ app.get("/covers/:gameId", (req, res) => {
 });
 
 // Endpoint: serve game background image (public, no auth required for images)
-app.get("/backgrounds/:gameId", (req, res) => {
+server.get("/backgrounds/:gameId", (req, res) => {
   const gameId = decodeURIComponent(req.params.gameId);
   const backgroundPath = path.join(METADATA_PATH, "content", "games", gameId, "background.webp");
 
@@ -300,7 +294,7 @@ app.get("/backgrounds/:gameId", (req, res) => {
 });
 
 // Endpoint: serve collection background image (public, no auth required for images)
-app.get("/collection-backgrounds/:collectionId", (req, res) => {
+server.get("/collection-backgrounds/:collectionId", (req, res) => {
   const collectionId = decodeURIComponent(req.params.collectionId);
   const backgroundPath = path.join(METADATA_PATH, "content", "collections", String(collectionId), "background.webp");
 
@@ -321,7 +315,7 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
 });
 
 // Endpoint: launcher — launches a whitelisted command for a game
-app.get("/launcher", requireToken, (req, res) => {
+server.get("/launcher", requireToken, (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
 
@@ -415,7 +409,7 @@ app.get("/launcher", requireToken, (req, res) => {
 });
 
 // Reload games list (admin endpoint) — protected by token
-app.post("/reload-games", requireToken, (req, res) => {
+server.post("/reload-games", requireToken, (req, res) => {
   allGames = {};
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
   // Recommended games are now just IDs pointing to games already in allGames
@@ -432,48 +426,19 @@ app.post("/reload-games", requireToken, (req, res) => {
   });
 });
 
-// Helper function to read settings
-function readSettings() {
-  const defaultSettings = {
-    language: "en",
-  };
-  const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
-  // Ensure we always return an object
-  if (typeof settings !== 'object' || settings === null) {
-    return defaultSettings;
-  }
-  return settings;
-}
-
-// Helper function to write settings
-function writeSettings(settings) {
-  try {
-    // Ensure parent directory exists before writing
-    const parentDir = path.dirname(SETTINGS_FILE);
-    ensureDirectoryExists(parentDir);
-    writeJsonFile(SETTINGS_FILE, settings);
-    return true;
-  } catch (e) {
-    console.error("Error writing settings:", e.message);
-    return false;
-  }
-}
+// Settings functions now use SettingsManager
+// (readSettings/writeSettings removed - use settingsManager.read()/write()/update() instead)
 
 // Endpoint: get settings
-app.get("/settings", requireToken, (req, res) => {
-  const settings = readSettings();
+server.get("/settings", requireToken, (req, res) => {
+  const settings = settingsManager.read();
   res.json(settings);
 });
 
 // Endpoint: update settings
-app.put("/settings", requireToken, (req, res) => {
-  const currentSettings = readSettings();
-  const updatedSettings = {
-    ...currentSettings,
-    ...req.body,
-  };
-
-  if (writeSettings(updatedSettings)) {
+server.put("/settings", requireToken, (req, res) => {
+  if (settingsManager.update(req.body)) {
+    const updatedSettings = settingsManager.read();
     res.json({ status: "success", settings: updatedSettings });
   } else {
     res.status(500).json({ error: "Failed to save settings" });
@@ -508,8 +473,7 @@ if (process.env.NODE_ENV !== 'test') {
   
   // HTTP server (always available)
   const HTTP_PORT = process.env.HTTP_PORT || PORT;
-  const httpServer = http.createServer(app);
-  httpServer.listen(HTTP_PORT, () => {
+  server.startHTTP(HTTP_PORT, () => {
     console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
   });
   
@@ -532,8 +496,7 @@ if (process.env.NODE_ENV !== 'test') {
         const key = fs.readFileSync(keyPath);
         const cert = fs.readFileSync(certPath);
         
-        const httpsServer = https.createServer({ key, cert }, app);
-        httpsServer.listen(HTTPS_PORT, () => {
+        server.startHTTPS(HTTPS_PORT, { key, cert }, () => {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
         });

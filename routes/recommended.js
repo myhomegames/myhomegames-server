@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getCoverUrl, getBackgroundUrl } = require("../utils/gameMediaUtils");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("@mycms/utils");
 
 /**
  * Recommended routes module

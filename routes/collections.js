@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { getCoverUrl, getBackgroundUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("@mycms/utils");
 
 /**
  * Collections routes module

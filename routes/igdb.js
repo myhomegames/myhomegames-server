@@ -114,7 +114,7 @@ function registerIGDBRoutes(app, requireToken) {
         igdbRes.on("end", () => {
           try {
             const games = JSON.parse(data);
-            const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+            const { formatIGDBReleaseDate } = require("@mycms/utils");
             const formattedGames = games.map((game) => {
               const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
               return {
@@ -206,7 +206,7 @@ function registerIGDBRoutes(app, requireToken) {
             }
 
             const game = games[0];
-            const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+            const { formatIGDBReleaseDate } = require("@mycms/utils");
             const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
             
             // Build background URL from artworks (use first artwork if available)

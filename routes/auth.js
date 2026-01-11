@@ -4,7 +4,7 @@
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("@mycms/utils");
 
 // Note: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are no longer read from .env
 // They are now passed from the client during login

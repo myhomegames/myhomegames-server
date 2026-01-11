@@ -23,6 +23,10 @@
     "outputPath": "build"
   },
   "dependencies": {
+    "@mycms/api": "file:../mycms/mycms-api",
+    "@mycms/auth": "file:../mycms/mycms-auth",
+    "@mycms/core": "file:../mycms/mycms-core",
+    "@mycms/utils": "file:../mycms/mycms-utils",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.18.2",

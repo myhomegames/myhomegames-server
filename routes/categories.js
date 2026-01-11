@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("@mycms/utils");
 
 /**
  * Categories routes module
