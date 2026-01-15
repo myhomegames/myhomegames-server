@@ -156,8 +156,16 @@ describe('GET /collections/:id', () => {
 
 describe('GET /collections/:id/games', () => {
   test('should return games for a valid collection', async () => {
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Games' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
-      .get('/collections/1937411069/games')
+      .get(`/collections/${collectionId}/games`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
@@ -175,8 +183,16 @@ describe('GET /collections/:id/games', () => {
   });
 
   test('should return games with correct structure', async () => {
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Games Structure' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
-      .get('/collections/1937411069/games')
+      .get(`/collections/${collectionId}/games`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
@@ -191,8 +207,16 @@ describe('GET /collections/:id/games', () => {
   });
 
   test('should require authentication', async () => {
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Auth Games' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
-      .get('/collections/1937411069/games')
+      .get(`/collections/${collectionId}/games`)
       .expect(401);
     
     expect(response.body).toHaveProperty('error', 'Unauthorized');
@@ -201,7 +225,15 @@ describe('GET /collections/:id/games', () => {
 
 describe('PUT /collections/:id', () => {
   test('should update a single field', async () => {
-    const collectionId = '1937411069';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Update' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
     const response = await request(app)
       .put(`/collections/${collectionId}`)
       .set('X-Auth-Token', 'test-token')
@@ -214,7 +246,14 @@ describe('PUT /collections/:id', () => {
   });
 
   test('should update multiple fields', async () => {
-    const collectionId = '1937411070';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Multiple Update' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const updates = { title: 'Updated Title', summary: 'Updated Summary' };
     const response = await request(app)
       .put(`/collections/${collectionId}`)
@@ -229,7 +268,14 @@ describe('PUT /collections/:id', () => {
   });
 
   test('should ignore non-allowed fields', async () => {
-    const collectionId = '1937411069';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Ignore Fields' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const updates = { title: 'New Title', unknownField: 'value' };
     const response = await request(app)
       .put(`/collections/${collectionId}`)
@@ -243,7 +289,14 @@ describe('PUT /collections/:id', () => {
   });
 
   test('should return 400 when no valid fields provided', async () => {
-    const collectionId = '1937411069';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for 400' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
       .put(`/collections/${collectionId}`)
       .set('X-Auth-Token', 'test-token')
@@ -264,7 +317,14 @@ describe('PUT /collections/:id', () => {
   });
 
   test('should require authentication', async () => {
-    const collectionId = '1937411069';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Auth' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
       .put(`/collections/${collectionId}`)
       .send({ title: 'New Title' })
@@ -274,7 +334,14 @@ describe('PUT /collections/:id', () => {
   });
 
   test('should return updated collection data', async () => {
-    const collectionId = '1937411069';
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Updated Data' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
     const response = await request(app)
       .put(`/collections/${collectionId}`)
       .set('X-Auth-Token', 'test-token')

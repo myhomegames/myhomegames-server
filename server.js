@@ -205,23 +205,29 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 // Note: stdout is line-buffered in Node.js, so \n forces a flush automatically
 process.stdout.write('MyHomeGames Server\n');
 
-// Create directory structure on startup (minimal, only essential directories)
-// Do this synchronously but quickly - only create what's absolutely necessary
-const essentialDirs = [
-  METADATA_PATH,
-  path.join(METADATA_PATH, "content"),
-  path.join(METADATA_PATH, "content", "games"),
-  path.join(METADATA_PATH, "certs"),
-];
-essentialDirs.forEach((dir) => {
-  try {
-    if (!fs.existsSync(dir)) {
-      ensureDirectoryExists(dir);
+// Create directory structure on startup
+// In test mode, create all directories synchronously
+// In production, create only essential directories first, rest later
+if (process.env.NODE_ENV === 'test') {
+  ensureMetadataDirectories();
+} else {
+  // Create only essential directories synchronously for faster startup
+  const essentialDirs = [
+    METADATA_PATH,
+    path.join(METADATA_PATH, "content"),
+    path.join(METADATA_PATH, "content", "games"),
+    path.join(METADATA_PATH, "certs"),
+  ];
+  essentialDirs.forEach((dir) => {
+    try {
+      if (!fs.existsSync(dir)) {
+        ensureDirectoryExists(dir);
+      }
+    } catch (error) {
+      // Continue if directory creation fails - will be created later if needed
     }
-  } catch (error) {
-    // Continue if directory creation fails - will be created later if needed
-  }
-});
+  });
+}
 
 // Create settings.json with default settings if it doesn't exist (quick check)
 if (!fs.existsSync(SETTINGS_FILE)) {

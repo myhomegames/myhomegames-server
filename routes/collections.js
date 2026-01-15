@@ -207,7 +207,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   // Endpoint: get single collection by ID
   app.get("/collections/:id", requireToken, (req, res) => {
     const collectionId = req.params.id;
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    // Normalize ID for comparison (convert both to string or number)
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
+    const collection = collectionsCache.find((c) => {
+      // Compare as numbers if both are numeric, otherwise as strings
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
@@ -237,7 +245,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   // Endpoint: get games for a collection (returns games by their IDs)
   app.get("/collections/:id/games", requireToken, (req, res) => {
     const collectionId = req.params.id;
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
+    const collection = collectionsCache.find((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
@@ -298,7 +313,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "gameIds must be an array" });
     }
 
-    const collectionIndex = collectionsCache.findIndex((c) => c.id === collectionId);
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
+    const collectionIndex = collectionsCache.findIndex((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
@@ -324,7 +346,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const updates = req.body;
     
     // Validate collection exists
-    const collectionIndex = collectionsCache.findIndex((c) => c.id === collectionId);
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
+    const collectionIndex = collectionsCache.findIndex((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -381,7 +410,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionId = req.params.id;
     
     // Find collection index
-    const collectionIndex = collectionsCache.findIndex((c) => c.id === collectionId);
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
+    const collectionIndex = collectionsCache.findIndex((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
@@ -433,8 +469,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "File must be an image" });
     }
     
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
     // Validate collection exists
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    const collection = collectionsCache.find((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -491,8 +534,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "File must be an image" });
     }
     
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
     // Validate collection exists
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    const collection = collectionsCache.find((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -539,8 +589,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.delete("/collections/:id/delete-cover", requireToken, (req, res) => {
     const collectionId = req.params.id;
     
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
     // Validate collection exists
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    const collection = collectionsCache.find((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -593,8 +650,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.delete("/collections/:id/delete-background", requireToken, (req, res) => {
     const collectionId = req.params.id;
     
+    // Normalize ID for comparison
+    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
     // Validate collection exists
-    const collection = collectionsCache.find((c) => c.id === collectionId);
+    const collection = collectionsCache.find((c) => {
+      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+        return c.id === normalizedId;
+      }
+      return String(c.id) === String(normalizedId);
+    });
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -651,14 +715,51 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       // Reload collections to refresh metadata
       collectionsCache = loadCollections(metadataPath);
       
+      // Normalize ID for comparison
+      const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
       // Find the collection
-      const collection = collectionsCache.find((c) => c.id === collectionId);
+      const collection = collectionsCache.find((c) => {
+        if (typeof normalizedId === 'number' && typeof c.id === 'number') {
+          return c.id === normalizedId;
+        }
+        return String(c.id) === String(normalizedId);
+      });
       if (!collection) {
         return res.status(404).json({ error: "Collection not found" });
       }
       
+      // Format collection data like other endpoints
+      const collectionData = {
+        id: collection.id,
+        title: collection.title,
+        summary: collection.summary || "",
+        cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
+        gameCount: (collection.games || []).length,
+      };
+      // Check if cover exists locally
+      const localCover = getLocalMediaPath({
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'cover',
+        urlPrefix: '/collection-covers'
+      });
+      if (localCover) {
+        collectionData.cover = localCover;
+      }
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'background',
+        urlPrefix: '/collection-backgrounds'
+      });
+      if (background) {
+        collectionData.background = background;
+      }
+      
       // Return updated collection data
-      res.json({ status: "reloaded", collection });
+      res.json({ status: "reloaded", collection: collectionData });
     } catch (e) {
       console.error(`Failed to reload collection ${collectionId}:`, e.message);
       res.status(500).json({ error: "Failed to reload collection metadata" });
