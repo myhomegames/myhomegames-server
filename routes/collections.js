@@ -78,7 +78,8 @@ function loadCollections(metadataPath) {
       const collection = readJsonFile(collectionMetadataPath, null);
       if (collection) {
         // Use folder name as ID (the folder name is the normalized collection ID)
-        collection.id = normalizedId;
+        // Convert to number if it's numeric, otherwise keep as string
+        collection.id = /^\d+$/.test(normalizedId) ? Number(normalizedId) : normalizedId;
         collections.push(collection);
       }
     }
@@ -97,13 +98,26 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.get("/collections", requireToken, (req, res) => {
     res.json({
       collections: collectionsCache.map((c) => {
+        // Ensure ID is converted to string for URL encoding
+        const collectionId = String(c.id);
         const collectionData = {
           id: c.id,
           title: c.title,
           summary: c.summary || "",
-          cover: `/collection-covers/${encodeURIComponent(c.id)}`,
+          cover: `/collection-covers/${encodeURIComponent(collectionId)}`,
           gameCount: (c.games || []).length,
         };
+        // Check if cover exists locally
+        const localCover = getLocalMediaPath({
+          metadataPath,
+          resourceId: c.id,
+          resourceType: 'collections',
+          mediaType: 'cover',
+          urlPrefix: '/collection-covers'
+        });
+        if (localCover) {
+          collectionData.cover = localCover;
+        }
         const background = getLocalMediaPath({
           metadataPath,
           resourceId: c.id,
@@ -143,8 +157,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       });
     }
 
-    // Generate collection ID from title
-    const collectionId = trimmedTitle;
+    // Generate numeric collection ID (timestamp-based for uniqueness)
+    const collectionId = Date.now();
     
     // Create new collection
     const newCollection = {
