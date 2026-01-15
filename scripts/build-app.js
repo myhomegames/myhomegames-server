@@ -65,10 +65,197 @@ if (!executablePath) {
   process.exit(1);
 }
 
-const finalExecutablePath = path.join(MACOS_PATH, APP_NAME);
-fs.renameSync(executablePath, finalExecutablePath);
-// Make executable
-fs.chmodSync(finalExecutablePath, '755');
+// Rename executable to _original first
+const originalExecutablePath = path.join(MACOS_PATH, `${APP_NAME}_original`);
+fs.renameSync(executablePath, originalExecutablePath);
+fs.chmodSync(originalExecutablePath, '755');
+
+// Create a minimal Swift GUI wrapper that launches the server
+// This solves the bouncing icon issue by providing a proper GUI app
+const swiftWrapper = `import Cocoa
+import Foundation
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var serverProcess: Process?
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Get the bundle path
+        let bundle = Bundle.main
+        let bundlePath = bundle.bundlePath
+        let macosPath = (bundlePath as NSString).appendingPathComponent("Contents/MacOS")
+        let executablePath = (macosPath as NSString).appendingPathComponent("${APP_NAME}_original")
+        
+        // Check if executable exists
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: executablePath) else {
+            print("Error: Could not find ${APP_NAME}_original at: \\(executablePath)")
+            // Show alert and keep app running for debugging
+            let alert = NSAlert()
+            alert.messageText = "Error"
+            alert.informativeText = "Could not find server executable at: \\(executablePath)"
+            alert.alertStyle = .critical
+            alert.runModal()
+            return
+        }
+        
+        // Make sure executable is executable
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executablePath)
+        } catch {
+            print("Warning: Could not set executable permissions: \\(error)")
+        }
+        
+        // Launch the server process
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = []
+        
+        // Set up environment - preserve current environment and add PATH
+        var env = ProcessInfo.processInfo.environment
+        if let currentPath = env["PATH"] {
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\\(currentPath)"
+        } else {
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        process.environment = env
+        
+        // Set working directory to Resources (where .env file is)
+        let resourcesPath = (bundlePath as NSString).appendingPathComponent("Contents/Resources")
+        process.currentDirectoryPath = resourcesPath
+        
+        // Redirect output to console (keep stderr separate for errors)
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        
+        // Read output asynchronously
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.count > 0 {
+                if let output = String(data: data, encoding: .utf8) {
+                    print(output, terminator: "")
+                }
+            }
+        }
+        
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.count > 0 {
+                if let output = String(data: data, encoding: .utf8) {
+                    print(output, terminator: "")
+                }
+            }
+        }
+        
+        do {
+            try process.run()
+            self.serverProcess = process
+            print("Server process started with PID: \\(process.processIdentifier)")
+            
+            // Signal that app is ready (this stops the bouncing icon)
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            
+            // Monitor the process
+            process.terminationHandler = { process in
+                print("Server process terminated with status: \\(process.terminationStatus)")
+                DispatchQueue.main.async {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        } catch {
+            print("Error launching server: \\(error)")
+            // Show alert instead of terminating immediately
+            let alert = NSAlert()
+            alert.messageText = "Error Launching Server"
+            alert.informativeText = "Failed to start server: \\(error.localizedDescription)"
+            alert.alertStyle = .critical
+            alert.runModal()
+            // Keep app running for a moment to see the error
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        // Terminate server process gracefully
+        if let process = serverProcess, process.isRunning {
+            process.terminate()
+            // Wait up to 5 seconds for graceful shutdown
+            let group = DispatchGroup()
+            group.enter()
+            process.terminationHandler = { _ in group.leave() }
+            _ = group.wait(timeout: .now() + 5)
+            // Force kill if still running (use SIGKILL)
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+    
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false // Don't terminate when window closes (we have no window)
+    }
+}
+
+// Create and run the app
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+
+// Create a menu bar item to keep the app running
+let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+if let button = statusItem.button {
+    button.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "MyHomeGames Server")
+    button.toolTip = "MyHomeGames Server"
+}
+
+// Create menu
+let menu = NSMenu()
+let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+menu.addItem(quitItem)
+statusItem.menu = menu
+
+app.run()
+`;
+
+// Write Swift source file
+const swiftSourcePath = path.join(BUILD_DIR, 'wrapper.swift');
+fs.writeFileSync(swiftSourcePath, swiftWrapper);
+
+// Compile Swift wrapper to executable
+const swiftExecutablePath = path.join(MACOS_PATH, APP_NAME);
+try {
+  console.log('Compiling Swift wrapper...');
+  execSync(`swiftc -o "${swiftExecutablePath}" "${swiftSourcePath}"`, {
+    stdio: 'inherit',
+    cwd: BUILD_DIR
+  });
+  fs.chmodSync(swiftExecutablePath, '755');
+  // Clean up Swift source
+  fs.unlinkSync(swiftSourcePath);
+  console.log('✅ Swift wrapper compiled successfully');
+} catch (error) {
+  console.error('⚠️  Failed to compile Swift wrapper:', error.message);
+  console.log('   Falling back to bash wrapper...');
+  
+  // Fallback to bash wrapper if Swift compilation fails
+  const dollar = '$';
+  const bashWrapperScript = `#!/bin/bash
+# Wrapper script for MyHomeGames server
+SCRIPT_DIR="${dollar}( cd "${dollar}( dirname "${dollar}{BASH_SOURCE[0]}" )" && pwd )"
+EXECUTABLE="${dollar}{SCRIPT_DIR}/${APP_NAME}_original"
+trap 'if [ ! -z "${dollar}PID" ]; then kill -TERM ${dollar}PID 2>/dev/null; wait ${dollar}PID 2>/dev/null; fi; exit 0' SIGTERM SIGINT
+"${dollar}EXECUTABLE" &
+PID=${dollar}!
+wait ${dollar}PID
+exit ${dollar}?
+`;
+  fs.writeFileSync(swiftExecutablePath, bashWrapperScript);
+  fs.chmodSync(swiftExecutablePath, '755');
+}
 
 // Step 4: Create Info.plist
 console.log('Step 3: Creating Info.plist...');
@@ -101,6 +288,17 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <true/>
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
+  <key>LSUIElement</key>
+  <false/>
+  <key>LSBackgroundOnly</key>
+  <false/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
 </dict>
 </plist>`;
 

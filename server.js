@@ -181,13 +181,13 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 
     console.log(`Generating SSL certificates in ${certDir}...`);
 
-    // Generate private key
-    execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: 'inherit' });
+    // Generate private key (suppress output for faster startup)
+    execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: 'pipe' });
 
-    // Generate self-signed certificate
+    // Generate self-signed certificate (suppress output for faster startup)
     execSync(
       `openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -subj "/CN=localhost"`,
-      { stdio: 'inherit' }
+      { stdio: 'pipe' }
     );
 
     console.log(`SSL certificates generated successfully in ${certDir}`);
@@ -200,13 +200,37 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 
 // All recommended sections logic has been moved to routes/recommended.js
 
-// Create directory structure on startup
-ensureMetadataDirectories();
+// Signal to macOS immediately that we're starting (helps with icon bouncing)
+// Write to stdout immediately to signal app readiness
+// Note: stdout is line-buffered in Node.js, so \n forces a flush automatically
+process.stdout.write('MyHomeGames Server\n');
 
-// Create settings.json with default settings if it doesn't exist
-const settings = readSettings();
+// Create directory structure on startup (minimal, only essential directories)
+// Do this synchronously but quickly - only create what's absolutely necessary
+const essentialDirs = [
+  METADATA_PATH,
+  path.join(METADATA_PATH, "content"),
+  path.join(METADATA_PATH, "content", "games"),
+  path.join(METADATA_PATH, "certs"),
+];
+essentialDirs.forEach((dir) => {
+  try {
+    if (!fs.existsSync(dir)) {
+      ensureDirectoryExists(dir);
+    }
+  } catch (error) {
+    // Continue if directory creation fails - will be created later if needed
+  }
+});
+
+// Create settings.json with default settings if it doesn't exist (quick check)
 if (!fs.existsSync(SETTINGS_FILE)) {
-  writeSettings(settings);
+  try {
+    const defaultSettings = { language: "en" };
+    writeSettings(defaultSettings);
+  } catch (error) {
+    // Continue if settings creation fails
+  }
 }
 
 // Token auth middleware - supports both development token and Twitch tokens
@@ -237,16 +261,24 @@ function requireToken(req, res, next) {
 // Games JSON files are now stored in METADATA_PATH/content/games/, content/collections/, content/categories/, content/recommended/
 let allGames = {}; // Store all games by ID for launcher
 
-// Load all games on startup
-libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
-// Recommended games are now just IDs pointing to games already in allGames
+// Load all games on startup (completely async, after server is listening)
+// This allows the server to start faster and signal macOS that it's ready
+// Delay loading games until after server is ready to avoid blocking startup
+setTimeout(() => {
+  // Create remaining directories if needed
+  ensureMetadataDirectories();
+  
+  // Load games in background
+  libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
+  // Recommended games are now just IDs pointing to games already in allGames
+  // Ensure recommended/metadata.json has all sections and is populated
+  recommendedRoutes.ensureRecommendedSectionsComplete(METADATA_PATH);
+}, 100); // Small delay to ensure server starts listening first
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
 libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames);
 recommendedRoutes.registerRecommendedRoutes(app, requireToken, METADATA_PATH, allGames);
-// Ensure recommended/metadata.json has all sections and is populated
-recommendedRoutes.ensureRecommendedSectionsComplete(METADATA_PATH);
 categoriesRoutes.registerCategoriesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, requireToken);
 const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
@@ -502,46 +534,148 @@ function validateEnvironment() {
   }
 }
 
+// Store server references for graceful shutdown
+let httpServer = null;
+let httpsServer = null;
+
+// Graceful shutdown handler
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  
+  const servers = [];
+  if (httpServer) servers.push(httpServer);
+  if (httpsServer) servers.push(httpsServer);
+  
+  if (servers.length === 0) {
+    process.exit(0);
+    return;
+  }
+  
+  // Close all servers
+  let closedCount = 0;
+  servers.forEach((server) => {
+    server.close(() => {
+      closedCount++;
+      if (closedCount === servers.length) {
+        console.log('All servers closed. Exiting...');
+        process.exit(0);
+      }
+    });
+  });
+  
+  // Force exit after 10 seconds if servers don't close
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+// Handle termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions and unhandled rejections
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown('unhandledRejection');
+});
+
 // Only start listening if not in test environment
 if (process.env.NODE_ENV !== 'test') {
   validateEnvironment();
   
-  // HTTP server (always available)
-  const HTTP_PORT = process.env.HTTP_PORT || PORT;
-  const httpServer = http.createServer(app);
-  httpServer.listen(HTTP_PORT, () => {
-    console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
-  });
-  
-  // HTTPS server (optional)
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
-  const HTTPS_PORT = process.env.HTTPS_PORT || 41440; // Default HTTPS port different from HTTP
   
   if (HTTPS_ENABLED) {
+    // HTTPS server only
+    const HTTPS_PORT = process.env.HTTPS_PORT || 41440;
     // Always use metadata path for certificates
     const metadataCertsDir = path.join(METADATA_PATH, 'certs');
     const keyPath = path.join(metadataCertsDir, 'key.pem');
     const certPath = path.join(metadataCertsDir, 'cert.pem');
     
-    // Ensure certificates exist (generate if needed)
-    if (!ensureSSLCertificates(metadataCertsDir, keyPath, certPath)) {
-      console.error("Failed to ensure SSL certificates exist.");
-      console.error("HTTPS server not started. Only HTTP available.");
-    } else {
+    // Check if certificates exist first (fast check)
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      // Certificates exist, start server immediately
       try {
         const key = fs.readFileSync(keyPath);
         const cert = fs.readFileSync(certPath);
         
-        const httpsServer = https.createServer({ key, cert }, app);
-        httpsServer.listen(HTTPS_PORT, () => {
+        httpsServer = https.createServer({ key, cert }, app);
+        httpsServer.listen(HTTPS_PORT, '127.0.0.1', () => {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
+          // Signal to macOS that the app is ready
+          process.stdout.write('Server ready\n');
+        });
+        
+        // Handle server errors
+        httpsServer.on('error', (error) => {
+          console.error('HTTPS server error:', error);
+          if (error.code === 'EADDRINUSE') {
+            console.error(`Port ${HTTPS_PORT} is already in use.`);
+          }
         });
       } catch (error) {
         console.error("Error loading SSL certificates:", error.message);
-        console.error("HTTPS server not started. Only HTTP available.");
+        console.error("HTTPS server not started.");
+        process.exit(1);
+      }
+    } else {
+      // Certificates don't exist, generate them (this might take a moment)
+      if (!ensureSSLCertificates(metadataCertsDir, keyPath, certPath)) {
+        console.error("Failed to ensure SSL certificates exist.");
+        console.error("HTTPS server not started.");
+        process.exit(1);
+      } else {
+        try {
+          const key = fs.readFileSync(keyPath);
+          const cert = fs.readFileSync(certPath);
+          
+          httpsServer = https.createServer({ key, cert }, app);
+          httpsServer.listen(HTTPS_PORT, '127.0.0.1', () => {
+            console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
+            console.log(`Using SSL certificates from: ${metadataCertsDir}`);
+            // Signal to macOS that the app is ready
+            process.stdout.write('Server ready\n');
+          });
+          
+          // Handle server errors
+          httpsServer.on('error', (error) => {
+            console.error('HTTPS server error:', error);
+            if (error.code === 'EADDRINUSE') {
+              console.error(`Port ${HTTPS_PORT} is already in use.`);
+            }
+          });
+        } catch (error) {
+          console.error("Error loading SSL certificates:", error.message);
+          console.error("HTTPS server not started.");
+          process.exit(1);
+        }
       }
     }
+  } else {
+    // HTTP server only
+    const HTTP_PORT = process.env.HTTP_PORT || PORT;
+    httpServer = http.createServer(app);
+    httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
+      console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
+      // Signal to macOS that the app is ready
+      process.stdout.write('Server ready\n');
+    });
+    
+    // Handle server errors
+    httpServer.on('error', (error) => {
+      console.error('HTTP server error:', error);
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${HTTP_PORT} is already in use.`);
+      }
+    });
   }
   
   if (!API_TOKEN) {
