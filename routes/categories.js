@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
 /**
@@ -166,6 +167,9 @@ function ensureCategoryExists(metadataPath, genreTitle) {
 }
 
 function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
+  // Configure multer for file uploads (memory storage, we'll save manually)
+  const upload = multer({ storage: multer.memoryStorage() });
+
   // Endpoint: serve category cover image (public, no auth required for images)
   app.get("/category-covers/:categoryTitle", (req, res) => {
     const categoryTitle = decodeURIComponent(req.params.categoryTitle);
@@ -296,6 +300,57 @@ function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGames
     deleteCategory(metadataPath, categoryTitle);
     
     res.json({ status: "success", message: "Category deleted" });
+  });
+
+  // Endpoint: upload cover image for a category
+  app.post("/categories/:categoryTitle/upload-cover", requireToken, upload.single('file'), (req, res) => {
+    const categoryTitle = decodeURIComponent(req.params.categoryTitle);
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    
+    // Validate file is an image
+    if (!file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ error: "File must be an image" });
+    }
+    
+    // Validate category exists
+    const categoryId = findCategoryIdByTitle(metadataPath, categoryTitle);
+    if (!categoryId) {
+      return res.status(404).json({ error: "Category not found" });
+    }
+    
+    try {
+      // Create category content directory if it doesn't exist
+      const categoryContentDir = getCategoryDir(metadataPath, categoryId);
+      ensureDirectoryExists(categoryContentDir);
+      
+      // Ensure category metadata.json exists
+      const categoryMetadataPath = getCategoryMetadataPath(metadataPath, categoryId);
+      if (!fs.existsSync(categoryMetadataPath)) {
+        // Create metadata.json with title
+        const metadata = { title: categoryTitle };
+        writeJsonFile(categoryMetadataPath, metadata);
+      }
+      
+      // Save as cover.webp
+      const coverPath = path.join(categoryContentDir, "cover.webp");
+      fs.writeFileSync(coverPath, file.buffer);
+      
+      // Return success with cover URL
+      res.json({ 
+        status: "success",
+        category: {
+          title: categoryTitle,
+          cover: `/category-covers/${encodeURIComponent(categoryTitle)}`,
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to save cover for category ${categoryTitle}:`, error);
+      res.status(500).json({ error: "Failed to save cover image" });
+    }
   });
 }
 
