@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
-const { getLocalMediaPath } = require("../utils/gameMediaUtils");
+const { getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
 
 /**
  * Categories routes module
@@ -362,6 +362,45 @@ function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGames
     } catch (error) {
       console.error(`Failed to save cover for category ${categoryTitle}:`, error);
       res.status(500).json({ error: "Failed to save cover image" });
+    }
+  });
+
+  // Endpoint: delete cover image for a category
+  app.delete("/categories/:categoryTitle/delete-cover", requireToken, (req, res) => {
+    const categoryTitle = decodeURIComponent(req.params.categoryTitle);
+    
+    // Validate category exists
+    const categoryId = findCategoryIdByTitle(metadataPath, categoryTitle);
+    if (!categoryId) {
+      return res.status(404).json({ error: "Category not found" });
+    }
+    
+    try {
+      // Delete the cover file
+      deleteMediaFile({
+        metadataPath,
+        resourceId: categoryId,
+        resourceType: 'categories',
+        mediaType: 'cover'
+      });
+      
+      // Return updated category data
+      const categoryData = {
+        title: categoryTitle,
+      };
+      // Check if cover still exists (should be null/undefined now)
+      const coverPath = path.join(metadataPath, "content", "categories", String(categoryId), "cover.webp");
+      if (fs.existsSync(coverPath)) {
+        categoryData.cover = `/category-covers/${encodeURIComponent(categoryTitle)}`;
+      }
+      
+      res.json({ 
+        status: "success",
+        category: categoryData,
+      });
+    } catch (error) {
+      console.error(`Failed to delete cover for category ${categoryTitle}:`, error);
+      res.status(500).json({ error: "Failed to delete cover image" });
     }
   });
 }

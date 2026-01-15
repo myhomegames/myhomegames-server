@@ -161,6 +161,9 @@ function deleteMediaFile({ metadataPath, resourceId, resourceType, mediaType }) 
   } else if (resourceType === 'collections') {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "collections", normalizedId);
+  } else if (resourceType === 'categories') {
+    normalizedId = String(resourceId);
+    contentDir = path.join(metadataPath, "content", "categories", normalizedId);
   } else {
     throw new Error(`Invalid resourceType: ${resourceType}`);
   }
