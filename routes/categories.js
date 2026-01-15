@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { getLocalMediaPath } = require("../utils/gameMediaUtils");
 
 /**
  * Categories routes module
@@ -201,7 +202,18 @@ function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGames
     // Return categories with title as id (for client compatibility)
     // The numeric ID is only used internally for folder names
     res.json({
-      categories: categories.map(cat => cat.title),
+      categories: categories.map(cat => {
+        const categoryData = {
+          id: cat.title,
+          title: cat.title,
+        };
+        // Check if cover exists locally (use numeric ID for file path, title for URL)
+        const coverPath = path.join(metadataPath, "content", "categories", String(cat.id), "cover.webp");
+        if (fs.existsSync(coverPath)) {
+          categoryData.cover = `/category-covers/${encodeURIComponent(cat.title)}`;
+        }
+        return categoryData;
+      }),
     });
   });
 

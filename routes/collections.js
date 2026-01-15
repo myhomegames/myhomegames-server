@@ -104,7 +104,6 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           id: c.id,
           title: c.title,
           summary: c.summary || "",
-          cover: `/collection-covers/${encodeURIComponent(collectionId)}`,
           gameCount: (c.games || []).length,
         };
         // Check if cover exists locally
@@ -225,9 +224,18 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       id: collection.id,
       title: collection.title,
       summary: collection.summary || "",
-      cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
       gameCount: (collection.games || []).length,
     };
+    const localCover = getLocalMediaPath({
+      metadataPath,
+      resourceId: collection.id,
+      resourceType: 'collections',
+      mediaType: 'cover',
+      urlPrefix: '/collection-covers'
+    });
+    if (localCover) {
+      collectionData.cover = localCover;
+    }
     const background = getLocalMediaPath({
       metadataPath,
       resourceId: collection.id,
