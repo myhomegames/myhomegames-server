@@ -151,12 +151,16 @@ function registerAuthRoutes(app, metadataPath) {
       }
     }
     
+    // Check if we should force account selection (for "change user" flow)
+    // Using prompt=consent forces Twitch to show the authorization screen again
+    const promptConsent = req.body.forceVerify === true ? "&prompt=consent" : "";
+    
     const authUrl = `https://id.twitch.tv/oauth2/authorize?` +
       `client_id=${clientId}&` +
       `redirect_uri=${encodeURIComponent(redirectUri)}&` +
       `response_type=code&` +
       `scope=user:read:email&` +
-      `state=${state}`;
+      `state=${state}${promptConsent}`;
 
     res.json({ authUrl, state });
   });

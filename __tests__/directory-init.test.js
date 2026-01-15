@@ -60,9 +60,10 @@ describe('Directory Structure Initialization', () => {
       fs.rmSync(tempMetadataPath, { recursive: true, force: true });
     }
     
-    // Set environment variable BEFORE requiring server
+    // Set environment variables BEFORE requiring server
     // This is critical - METADATA_PATH is evaluated when the module loads
     process.env.METADATA_PATH = tempMetadataPath;
+    process.env.NODE_ENV = 'test'; // Ensure test mode creates all directories
     
     // Now require the server - it will read METADATA_PATH and call ensureMetadataDirectories
     const testApp = require('../server.js');
