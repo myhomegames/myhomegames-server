@@ -199,15 +199,14 @@ function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGames
   // Endpoint: list categories
   app.get("/categories", requireToken, (req, res) => {
     const categories = loadCategories(metadataPath);
-    // Return categories with title as id (for client compatibility)
-    // The numeric ID is only used internally for folder names
+    // Return categories with numeric ID (like collections)
     res.json({
       categories: categories.map(cat => {
         const categoryData = {
-          id: cat.title,
+          id: cat.id,
           title: cat.title,
         };
-        // Check if cover exists locally (use numeric ID for file path, title for URL)
+        // Check if cover exists locally (use numeric ID for file path)
         const coverPath = path.join(metadataPath, "content", "categories", String(cat.id), "cover.webp");
         if (fs.existsSync(coverPath)) {
           categoryData.cover = `/category-covers/${encodeURIComponent(cat.title)}`;
