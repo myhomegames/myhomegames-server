@@ -1411,6 +1411,71 @@ describe('POST /games/add-from-igdb', () => {
     }
   });
 
+  test('should allow adding game if directory exists but metadata.json does not', async () => {
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+    
+    const gameId = 999994;
+    const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+    const gameMetadataPath = path.join(gameDir, 'metadata.json');
+    
+    // Create directory without metadata.json
+    if (!fs.existsSync(gameDir)) {
+      fs.mkdirSync(gameDir, { recursive: true });
+    }
+    
+    // Ensure metadata.json does not exist
+    if (fs.existsSync(gameMetadataPath)) {
+      fs.unlinkSync(gameMetadataPath);
+    }
+    
+    // Verify directory exists but metadata.json does not
+    expect(fs.existsSync(gameDir)).toBe(true);
+    expect(fs.existsSync(gameMetadataPath)).toBe(false);
+    
+    // Add the game - should succeed
+    const response = await request(app)
+      .post('/games/add-from-igdb')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        igdbId: gameId,
+        name: 'Test Game with Existing Directory',
+        summary: 'Test summary',
+        cover: 'https://images.igdb.com/igdb/image/upload/t_cover_big/test.jpg',
+        background: 'https://images.igdb.com/igdb/image/upload/t_1080p/test.jpg',
+        releaseDate: 1609459200,
+        genres: ['Test Genre'],
+        criticRating: 75,
+        userRating: 70
+      })
+      .expect(200);
+    
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body).toHaveProperty('game');
+    expect(response.body).toHaveProperty('gameId', gameId);
+    expect(response.body.game).toHaveProperty('id', gameId);
+    expect(response.body.game).toHaveProperty('title', 'Test Game with Existing Directory');
+    
+    // Verify metadata.json was created
+    expect(fs.existsSync(gameMetadataPath)).toBe(true);
+    
+    // Verify game can be retrieved
+    const getResponse = await request(app)
+      .get(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    expect(getResponse.body).toHaveProperty('id', gameId);
+    expect(getResponse.body).toHaveProperty('title', 'Test Game with Existing Directory');
+    
+    // Cleanup: delete the test game
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
   test('should handle games without genres', async () => {
     const response = await request(app)
       .post('/games/add-from-igdb')

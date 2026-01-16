@@ -923,9 +923,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       // Also check if game directory exists (even if metadata.json doesn't exist yet)
       const gameDir = path.join(metadataPath, "content", "games", String(gameId));
       if (fs.existsSync(gameDir)) {
-        // Directory exists, so game likely exists
+        // Directory exists, check if metadata.json exists
         const existingGame = loadGame(metadataPath, gameId);
         if (existingGame) {
+          // Game exists with valid metadata.json
           existingGame.id = gameId;
           allGames[gameId] = existingGame;
           return res.status(409).json({ 
@@ -933,12 +934,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
             gameId: gameId 
           });
         }
-        // If directory exists but no metadata.json, still consider it as existing
-        // (could be a partially created game)
-        return res.status(409).json({ 
-          error: "Game already exists", 
-          gameId: gameId 
-        });
+        // If directory exists but no metadata.json, allow the operation
+        // The directory will be reused and metadata.json will be created
       }
       
       // Parse release date using utility function

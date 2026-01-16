@@ -100,11 +100,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       collections: collectionsCache.map((c) => {
         // Ensure ID is converted to string for URL encoding
         const collectionId = String(c.id);
+        // Calculate gameCount by counting only games that exist in allGames
+        const gameIds = c.games || [];
+        const actualGameCount = gameIds.filter((gameId) => allGames[gameId]).length;
         const collectionData = {
           id: c.id,
           title: c.title,
           summary: c.summary || "",
-          gameCount: (c.games || []).length,
+          gameCount: actualGameCount,
         };
         // Check if cover exists locally
         const localCover = getLocalMediaPath({

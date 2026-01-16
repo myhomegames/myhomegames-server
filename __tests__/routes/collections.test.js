@@ -849,3 +849,136 @@ describe('DELETE /collections/:id/delete-background', () => {
   });
 });
 
+describe('GameCount calculation', () => {
+  test('should calculate gameCount correctly excluding deleted games', async () => {
+    // First get some games from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length < 2) {
+      // Need at least 2 games for this test
+      return;
+    }
+    
+    const games = gamesResponse.body.games;
+    const gameIds = [games[0].id, games[1].id];
+    
+    // Create a collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for GameCount' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add games to the collection
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds })
+      .expect(200);
+    
+    // Verify gameCount is 2
+    const collectionsResponse = await request(app)
+      .get('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    const collection = collectionsResponse.body.collections.find(c => c.id === collectionId);
+    expect(collection).toBeDefined();
+    expect(collection.gameCount).toBe(2);
+    
+    // Delete one of the games
+    await request(app)
+      .delete(`/games/${gameIds[0]}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    // Verify gameCount is now 1 (excludes deleted game)
+    const collectionsResponseAfter = await request(app)
+      .get('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    const collectionAfter = collectionsResponseAfter.body.collections.find(c => c.id === collectionId);
+    expect(collectionAfter).toBeDefined();
+    expect(collectionAfter.gameCount).toBe(1);
+    
+    // Verify that the remaining game is the one that wasn't deleted
+    const gamesResponseAfter = await request(app)
+      .get(`/collections/${collectionId}/games`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    expect(gamesResponseAfter.body.games.length).toBe(1);
+    expect(gamesResponseAfter.body.games[0].id).toBe(gameIds[1]);
+  });
+  
+  test('should calculate gameCount as 0 when all games are deleted', async () => {
+    // First get a game from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length < 1) {
+      // Need at least 1 game for this test
+      return;
+    }
+    
+    const gameId = gamesResponse.body.games[0].id;
+    
+    // Create a collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Empty GameCount' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add game to the collection
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [gameId] })
+      .expect(200);
+    
+    // Verify gameCount is 1
+    const collectionsResponse = await request(app)
+      .get('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    const collection = collectionsResponse.body.collections.find(c => c.id === collectionId);
+    expect(collection).toBeDefined();
+    expect(collection.gameCount).toBe(1);
+    
+    // Delete the game
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    // Verify gameCount is now 0
+    const collectionsResponseAfter = await request(app)
+      .get('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    const collectionAfter = collectionsResponseAfter.body.collections.find(c => c.id === collectionId);
+    expect(collectionAfter).toBeDefined();
+    expect(collectionAfter.gameCount).toBe(0);
+    
+    // Verify that no games are returned
+    const gamesResponseAfter = await request(app)
+      .get(`/collections/${collectionId}/games`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    expect(gamesResponseAfter.body.games.length).toBe(0);
+  });
+});
