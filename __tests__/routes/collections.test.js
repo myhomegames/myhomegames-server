@@ -43,8 +43,10 @@ describe('GET /collections', () => {
       const collection = response.body.collections[0];
       expect(collection).toHaveProperty('id');
       expect(collection).toHaveProperty('title');
-      expect(collection).toHaveProperty('cover');
-      expect(collection.cover).toContain('/collection-covers/');
+      // cover is optional - only present if file exists
+      if (collection.cover) {
+        expect(collection.cover).toContain('/collection-covers/');
+      }
     }
   });
 
@@ -76,8 +78,10 @@ describe('GET /collections/:id', () => {
       expect(response.body).toHaveProperty('id', collectionId);
       expect(response.body).toHaveProperty('title');
       expect(response.body).toHaveProperty('summary');
-      expect(response.body).toHaveProperty('cover');
-      expect(response.body.cover).toContain('/collection-covers/');
+      // cover is optional - only present if file exists
+      if (response.body.cover) {
+        expect(response.body.cover).toContain('/collection-covers/');
+      }
     }
   });
 
@@ -100,7 +104,10 @@ describe('GET /collections/:id', () => {
       expect(collection).toHaveProperty('id');
       expect(collection).toHaveProperty('title');
       expect(collection).toHaveProperty('summary');
-      expect(collection).toHaveProperty('cover');
+      // cover is optional - only present if file exists
+      if (collection.cover) {
+        expect(collection.cover).toContain('/collection-covers/');
+      }
       expect(collection).toHaveProperty('gameCount');
       expect(typeof collection.gameCount).toBe('number');
     }

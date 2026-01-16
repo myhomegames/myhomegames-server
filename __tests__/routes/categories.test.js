@@ -33,7 +33,7 @@ describe('GET /categories', () => {
     expect(Array.isArray(response.body.categories)).toBe(true);
   });
 
-  test('should return categories as array of strings', async () => {
+  test('should return categories as array of objects with id and title', async () => {
     const response = await request(app)
       .get('/categories')
       .set('X-Auth-Token', 'test-token')
@@ -43,9 +43,13 @@ describe('GET /categories', () => {
     expect(Array.isArray(response.body.categories)).toBe(true);
     
     if (response.body.categories.length > 0) {
-      // All categories should be strings
+      // All categories should be objects with id and title
       response.body.categories.forEach(category => {
-        expect(typeof category).toBe('string');
+        expect(typeof category).toBe('object');
+        expect(category).toHaveProperty('id');
+        expect(category).toHaveProperty('title');
+        expect(typeof category.id).toBe('number');
+        expect(typeof category.title).toBe('string');
       });
     }
   });
@@ -77,7 +81,8 @@ describe('POST /categories', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(listResponse.body.categories).toContain('testcategory');
+    const categoryExists = listResponse.body.categories.some(cat => cat.title === 'testcategory');
+    expect(categoryExists).toBe(true);
   });
 
   test('should return category title as string', async () => {
@@ -242,7 +247,8 @@ describe('DELETE /categories/:categoryTitle', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(listResponse.body.categories).not.toContain(categoryTitle);
+    const categoryExists = listResponse.body.categories.some(cat => cat.title === categoryTitle);
+    expect(categoryExists).toBe(false);
   });
 
   test('should return 409 if category is still in use', async () => {
@@ -262,7 +268,8 @@ describe('DELETE /categories/:categoryTitle', () => {
         .expect(200);
       
       if (categoriesResponse.body.categories.length > 0) {
-        const categoryTitle = categoriesResponse.body.categories[0];
+        const category = categoriesResponse.body.categories[0];
+        const categoryTitle = typeof category === 'string' ? category : category.title;
         
         // Assign category to a game
         await request(app)
@@ -393,7 +400,8 @@ describe('Game update with category creation and deletion', () => {
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      expect(categoriesResponse.body.categories).toContain(newCategoryTitle);
+      const categoryExists = categoriesResponse.body.categories.some(cat => cat.title === newCategoryTitle);
+      expect(categoryExists).toBe(true);
       
       // Cleanup: remove genre from game and delete category
       await request(app)
@@ -500,7 +508,8 @@ describe('ensureCategoryExists helper function', () => {
     
     expect(categoriesAfter.body.categories.length).toBe(initialCount + 1);
     
-    expect(categoriesAfter.body.categories).toContain('Helper Test Genre');
+    const categoryExists = categoriesAfter.body.categories.some(cat => cat.title === 'Helper Test Genre');
+    expect(categoryExists).toBe(true);
     
     // Cleanup: delete the category
     await request(app)
@@ -552,7 +561,8 @@ describe('ensureCategoryExists helper function', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(categoriesBeforeDelete.body.categories).toContain(categoryTitle);
+    const categoryExists = categoriesBeforeDelete.body.categories.some(cat => cat.title === categoryTitle);
+    expect(categoryExists).toBe(true);
     
     // Cleanup: delete the category
     await request(app)
@@ -578,7 +588,8 @@ describe('ensureCategoryExists helper function', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(categoriesResponse.body.categories).toContain('UPPERCASE HELPER GENRE');
+    const categoryExists = categoriesResponse.body.categories.some(cat => cat.title === 'UPPERCASE HELPER GENRE');
+    expect(categoryExists).toBe(true);
     
     // Cleanup: delete the category
     await request(app)

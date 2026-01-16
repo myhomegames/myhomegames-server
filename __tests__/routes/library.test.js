@@ -1092,7 +1092,7 @@ describe('DELETE /games/:gameId', () => {
       .send({ title: 'orphanedcategory' })
       .expect(200);
     
-    const categoryId = createCategoryResponse.body.category.id;
+    const categoryTitle = createCategoryResponse.body.category; // POST returns just the title string
     
     // Verify category exists
     const categoriesBefore = await request(app)
@@ -1100,8 +1100,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    const categoryTitle = 'orphanedcategory';
-    const categoryExistsBefore = categoriesBefore.body.categories.includes(categoryTitle);
+    const categoryExistsBefore = categoriesBefore.body.categories.some(cat => 
+      (typeof cat === 'string' ? cat : cat.title) === categoryTitle
+    );
     expect(categoryExistsBefore).toBe(true);
     
     // Add a game with this category
@@ -1143,7 +1144,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    const categoryExistsAfter = categoriesAfter.body.categories.includes('orphanedcategory');
+    const categoryExistsAfter = categoriesAfter.body.categories.some(cat => 
+      (typeof cat === 'string' ? cat : cat.title) === categoryTitle
+    );
     expect(categoryExistsAfter).toBe(false);
   });
 
@@ -1205,7 +1208,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    const categoryExistsAfter = categoriesAfter.body.categories.includes(categoryTitle);
+    const categoryExistsAfter = categoriesAfter.body.categories.some(cat => 
+      (typeof cat === 'string' ? cat : cat.title) === categoryTitle
+    );
     expect(categoryExistsAfter).toBe(true);
     
     // Cleanup: delete second game
@@ -1271,8 +1276,14 @@ describe('POST /games/add-from-igdb', () => {
     
     expect(categoriesAfter.body.categories.length).toBe(initialCategoriesCount + 2);
     
-    expect(categoriesAfter.body.categories).toContain('New Genre 1');
-    expect(categoriesAfter.body.categories).toContain('New Genre 2');
+    const hasNewGenre1 = categoriesAfter.body.categories.some(cat => 
+      (typeof cat === 'string' ? cat : cat.title) === 'New Genre 1'
+    );
+    const hasNewGenre2 = categoriesAfter.body.categories.some(cat => 
+      (typeof cat === 'string' ? cat : cat.title) === 'New Genre 2'
+    );
+    expect(hasNewGenre1).toBe(true);
+    expect(hasNewGenre2).toBe(true);
     
     // Cleanup: delete the test game
     await request(app)
@@ -1289,7 +1300,7 @@ describe('POST /games/add-from-igdb', () => {
       .send({ title: 'Existing Genre' })
       .expect(200);
     
-    const existingCategoryId = createCategoryResponse.body.category.id;
+    const existingCategoryTitle = createCategoryResponse.body.category; // POST returns just the title string
     
     // Get categories count before adding game
     const categoriesBefore = await request(app)
@@ -1330,7 +1341,10 @@ describe('POST /games/add-from-igdb', () => {
     expect(categoriesAfter.body.categories.length).toBe(initialCategoriesCount);
     
     // Verify the existing category still exists
-    const existingCategory = categoriesAfter.body.categories.find(c => c.id === existingCategoryId);
+    const existingCategory = categoriesAfter.body.categories.find(c => {
+      const title = typeof c === 'string' ? c : c.title;
+      return title === existingCategoryTitle;
+    });
     expect(existingCategory).toBeDefined();
     
     // Cleanup: delete the test game
@@ -1467,20 +1481,23 @@ describe('POST /games/add-from-igdb', () => {
     
     // On case-insensitive filesystems, category folder names use the first case created
     // Check that either "ACTION" or "Action" exists (case-insensitive match)
-    const hasAction = categoriesResponse.body.categories.some(cat => 
-      cat.toLowerCase() === 'action'
-    );
+    const hasAction = categoriesResponse.body.categories.some(cat => {
+      const title = typeof cat === 'string' ? cat : cat.title;
+      return title && title.toLowerCase() === 'action';
+    });
     expect(hasAction).toBe(true);
     // On case-insensitive filesystems, "Adventure" may already exist from fixtures
     // Check that either "ADVENTURE" or "Adventure" exists (case-insensitive match)
-    const hasAdventure = categoriesResponse.body.categories.some(cat => 
-      cat.toLowerCase() === 'adventure'
-    );
+    const hasAdventure = categoriesResponse.body.categories.some(cat => {
+      const title = typeof cat === 'string' ? cat : cat.title;
+      return title && title.toLowerCase() === 'adventure';
+    });
     expect(hasAdventure).toBe(true);
     // Check that either "RPG" or "Rpg" exists (case-insensitive match)
-    const hasRPG = categoriesResponse.body.categories.some(cat => 
-      cat.toLowerCase() === 'rpg'
-    );
+    const hasRPG = categoriesResponse.body.categories.some(cat => {
+      const title = typeof cat === 'string' ? cat : cat.title;
+      return title && title.toLowerCase() === 'rpg';
+    });
     expect(hasRPG).toBe(true);
     
     // Cleanup: delete the test game
