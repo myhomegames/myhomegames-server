@@ -49,6 +49,32 @@ openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PA
 
 **Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a service like Cloudflare Tunnel.
 
+### Browser Security Warning
+
+When using self-signed certificates, your browser will show a security warning (e.g., `ERR_CERT_AUTHORITY_INVALID`). This is normal for development:
+
+1. Open `https://localhost:41440` (or your configured HTTPS port) in your browser
+2. Click "Advanced" or "Show Details"
+3. Click "Proceed to localhost" or "Accept the Risk and Continue"
+
+After accepting the certificate, the browser will trust it for that session and API requests from the client will work correctly.
+
+For a better development experience without warnings, you can use `mkcert` to generate trusted certificates:
+
+```bash
+# Install mkcert (macOS)
+brew install mkcert
+mkcert -install
+
+# Generate trusted certificates in metadata_path/certs/
+cd ~/Library/Application\ Support/MyHomeGames/certs
+mkcert localhost 127.0.0.1
+mv localhost+1.pem cert.pem
+mv localhost+1-key.pem key.pem
+```
+
+Then restart the server. With `mkcert`, certificates are trusted by your system and no warnings will appear.
+
 ### Configure Server for HTTPS
 
 Add the following to your `.env` file:
