@@ -302,10 +302,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       }
     }
     
+    // Track if we need to delete executables (when executables is null)
+    let shouldDeleteExecutables = false;
+    
     // Handle executables field: validate it's an array of strings
     if ('executables' in filteredUpdates) {
       if (filteredUpdates.executables === null || filteredUpdates.executables === undefined) {
-        // If executables is null, remove it from filteredUpdates
+        // If executables is null, we need to delete all executable files
+        shouldDeleteExecutables = true;
+        // Remove it from filteredUpdates but we'll handle deletion separately
         delete filteredUpdates.executables;
       } else if (!Array.isArray(filteredUpdates.executables)) {
         return res.status(400).json({ 
@@ -323,8 +328,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       }
     }
     
-    // Check if there are any updates left
-    if (Object.keys(filteredUpdates).length === 0) {
+    // Check if there are any updates left (allow empty if we're deleting executables)
+    if (Object.keys(filteredUpdates).length === 0 && !shouldDeleteExecutables) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
     
@@ -349,8 +354,30 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         Object.assign(currentGame, filteredUpdates);
       }
       
-      // If executables was updated, sync with actual files in directory
-      if ('executables' in filteredUpdates) {
+      // If we need to delete executables (executables was set to null)
+      if (shouldDeleteExecutables) {
+        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+        if (fs.existsSync(gameContentDir)) {
+          try {
+            const files = fs.readdirSync(gameContentDir);
+            // Delete all .sh and .bat files
+            for (const file of files) {
+              const filePath = path.join(gameContentDir, file);
+              const ext = path.extname(file).toLowerCase();
+              if ((ext === '.sh' || ext === '.bat') && fs.statSync(filePath).isFile()) {
+                fs.unlinkSync(filePath);
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to delete executables for game ${gameId}:`, err.message);
+          }
+        }
+        // Remove executables field from metadata
+        delete currentGame.executables;
+      }
+      
+      // If executables was updated (but not deleted), sync with actual files in directory
+      if ('executables' in filteredUpdates && !shouldDeleteExecutables) {
         // Get actual executable names from directory
         const actualExecutables = getExecutableNames(metadataPath, gameId);
         // Update executables in metadata.json with actual files
@@ -370,7 +397,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         Object.assign(allGames[gameId], filteredUpdates);
       }
       // Sync executables in cache with actual files
-      if ('executables' in filteredUpdates) {
+      if (shouldDeleteExecutables || 'executables' in filteredUpdates) {
         const actualExecutables = getExecutableNames(metadataPath, gameId);
         if (actualExecutables.length > 0) {
           allGames[gameId].executables = actualExecutables;
