@@ -34,6 +34,53 @@ function loadGame(metadataPath, gameId) {
   return readJsonFile(filePath, null);
 }
 
+// Helper function to get executable names from game directory
+// Returns array of names (without extension) from .sh and .bat files
+function getExecutableNames(metadataPath, gameId) {
+  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+  const executableNames = [];
+  
+  if (!fs.existsSync(gameContentDir)) {
+    return executableNames;
+  }
+  
+  // Read all .sh and .bat files in the game directory
+  let files;
+  try {
+    files = fs.readdirSync(gameContentDir);
+  } catch (err) {
+    console.warn(`Failed to read game directory ${gameContentDir}:`, err.message);
+    return executableNames;
+  }
+  
+  const executableFiles = files.filter(file => {
+    // Only include files, not directories
+    const filePath = path.join(gameContentDir, file);
+    if (!fs.statSync(filePath).isFile()) {
+      return false;
+    }
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.sh' || ext === '.bat';
+  });
+  
+  // Sort files: script.sh/script.bat first (for backward compatibility), then others alphabetically
+  executableFiles.sort((a, b) => {
+    const aIsScript = a.startsWith('script.');
+    const bIsScript = b.startsWith('script.');
+    if (aIsScript && !bIsScript) return -1;
+    if (!aIsScript && bIsScript) return 1;
+    return a.localeCompare(b);
+  });
+  
+  // Extract names (without extension)
+  executableFiles.forEach((file) => {
+    const name = path.basename(file, path.extname(file));
+    executableNames.push(name);
+  });
+  
+  return executableNames;
+}
+
 // Helper function to delete a game
 function deleteGame(metadataPath, gameId) {
   const gameDir = path.join(metadataPath, "content", "games", String(gameId));
@@ -80,6 +127,14 @@ function loadLibraryGames(metadataPath, allGames) {
     if (game) {
       // Use folder name as ID
       game.id = Number(gameId) || gameId;
+      // Always populate executables from directory files (in case metadata.json is out of sync)
+      const executableNames = getExecutableNames(metadataPath, gameId);
+      if (executableNames.length > 0) {
+        game.executables = executableNames;
+      } else {
+        // If no executables found, remove the field
+        delete game.executables;
+      }
       games.push(game);
       allGames[game.id] = game;
     }
@@ -96,6 +151,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
     const libraryGames = loadLibraryGames(metadataPath, allGames);
     res.json({
       games: libraryGames.map((g) => {
+        // Always populate executables from directory files (in case metadata.json is out of sync)
+        const executableNames = getExecutableNames(metadataPath, g.id);
+        const executables = executableNames.length > 0 ? executableNames : null;
+        
         const gameData = {
           id: g.id,
           title: g.title,
@@ -108,7 +167,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
           genre: g.genre || null,
           criticratings: g.criticratings || null,
           userratings: g.userratings || null,
-          command: g.command || null,
+          executables: executables,
           themes: g.themes || null,
           platforms: g.platforms || null,
           gameModes: g.gameModes || null,
@@ -144,6 +203,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       return res.status(404).json({ error: "Game not found" });
     }
     
+    // Always populate executables from directory files (in case metadata.json is out of sync)
+    const executableNames = getExecutableNames(metadataPath, gameId);
+    const executables = executableNames.length > 0 ? executableNames : null;
+    
     const gameData = {
       id: game.id,
       title: game.title,
@@ -156,7 +219,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       genre: game.genre || null,
       criticratings: game.criticratings || null,
       userratings: game.userratings || null,
-      command: game.command || null,
+      executables: executables,
       themes: game.themes || null,
       platforms: game.platforms || null,
       gameModes: game.gameModes || null,
@@ -214,7 +277,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'year', 'month', 'day', 'stars', 'genre', 'command'];
+    const allowedFields = ['title', 'summary', 'year', 'month', 'day', 'stars', 'genre', 'executables'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -239,69 +302,35 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       }
     }
     
-    // Handle command field: if null or undefined, delete physical file and remove from JSON
-    const isUnlinkingCommand = 'command' in filteredUpdates && (filteredUpdates.command === null || filteredUpdates.command === undefined);
-    
-    if (isUnlinkingCommand) {
-      // Delete physical executable files (script.sh and script.bat)
-      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-      const scriptShPath = path.join(gameContentDir, "script.sh");
-      const scriptBatPath = path.join(gameContentDir, "script.bat");
-      
-      try {
-        if (fs.existsSync(scriptShPath)) {
-          fs.unlinkSync(scriptShPath);
-          console.log(`Deleted ${scriptShPath}`);
-        }
-        if (fs.existsSync(scriptBatPath)) {
-          fs.unlinkSync(scriptBatPath);
-          console.log(`Deleted ${scriptBatPath}`);
-        }
-      } catch (deleteError) {
-        console.warn(`Failed to delete executable files for game ${gameId}:`, deleteError.message);
-        // Continue anyway, don't fail the request
-      }
-      
-      // Remove command from filteredUpdates (don't set it to null, remove it)
-      delete filteredUpdates.command;
-    } else if ('command' in filteredUpdates && filteredUpdates.command) {
-      // Validate that command is a valid extension (sh or bat, without dot)
-      const commandValue = String(filteredUpdates.command).trim().toLowerCase();
-      // Remove dot if present
-      const normalizedExt = commandValue.startsWith('.') ? commandValue.substring(1) : commandValue;
-      
-      if (normalizedExt !== 'sh' && normalizedExt !== 'bat') {
+    // Handle executables field: validate it's an array of strings
+    if ('executables' in filteredUpdates) {
+      if (filteredUpdates.executables === null || filteredUpdates.executables === undefined) {
+        // If executables is null, remove it from filteredUpdates
+        delete filteredUpdates.executables;
+      } else if (!Array.isArray(filteredUpdates.executables)) {
         return res.status(400).json({ 
-          error: "Invalid command extension. Only 'sh' and 'bat' are allowed." 
+          error: "Executables must be an array of names (strings)" 
         });
+      } else {
+        // Validate all items are strings
+        for (const exec of filteredUpdates.executables) {
+          if (typeof exec !== 'string' || !exec.trim()) {
+            return res.status(400).json({ 
+              error: "All executables must be non-empty strings" 
+            });
+          }
+        }
       }
-      
-      // Save without dot (just "sh" or "bat")
-      filteredUpdates.command = normalizedExt;
     }
     
-    // Check if there are any updates left after handling command removal
-    if (Object.keys(filteredUpdates).length === 0 && !isUnlinkingCommand) {
+    // Check if there are any updates left
+    if (Object.keys(filteredUpdates).length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
-    }
-    
-    // Log received updates for debugging
-    if (filteredUpdates.command) {
-      console.log('Received command update:', {
-        gameId: gameId,
-        command: filteredUpdates.command,
-        commandType: typeof filteredUpdates.command,
-        commandLength: filteredUpdates.command.length
-      });
     }
     
     // Update game in memory
     if (Object.keys(filteredUpdates).length > 0) {
       Object.assign(game, filteredUpdates);
-    }
-    // If command was unlinked, remove it from game object
-    if (isUnlinkingCommand) {
-      delete game.command;
     }
     
     // Save to file - each game has its own folder
@@ -319,9 +348,18 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(currentGame, filteredUpdates);
       }
-      // Remove command field if it was unlinked
-      if (isUnlinkingCommand && 'command' in currentGame) {
-        delete currentGame.command;
+      
+      // If executables was updated, sync with actual files in directory
+      if ('executables' in filteredUpdates) {
+        // Get actual executable names from directory
+        const actualExecutables = getExecutableNames(metadataPath, gameId);
+        // Update executables in metadata.json with actual files
+        if (actualExecutables.length > 0) {
+          currentGame.executables = actualExecutables;
+        } else {
+          // If no files exist, remove executables field
+          delete currentGame.executables;
+        }
       }
       
       // Save updated game
@@ -331,9 +369,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(allGames[gameId], filteredUpdates);
       }
-      // Remove command from cache if it was unlinked
-      if (isUnlinkingCommand && allGames[gameId].command) {
-        delete allGames[gameId].command;
+      // Sync executables in cache with actual files
+      if ('executables' in filteredUpdates) {
+        const actualExecutables = getExecutableNames(metadataPath, gameId);
+        if (actualExecutables.length > 0) {
+          allGames[gameId].executables = actualExecutables;
+        } else {
+          delete allGames[gameId].executables;
+        }
       }
       
       // Return updated game data with all fields
@@ -350,7 +393,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: updatedGame.genre || null,
         criticratings: updatedGame.criticratings || null,
         userratings: updatedGame.userratings || null,
-        command: updatedGame.command || null,
+        executables: updatedGame.executables || null,
         themes: updatedGame.themes || null,
         platforms: updatedGame.platforms || null,
         gameModes: updatedGame.gameModes || null,
@@ -407,7 +450,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: game.command || null,
+        executables: game.executables || null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -483,7 +526,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: game.command || null,
+        executables: game.executables || null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -559,7 +602,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: game.command || null,
+        executables: game.executables || null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -650,7 +693,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: game.command || null,
+        executables: game.executables || null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -741,7 +784,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: game.command || null,
+        executables: game.executables || null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -820,26 +863,26 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         }
       }
       
-      // Save the extension in the game's command field (without dot: "sh" or "bat")
-      const commandValue = fileExtension.substring(1); // Remove the dot (.sh -> sh, .bat -> bat)
-      game.command = commandValue;
+      // Update executables array with names from directory
+      const executableNames = getExecutableNames(metadataPath, gameId);
+      game.executables = executableNames;
       
       // Update the game in its own metadata.json file
       try {
         const currentGame = loadGame(metadataPath, gameId);
         if (currentGame) {
           currentGame.id = gameId; // Set id before saving (id is not stored in metadata.json)
-          currentGame.command = commandValue;
+          currentGame.executables = executableNames;
           saveGame(metadataPath, currentGame);
         }
         // Update allGames cache
-        allGames[gameId].command = commandValue;
+        allGames[gameId].executables = executableNames;
       } catch (saveError) {
-        console.warn(`Failed to save command field for game ${gameId}:`, saveError.message);
+        console.warn(`Failed to save executables field for game ${gameId}:`, saveError.message);
         // Continue anyway, the file was uploaded successfully
       }
       
-      // Return the extension (without dot) and updated game data
+      // Return executables array and updated game data
       const gameData = {
         id: game.id,
         title: game.title,
@@ -852,7 +895,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: game.genre || null,
         criticratings: game.criticratings || null,
         userratings: game.userratings || null,
-        command: commandValue, // Return without dot ("sh" or "bat")
+        executables: executableNames.length > 0 ? executableNames : null,
         themes: game.themes || null,
         platforms: game.platforms || null,
         gameModes: game.gameModes || null,
@@ -1050,7 +1093,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: newGame.genre || null,
         criticratings: newGame.criticratings || null,
         userratings: newGame.userratings || null,
-        command: newGame.command || null,
+        executables: newGame.executables || null,
         themes: newGame.themes || null,
         platforms: newGame.platforms || null,
         gameModes: newGame.gameModes || null,

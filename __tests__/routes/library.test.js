@@ -568,7 +568,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       
       expect(response.body).toHaveProperty('status', 'success');
       expect(response.body).toHaveProperty('game');
-      expect(response.body.game).toHaveProperty('command', 'sh');
+      expect(response.body.game).toHaveProperty('executables', ['script']);
       expect(response.body.game).toHaveProperty('id', gameId);
       
       // Verify the file was saved
@@ -582,13 +582,16 @@ describe('POST /games/:gameId/upload-executable', () => {
       const savedContent = fs.readFileSync(scriptPath);
       expect(savedContent.toString()).toBe(fileContent.toString());
       
-      // Verify command field was updated in JSON
+      // Verify executables field was updated in JSON
       const gameResponse = await request(app)
         .get(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      expect(gameResponse.body).toHaveProperty('command', 'sh');
+      // Verify executables contains 'script'
+      expect(gameResponse.body).toHaveProperty('executables');
+      expect(Array.isArray(gameResponse.body.executables)).toBe(true);
+      expect(gameResponse.body.executables).toContain('script');
     }
   });
 
@@ -610,7 +613,10 @@ describe('POST /games/:gameId/upload-executable', () => {
         .expect(200);
       
       expect(response.body).toHaveProperty('status', 'success');
-      expect(response.body.game).toHaveProperty('command', 'bat');
+      // Verify executables contains 'script' (may have multiple if .sh file exists from previous test)
+      expect(response.body.game).toHaveProperty('executables');
+      expect(Array.isArray(response.body.game.executables)).toBe(true);
+      expect(response.body.game.executables).toContain('script');
       
       // Verify the file was saved as script.bat
       const { testMetadataPath } = require('../setup');
@@ -760,7 +766,7 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
-  test('should return updated game data with command field', async () => {
+  test('should return updated game data with executables field', async () => {
     // First get a game ID from the library
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
@@ -782,7 +788,10 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(game).toHaveProperty('title');
       expect(game).toHaveProperty('summary');
       expect(game).toHaveProperty('cover');
-      expect(game).toHaveProperty('command', 'sh');
+      // Verify executables contains 'script' (may have multiple if .sh file exists from previous test)
+      expect(game).toHaveProperty('executables');
+      expect(Array.isArray(game.executables)).toBe(true);
+      expect(game.executables).toContain('script');
       expect(game).toHaveProperty('day');
       expect(game).toHaveProperty('month');
       expect(game).toHaveProperty('year');

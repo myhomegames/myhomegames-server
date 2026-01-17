@@ -110,13 +110,13 @@ describe('GET /launcher', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should launch game when command is valid', async () => {
+  test('should launch game when executable is valid', async () => {
     const response = await request(app)
       .get('/launcher?gameId=1')
       .set('X-Auth-Token', 'test-token');
     
-    // Should either succeed (if command exists), fail with 500 (spawn error), or 400 (no command/script not found)
-    // 400 can happen if game doesn't have command field or script file doesn't exist
+    // Should either succeed (if executable exists), fail with 500 (spawn error), or 400 (no executable/script not found)
+    // 400 can happen if game doesn't have executables field or script file doesn't exist
     expect([200, 400, 404, 500]).toContain(response.status);
   });
 });

@@ -474,7 +474,7 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
             year: g.year || null,
             stars: g.stars || null,
             genre: g.genre || null,
-            command: g.command || null,
+            executables: g.executables || null,
           };
           const background = getBackgroundUrl(g, metadataPath);
           if (background) {

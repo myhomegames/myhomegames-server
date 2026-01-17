@@ -358,7 +358,7 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
   res.sendFile(backgroundPath);
 });
 
-// Endpoint: launcher — launches a whitelisted command for a game
+// Endpoint: launcher — launches an executable for a game
 app.get("/launcher", requireToken, (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
@@ -366,32 +366,34 @@ app.get("/launcher", requireToken, (req, res) => {
   const entry = allGames[Number(gameId)];
   if (!entry) return res.status(404).json({ error: "Game not found" });
 
-  // 'command' field contains only the extension without dot (e.g., "sh" or "bat")
-  // We need to construct the full path automatically
-  const commandExtension = entry.command;
+  // 'executables' field contains array of names (without extension)
+  // We need to construct the full path automatically using the first executable
+  const executables = entry.executables;
 
-  // Validate command extension exists
-  if (!commandExtension || typeof commandExtension !== 'string' || commandExtension.trim() === '') {
+  // Validate executables exists and has at least one item
+  if (!executables || !Array.isArray(executables) || executables.length === 0) {
     return res.status(400).json({
       error: "Launch failed",
-      detail: "Command is missing or invalid. Please check the game configuration."
+      detail: "No executables configured. Please check the game configuration."
     });
   }
 
-  // Normalize extension (remove dot if present, then add it back for file path)
-  const normalizedExt = commandExtension.startsWith('.') ? commandExtension.substring(1) : commandExtension;
-  if (normalizedExt !== 'sh' && normalizedExt !== 'bat') {
+  // Get first executable name
+  const executableName = executables[0];
+  if (!executableName || typeof executableName !== 'string' || executableName.trim() === '') {
     return res.status(400).json({
       error: "Launch failed",
-      detail: "Invalid command extension. Only 'sh' and 'bat' are allowed."
+      detail: "Invalid executable name. Please check the game configuration."
     });
   }
   
-  // Construct the full path: {METADATA_PATH}/content/games/{gameId}/script.{extension}
-  const extension = `.${normalizedExt}`; // Add dot for file path
-  const scriptName = `script${extension}`;
+  // Construct the full path: {METADATA_PATH}/content/games/{gameId}/{name}.sh or {name}.bat
   const gameContentDir = path.join(METADATA_PATH, "content", "games", String(gameId));
-  const fullCommandPath = path.join(gameContentDir, scriptName);
+  // Try .sh first, then .bat
+  let fullCommandPath = path.join(gameContentDir, `${executableName}.sh`);
+  if (!fs.existsSync(fullCommandPath)) {
+    fullCommandPath = path.join(gameContentDir, `${executableName}.bat`);
+  }
 
   // Validate that the script file exists
   if (!fs.existsSync(fullCommandPath)) {
@@ -417,13 +419,13 @@ app.get("/launcher", requireToken, (req, res) => {
       stdio: "ignore",
     });
 
-    // Handle spawn errors (e.g., command not found) - this happens synchronously
+    // Handle spawn errors (e.g., executable not found) - this happens synchronously
     child.on("error", (err) => {
       if (!responseSent) {
         responseSent = true;
         const errorMessage =
           err.code === "ENOENT"
-            ? `Command not found: ${fullCommandPath}. Please check if the executable exists.`
+            ? `Executable not found: ${fullCommandPath}. Please check if the executable exists.`
             : err.message;
         return res.status(500).json({
           error: "Launch failed",

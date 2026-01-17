@@ -287,7 +287,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           month: game.month || null,
           year: game.year || null,
           stars: game.stars || null,
-          command: game.command || null,
+          executables: game.executables || null,
           themes: game.themes || null,
           platforms: game.platforms || null,
           gameModes: game.gameModes || null,
