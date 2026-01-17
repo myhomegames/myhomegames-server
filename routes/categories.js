@@ -126,10 +126,19 @@ function loadCategories(metadataPath) {
     const metadataFilePath = path.join(categoriesDir, folderName, "metadata.json");
     const metadata = readJsonFile(metadataFilePath, null);
     if (metadata && metadata.title) {
-      categories.push({
+      const categoryData = {
         id: categoryId,
         title: metadata.title
-      });
+      };
+      // Build cover URL dynamically: check if local cover exists, otherwise use remote URL
+      const coverPath = path.join(categoriesDir, folderName, "cover.webp");
+      if (fs.existsSync(coverPath)) {
+        categoryData.cover = `/category-covers/${encodeURIComponent(metadata.title)}`;
+      } else {
+        // Use remote cover URL: /categories/$ID/cover.webp (endpoint will handle remote redirect)
+        categoryData.cover = `/categories/${categoryId}/cover.webp`;
+      }
+      categories.push(categoryData);
     }
   });
   
@@ -196,20 +205,56 @@ function registerCategoriesRoutes(app, requireToken, metadataPath, metadataGames
     res.sendFile(coverPath);
   });
 
+  // Endpoint: serve category cover image by ID (public, no auth required for images)
+  // This endpoint serves local cover if exists, otherwise redirects to remote URL using API_BASE
+  // Similar to how games work: local cover takes precedence, remote is fallback
+  app.get("/categories/:categoryId/cover.webp", (req, res) => {
+    const categoryId = Number(req.params.categoryId);
+    if (isNaN(categoryId)) {
+      return res.status(400).send("Invalid category ID");
+    }
+
+    // First check if local cover exists
+    const coverPath = path.join(metadataPath, "content", "categories", String(categoryId), "cover.webp");
+
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+
+    if (fs.existsSync(coverPath)) {
+      // Local cover exists, serve it
+      res.type("image/webp");
+      return res.sendFile(coverPath);
+    }
+
+    // No local cover, redirect to remote URL using FRONTEND_URL (without /app)
+    const frontendUrl = process.env.FRONTEND_URL;
+    if (frontendUrl) {
+      // Remove /app suffix if present
+      const baseUrl = frontendUrl.replace(/\/app\/?$/, '');
+      const remoteUrl = `${baseUrl}/categories/${categoryId}/cover.webp`;
+      return res.redirect(remoteUrl);
+    }
+
+    // No FRONTEND_URL configured, return 404
+    res.setHeader('Content-Type', 'image/webp');
+    return res.status(404).end();
+  });
+
   // Endpoint: list categories
   app.get("/categories", requireToken, (req, res) => {
     const categories = loadCategories(metadataPath);
     // Return categories with numeric ID (like collections)
     res.json({
       categories: categories.map(cat => {
+        // Use cover from categories array (already built in loadCategories)
+        // loadCategories already handles local vs remote cover logic
         const categoryData = {
           id: cat.id,
           title: cat.title,
         };
-        // Check if cover exists locally (use numeric ID for file path)
-        const coverPath = path.join(metadataPath, "content", "categories", String(cat.id), "cover.webp");
-        if (fs.existsSync(coverPath)) {
-          categoryData.cover = `/category-covers/${encodeURIComponent(cat.title)}`;
+        if (cat.cover) {
+          categoryData.cover = cat.cover;
         }
         return categoryData;
       }),

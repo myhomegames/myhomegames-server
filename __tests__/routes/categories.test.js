@@ -211,6 +211,142 @@ describe('POST /categories', () => {
     
     expect(response.headers['content-type']).toContain('image/webp');
   });
+});
+
+describe('GET /categories/:categoryId/cover.webp', () => {
+  test('should serve local cover if exists', async () => {
+    const categoryTitle = `CoverTest-${Date.now()}`;
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Create cover file
+    const categoryContentDir = path.join(testMetadataPath, 'content', 'categories', String(categoryId));
+    fs.mkdirSync(categoryContentDir, { recursive: true });
+    fs.writeFileSync(path.join(categoryContentDir, 'cover.webp'), 'fake webp data');
+    
+    // Request cover by ID
+    const response = await request(app)
+      .get(`/categories/${categoryId}/cover.webp`)
+      .expect(200);
+    
+    expect(response.headers['content-type']).toContain('image/webp');
+    expect(response.body.toString()).toBe('fake webp data');
+  });
+
+  test('should redirect to remote URL if local cover does not exist and FRONTEND_URL is set', async () => {
+    const categoryTitle = `RemoteCoverTest-${Date.now()}`;
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Set FRONTEND_URL environment variable
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://example.com/app';
+    
+    try {
+      // Request cover by ID (should redirect)
+      const response = await request(app)
+        .get(`/categories/${categoryId}/cover.webp`)
+        .expect(302); // Redirect
+      
+      // Verify redirect URL (should remove /app suffix)
+      expect(response.headers.location).toBe(`https://example.com/categories/${categoryId}/cover.webp`);
+    } finally {
+      // Restore original FRONTEND_URL
+      if (originalFrontendUrl) {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      } else {
+        delete process.env.FRONTEND_URL;
+      }
+    }
+  });
+
+  test('should return 404 if local cover does not exist and FRONTEND_URL is not set', async () => {
+    const categoryTitle = `NoCoverTest-${Date.now()}`;
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Ensure FRONTEND_URL is not set
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    delete process.env.FRONTEND_URL;
+    
+    try {
+      // Request cover by ID (should return 404)
+      const response = await request(app)
+        .get(`/categories/${categoryId}/cover.webp`)
+        .expect(404);
+      
+      expect(response.headers['content-type']).toContain('image/webp');
+    } finally {
+      // Restore original FRONTEND_URL
+      if (originalFrontendUrl) {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      }
+    }
+  });
+
+  test('should return 400 for invalid category ID', async () => {
+    const response = await request(app)
+      .get('/categories/invalid-id/cover.webp')
+      .expect(400);
+    
+    expect(response.text).toContain('Invalid category ID');
+  });
 
   test('should require authentication', async () => {
     const response = await request(app)
