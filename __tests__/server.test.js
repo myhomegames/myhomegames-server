@@ -119,6 +119,110 @@ describe('GET /launcher', () => {
     // 400 can happen if game doesn't have executables field or script file doesn't exist
     expect([200, 400, 404, 500]).toContain(response.status);
   });
+
+  test('should accept executableName parameter', async () => {
+    // First, get a game and upload multiple executables
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const fs = require('fs');
+      const path = require('path');
+      const { testMetadataPath } = require('./setup');
+      
+      // Create game directory if it doesn't exist
+      const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      fs.mkdirSync(gameDir, { recursive: true });
+      
+      // Create two executable files
+      const script1Content = '#!/bin/bash\necho "Script 1"';
+      const script2Content = '#!/bin/bash\necho "Script 2"';
+      fs.writeFileSync(path.join(gameDir, 'script1.sh'), script1Content);
+      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
+      fs.writeFileSync(path.join(gameDir, 'script2.sh'), script2Content);
+      fs.chmodSync(path.join(gameDir, 'script2.sh'), 0o755);
+      
+      // Update game metadata to include both executables
+      const metadataPath = path.join(gameDir, 'metadata.json');
+      let metadata = {};
+      if (fs.existsSync(metadataPath)) {
+        metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      }
+      metadata.executables = ['script1', 'script2'];
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+      
+      // Reload games to pick up the changes
+      await request(app)
+        .post('/reload-games')
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      
+      // Test launcher with executableName parameter
+      const response = await request(app)
+        .get(`/launcher?gameId=${gameId}&executableName=script2`)
+        .set('X-Auth-Token', 'test-token');
+      
+      // Should either succeed (if script2.sh exists), fail with 500 (spawn error), or 400/404 (script not found)
+      expect([200, 400, 404, 500]).toContain(response.status);
+      
+      // If it returns 400, check that the error mentions the executable
+      if (response.status === 400 && response.body.detail) {
+        // The error should not say "no executables configured" if we passed executableName
+        expect(response.body.detail).not.toContain('No executables configured');
+      }
+    }
+  });
+
+  test('should return 400 if executableName is not in game executables list', async () => {
+    // First, get a game and ensure it has executables
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const fs = require('fs');
+      const path = require('path');
+      const { testMetadataPath } = require('./setup');
+      
+      // Create game directory if it doesn't exist
+      const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      fs.mkdirSync(gameDir, { recursive: true });
+      
+      // Create an executable file
+      const scriptContent = '#!/bin/bash\necho "Script 1"';
+      fs.writeFileSync(path.join(gameDir, 'script1.sh'), scriptContent);
+      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
+      
+      // Update game metadata to include only script1
+      const metadataPath = path.join(gameDir, 'metadata.json');
+      let metadata = {};
+      if (fs.existsSync(metadataPath)) {
+        metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      }
+      metadata.executables = ['script1'];
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+      
+      // Reload games to pick up the changes
+      await request(app)
+        .post('/reload-games')
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      
+      // Test launcher with invalid executableName
+      const response = await request(app)
+        .get(`/launcher?gameId=${gameId}&executableName=nonexistent`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(400);
+      
+      expect(response.body).toHaveProperty('error', 'Launch failed');
+      expect(response.body.detail).toContain('not found in game configuration');
+    }
+  });
 });
 
 describe('POST /reload-games', () => {

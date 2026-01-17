@@ -378,8 +378,23 @@ app.get("/launcher", requireToken, (req, res) => {
     });
   }
 
-  // Get first executable name
-  const executableName = executables[0];
+  // Get executable name from query parameter or use first one
+  const requestedExecutableName = req.query.executableName;
+  let executableName;
+  if (requestedExecutableName && typeof requestedExecutableName === 'string' && requestedExecutableName.trim()) {
+    // Verify the requested executable exists in the list
+    if (executables.includes(requestedExecutableName.trim())) {
+      executableName = requestedExecutableName.trim();
+    } else {
+      return res.status(400).json({
+        error: "Launch failed",
+        detail: `Executable "${requestedExecutableName}" not found in game configuration.`
+      });
+    }
+  } else {
+    // Use first executable if no specific one requested
+    executableName = executables[0];
+  }
   if (!executableName || typeof executableName !== 'string' || executableName.trim() === '') {
     return res.status(400).json({
       error: "Launch failed",
