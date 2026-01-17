@@ -822,6 +822,112 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(response.body).toHaveProperty('error', 'Only .sh and .bat files are allowed');
     }
   });
+
+  test('should save file with custom label when label parameter is provided', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const fileContent = Buffer.from('#!/bin/bash\necho "Custom label test"');
+      
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('label', 'play')
+        .attach('file', fileContent, 'test-script.sh')
+        .expect(200);
+      
+      expect(response.body).toHaveProperty('status', 'success');
+      expect(response.body.game).toHaveProperty('executables');
+      expect(Array.isArray(response.body.game.executables)).toBe(true);
+      expect(response.body.game.executables).toContain('play');
+      
+      // Verify the file was saved as play.sh (not script.sh)
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'play.sh');
+      
+      expect(fs.existsSync(customPath)).toBe(true);
+      
+      // Verify file content
+      const savedContent = fs.readFileSync(customPath);
+      expect(savedContent.toString()).toBe(fileContent.toString());
+    }
+  });
+
+  test('should sanitize label to valid filename', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const fileContent = Buffer.from('#!/bin/bash\necho "Sanitize test"');
+      
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('label', 'my custom label!')
+        .attach('file', fileContent, 'test-script.sh')
+        .expect(200);
+      
+      expect(response.body).toHaveProperty('status', 'success');
+      
+      // Verify the file was saved with sanitized name (invalid chars replaced with _)
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const sanitizedPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my_custom_label_.sh');
+      
+      expect(fs.existsSync(sanitizedPath)).toBe(true);
+      
+      // Verify executables contains sanitized name
+      expect(response.body.game.executables).toContain('my_custom_label_');
+    }
+  });
+
+  test('should use default script name when label is not provided', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const fileContent = Buffer.from('#!/bin/bash\necho "Default name test"');
+      
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .attach('file', fileContent, 'test-script.sh')
+        .expect(200);
+      
+      expect(response.body).toHaveProperty('status', 'success');
+      expect(response.body.game).toHaveProperty('executables');
+      expect(Array.isArray(response.body.game.executables)).toBe(true);
+      expect(response.body.game.executables).toContain('script');
+      
+      // Verify the file was saved as script.sh (default behavior)
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
+      
+      expect(fs.existsSync(scriptPath)).toBe(true);
+      
+      // Verify file content
+      const savedContent = fs.readFileSync(scriptPath);
+      expect(savedContent.toString()).toBe(fileContent.toString());
+    }
+  });
 });
 
 describe('DELETE /games/:gameId', () => {
