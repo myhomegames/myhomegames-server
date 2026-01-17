@@ -403,11 +403,17 @@ app.get("/launcher", requireToken, (req, res) => {
   }
   
   // Construct the full path: {METADATA_PATH}/content/games/{gameId}/{name}.sh or {name}.bat
+  // Sanitize executable name for filesystem (files are saved with sanitized names)
+  const sanitizeExecutableName = (name) => {
+    if (!name || typeof name !== 'string') return '';
+    return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  };
+  const sanitizedExecutableName = sanitizeExecutableName(executableName);
   const gameContentDir = path.join(METADATA_PATH, "content", "games", String(gameId));
   // Try .sh first, then .bat
-  let fullCommandPath = path.join(gameContentDir, `${executableName}.sh`);
+  let fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.sh`);
   if (!fs.existsSync(fullCommandPath)) {
-    fullCommandPath = path.join(gameContentDir, `${executableName}.bat`);
+    fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.bat`);
   }
 
   // Validate that the script file exists
