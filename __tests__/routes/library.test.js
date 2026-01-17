@@ -928,6 +928,154 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(savedContent.toString()).toBe(fileContent.toString());
     }
   });
+
+  test('should preserve executables order from metadata.json', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const metadataPath = path.join(gameContentDir, 'metadata.json');
+      
+      // Create multiple executable files
+      const file1Content = Buffer.from('#!/bin/bash\necho "first"');
+      const file2Content = Buffer.from('#!/bin/bash\necho "second"');
+      const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      
+      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
+      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
+      
+      // Set a specific order in metadata.json (different from alphabetical)
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      metadata.executables = ['third', 'first', 'second'];
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+      
+      // Reload the game to refresh cache
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      
+      // Get the game and verify order is preserved
+      const gameResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      
+      // Verify executables are in the order from metadata.json
+      expect(gameResponse.body).toHaveProperty('executables');
+      expect(gameResponse.body.executables).toEqual(['third', 'first', 'second']);
+      
+      // Clean up
+      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+    }
+  });
+
+  test('should maintain executables order when updating via PUT', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      
+      // Create multiple executable files
+      const file1Content = Buffer.from('#!/bin/bash\necho "first"');
+      const file2Content = Buffer.from('#!/bin/bash\necho "second"');
+      const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      
+      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
+      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
+      
+      // Update executables with a specific order
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ executables: ['second', 'third', 'first'] })
+        .expect(200);
+      
+      // Verify order is preserved in response
+      expect(updateResponse.body.game).toHaveProperty('executables');
+      expect(updateResponse.body.game.executables).toEqual(['second', 'third', 'first']);
+      
+      // Reload the game and verify order is still preserved
+      const gameResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      
+      expect(gameResponse.body.executables).toEqual(['second', 'third', 'first']);
+      
+      // Clean up
+      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+    }
+  });
+
+  test('should maintain existing order when uploading new executable', async () => {
+    // First get a game ID from the library
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const metadataPath = path.join(gameContentDir, 'metadata.json');
+      
+      // Create initial executable files
+      const file1Content = Buffer.from('#!/bin/bash\necho "first"');
+      const file2Content = Buffer.from('#!/bin/bash\necho "second"');
+      
+      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
+      
+      // Set initial order in metadata.json
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      metadata.executables = ['first', 'second'];
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+      
+      // Upload a new executable with label 'third'
+      const newFileContent = Buffer.from('#!/bin/bash\necho "third"');
+      const uploadResponse = await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('label', 'third')
+        .attach('file', newFileContent, 'test-script.sh')
+        .expect(200);
+      
+      // Verify existing order is maintained and new executable is added
+      expect(uploadResponse.body.game).toHaveProperty('executables');
+      expect(uploadResponse.body.game.executables).toEqual(['first', 'second', 'third']);
+      
+      // Clean up
+      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
+      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+    }
+  });
 });
 
 describe('DELETE /games/:gameId', () => {

@@ -81,6 +81,43 @@ function getExecutableNames(metadataPath, gameId) {
   return executableNames;
 }
 
+// Helper function to get executables respecting order from metadata.json
+// If metadata.json has executables, use that order (and verify files exist)
+// Otherwise, read from directory
+function getExecutablesWithOrder(metadataPath, gameId, gameMetadata = null) {
+  // Load game metadata if not provided
+  if (!gameMetadata) {
+    gameMetadata = loadGame(metadataPath, gameId);
+  }
+  
+  // If metadata.json has executables array, use it (respecting order)
+  if (gameMetadata && gameMetadata.executables && Array.isArray(gameMetadata.executables) && gameMetadata.executables.length > 0) {
+    // Verify that all executables in metadata exist as files
+    const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+    const validExecutables = [];
+    
+    for (const execName of gameMetadata.executables) {
+      if (typeof execName !== 'string' || !execName.trim()) continue;
+      
+      // Check if file exists (.sh or .bat)
+      const shPath = path.join(gameContentDir, `${execName}.sh`);
+      const batPath = path.join(gameContentDir, `${execName}.bat`);
+      
+      if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
+        validExecutables.push(execName);
+      }
+    }
+    
+    // If we have valid executables, return them in the order from metadata
+    if (validExecutables.length > 0) {
+      return validExecutables;
+    }
+  }
+  
+  // Fallback: read from directory (for backward compatibility or if metadata is missing)
+  return getExecutableNames(metadataPath, gameId);
+}
+
 // Helper function to delete a game
 function deleteGame(metadataPath, gameId) {
   const gameDir = path.join(metadataPath, "content", "games", String(gameId));
@@ -127,8 +164,8 @@ function loadLibraryGames(metadataPath, allGames) {
     if (game) {
       // Use folder name as ID
       game.id = Number(gameId) || gameId;
-      // Always populate executables from directory files (in case metadata.json is out of sync)
-      const executableNames = getExecutableNames(metadataPath, gameId);
+      // Get executables respecting order from metadata.json
+      const executableNames = getExecutablesWithOrder(metadataPath, gameId, game);
       if (executableNames.length > 0) {
         game.executables = executableNames;
       } else {
@@ -148,12 +185,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
   
   // Endpoint: get library games
   app.get("/libraries/library/games", requireToken, (req, res) => {
-    const libraryGames = loadLibraryGames(metadataPath, allGames);
-    res.json({
-      games: libraryGames.map((g) => {
-        // Always populate executables from directory files (in case metadata.json is out of sync)
-        const executableNames = getExecutableNames(metadataPath, g.id);
-        const executables = executableNames.length > 0 ? executableNames : null;
+      const libraryGames = loadLibraryGames(metadataPath, allGames);
+      res.json({
+        games: libraryGames.map((g) => {
+          // Get executables respecting order from metadata.json
+          const executableNames = getExecutablesWithOrder(metadataPath, g.id, g);
+          const executables = executableNames.length > 0 ? executableNames : null;
         
         const gameData = {
           id: g.id,
@@ -203,8 +240,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       return res.status(404).json({ error: "Game not found" });
     }
     
-    // Always populate executables from directory files (in case metadata.json is out of sync)
-    const executableNames = getExecutableNames(metadataPath, gameId);
+    // Get executables respecting order from metadata.json
+    const executableNames = getExecutablesWithOrder(metadataPath, gameId, game);
     const executables = executableNames.length > 0 ? executableNames : null;
     
     const gameData = {
@@ -410,10 +447,21 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         }
         
         // Update executables in metadata.json with the requested array
-        // But also verify which files actually exist
-        const actualExecutables = getExecutableNames(metadataPath, gameId);
-        // Use intersection: only keep executables that both exist as files and are in the requested array
-        const finalExecutables = requestedExecutables.filter(name => actualExecutables.includes(name));
+        // Verify which files actually exist and maintain the requested order
+        const finalExecutables = [];
+        
+        // Keep executables in the requested order, but only if the file exists
+        for (const execName of requestedExecutables) {
+          if (typeof execName !== 'string' || !execName.trim()) continue;
+          
+          // Check if file exists (.sh or .bat)
+          const shPath = path.join(gameContentDir, `${execName}.sh`);
+          const batPath = path.join(gameContentDir, `${execName}.bat`);
+          
+          if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
+            finalExecutables.push(execName);
+          }
+        }
         
         if (finalExecutables.length > 0) {
           currentGame.executables = finalExecutables;
@@ -430,11 +478,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(allGames[gameId], filteredUpdates);
       }
-      // Sync executables in cache with actual files
+      // Sync executables in cache with metadata (respecting order)
       if (shouldDeleteExecutables || 'executables' in filteredUpdates) {
-        const actualExecutables = getExecutableNames(metadataPath, gameId);
-        if (actualExecutables.length > 0) {
-          allGames[gameId].executables = actualExecutables;
+        const orderedExecutables = getExecutablesWithOrder(metadataPath, gameId, currentGame);
+        if (orderedExecutables.length > 0) {
+          allGames[gameId].executables = orderedExecutables;
         } else {
           delete allGames[gameId].executables;
         }
@@ -935,13 +983,26 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         }
       }
       
-      // Update executables array with names from directory
-      const executableNames = getExecutableNames(metadataPath, gameId);
+      // Update executables array: maintain existing order and add new one if not present
+      const currentGame = loadGame(metadataPath, gameId);
+      let executableNames;
+      
+      if (currentGame && currentGame.executables && Array.isArray(currentGame.executables) && currentGame.executables.length > 0) {
+        // Maintain existing order, add new executable if not already present
+        executableNames = [...currentGame.executables];
+        const newExecutableName = scriptName.replace(/\.(sh|bat)$/, '');
+        if (!executableNames.includes(newExecutableName)) {
+          executableNames.push(newExecutableName);
+        }
+      } else {
+        // No existing order, read from directory
+        executableNames = getExecutableNames(metadataPath, gameId);
+      }
+      
       game.executables = executableNames;
       
       // Update the game in its own metadata.json file
       try {
-        const currentGame = loadGame(metadataPath, gameId);
         if (currentGame) {
           currentGame.id = gameId; // Set id before saving (id is not stored in metadata.json)
           currentGame.executables = executableNames;
