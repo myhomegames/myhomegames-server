@@ -861,6 +861,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       return res.status(400).json({ error: "Only .sh and .bat files are allowed" });
     }
     
+    // Get optional label from body (FormData field)
+    const label = req.body.label ? req.body.label.trim() : null;
+    
     // Validate game exists
     const game = allGames[gameId];
     if (!game) {
@@ -873,8 +876,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       // Ensure parent directories exist (important for macOS filesystem)
       ensureDirectoryExists(gameContentDir);
       
-      // Always rename to script.sh or script.bat based on extension
-      const scriptName = fileExtension === '.bat' ? 'script.bat' : 'script.sh';
+      // Use label if provided, otherwise default to "script"
+      let scriptName;
+      if (label) {
+        // Sanitize label (remove invalid characters for filename)
+        const sanitizedLabel = label.replace(/[^a-zA-Z0-9_-]/g, '_');
+        scriptName = `${sanitizedLabel}${fileExtension}`;
+      } else {
+        // Default behavior: script.sh or script.bat
+        scriptName = fileExtension === '.bat' ? 'script.bat' : 'script.sh';
+      }
       const executablePath = path.join(gameContentDir, scriptName);
       
       // Write file to disk
