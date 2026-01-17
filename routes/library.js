@@ -828,6 +828,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       try {
         const currentGame = loadGame(metadataPath, gameId);
         if (currentGame) {
+          currentGame.id = gameId; // Set id before saving (id is not stored in metadata.json)
           currentGame.command = commandValue;
           saveGame(metadataPath, currentGame);
         }
