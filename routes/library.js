@@ -376,13 +376,47 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         delete currentGame.executables;
       }
       
-      // If executables was updated (but not deleted), sync with actual files in directory
+      // If executables was updated (but not deleted), sync files with the provided array
       if ('executables' in filteredUpdates && !shouldDeleteExecutables) {
-        // Get actual executable names from directory
+        const requestedExecutables = filteredUpdates.executables;
+        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+        
+        if (fs.existsSync(gameContentDir)) {
+          try {
+            // Get all existing executable files
+            const files = fs.readdirSync(gameContentDir);
+            const executableFiles = files.filter(file => {
+              const filePath = path.join(gameContentDir, file);
+              if (!fs.statSync(filePath).isFile()) return false;
+              const ext = path.extname(file).toLowerCase();
+              return ext === '.sh' || ext === '.bat';
+            });
+            
+            // Delete files that are not in the requested executables array
+            for (const file of executableFiles) {
+              const fileNameWithoutExt = path.basename(file, path.extname(file));
+              if (!requestedExecutables.includes(fileNameWithoutExt)) {
+                const filePath = path.join(gameContentDir, file);
+                try {
+                  fs.unlinkSync(filePath);
+                } catch (err) {
+                  console.warn(`Failed to delete executable file ${filePath}:`, err.message);
+                }
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to sync executables for game ${gameId}:`, err.message);
+          }
+        }
+        
+        // Update executables in metadata.json with the requested array
+        // But also verify which files actually exist
         const actualExecutables = getExecutableNames(metadataPath, gameId);
-        // Update executables in metadata.json with actual files
-        if (actualExecutables.length > 0) {
-          currentGame.executables = actualExecutables;
+        // Use intersection: only keep executables that both exist as files and are in the requested array
+        const finalExecutables = requestedExecutables.filter(name => actualExecutables.includes(name));
+        
+        if (finalExecutables.length > 0) {
+          currentGame.executables = finalExecutables;
         } else {
           // If no files exist, remove executables field
           delete currentGame.executables;
