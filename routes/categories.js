@@ -78,26 +78,20 @@ function deleteCategory(metadataPath, categoryTitle) {
     return;
   }
   const categoryDir = getCategoryDir(metadataPath, categoryId);
-  if (fs.existsSync(categoryDir)) {
-    // Delete all files in the directory first
+  const metadataFile = getCategoryMetadataPath(metadataPath, categoryId);
+  
+  // Delete only metadata.json
+  if (fs.existsSync(metadataFile)) {
     try {
-      const files = fs.readdirSync(categoryDir);
-      files.forEach((file) => {
-        const filePath = path.join(categoryDir, file);
-        try {
-          if (fs.statSync(filePath).isFile()) {
-            fs.unlinkSync(filePath);
-          } else if (fs.statSync(filePath).isDirectory()) {
-            fs.rmSync(filePath, { recursive: true, force: true });
-          }
-        } catch (e) {
-          // Ignore errors deleting individual files
-        }
-      });
-    } catch (e) {
-      // If we can't read the directory, try to remove it anyway
+      fs.unlinkSync(metadataFile);
+    } catch (err) {
+      console.error(`Failed to delete metadata.json for category ${categoryTitle}:`, err.message);
+      throw err;
     }
-    // Remove directory only if it's empty
+  }
+  
+  // Remove directory only if it's empty after deleting metadata.json
+  if (fs.existsSync(categoryDir)) {
     removeDirectoryIfEmpty(categoryDir);
   }
 }

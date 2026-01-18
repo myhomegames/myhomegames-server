@@ -34,26 +34,20 @@ function loadCollection(metadataPath, collectionId) {
 // Helper function to delete a collection
 function deleteCollection(metadataPath, collectionId) {
   const collectionDir = path.join(metadataPath, "content", "collections", String(collectionId));
-  if (fs.existsSync(collectionDir)) {
-    // Delete all files in the directory first
+  const metadataFile = getCollectionMetadataPath(metadataPath, collectionId);
+  
+  // Delete only metadata.json
+  if (fs.existsSync(metadataFile)) {
     try {
-      const files = fs.readdirSync(collectionDir);
-      files.forEach((file) => {
-        const filePath = path.join(collectionDir, file);
-        try {
-          if (fs.statSync(filePath).isFile()) {
-            fs.unlinkSync(filePath);
-          } else if (fs.statSync(filePath).isDirectory()) {
-            fs.rmSync(filePath, { recursive: true, force: true });
-          }
-        } catch (e) {
-          // Ignore errors deleting individual files
-        }
-      });
-    } catch (e) {
-      // If we can't read the directory, try to remove it anyway
+      fs.unlinkSync(metadataFile);
+    } catch (err) {
+      console.error(`Failed to delete metadata.json for collection ${collectionId}:`, err.message);
+      throw err;
     }
-    // Remove directory only if it's empty
+  }
+  
+  // Remove directory only if it's empty after deleting metadata.json
+  if (fs.existsSync(collectionDir)) {
     removeDirectoryIfEmpty(collectionDir);
   }
 }

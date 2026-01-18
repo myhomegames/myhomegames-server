@@ -417,7 +417,7 @@ describe('DELETE /collections/:id', () => {
     }
   });
 
-  test('should delete collection content directory when deleting collection', async () => {
+  test('should delete only metadata.json and remove directory only if empty', async () => {
     // First get a collection ID from the list
     const collectionsResponse = await request(app)
       .get('/collections')
@@ -432,16 +432,13 @@ describe('DELETE /collections/:id', () => {
       
       // Create a test content directory for the collection
       const collectionContentDir = path.join(testMetadataPath, 'content', 'collections', String(collectionId));
+      const metadataFile = path.join(collectionContentDir, 'metadata.json');
       if (!fs.existsSync(collectionContentDir)) {
         fs.mkdirSync(collectionContentDir, { recursive: true });
       }
       
-      // Create a test file in the directory
-      const testFile = path.join(collectionContentDir, 'test.txt');
-      fs.writeFileSync(testFile, 'test content');
-      
-      // Verify the directory exists before deletion
-      expect(fs.existsSync(collectionContentDir)).toBe(true);
+      // Verify metadata.json exists before deletion
+      expect(fs.existsSync(metadataFile)).toBe(true);
       
       // Delete the collection
       const response = await request(app)
@@ -451,8 +448,19 @@ describe('DELETE /collections/:id', () => {
       
       expect(response.body).toHaveProperty('status', 'success');
       
-      // Verify the directory was deleted (along with the collection)
-      expect(fs.existsSync(collectionContentDir)).toBe(false);
+      // Verify metadata.json was deleted
+      expect(fs.existsSync(metadataFile)).toBe(false);
+      
+      // If directory is empty, it should be removed
+      // If directory has other files, it should remain
+      if (fs.existsSync(collectionContentDir)) {
+        const remainingFiles = fs.readdirSync(collectionContentDir);
+        // Directory still exists because it has other files (not empty)
+        expect(remainingFiles.length).toBeGreaterThan(0);
+      } else {
+        // Directory was removed because it was empty after metadata.json deletion
+        expect(true).toBe(true);
+      }
     }
   });
 

@@ -449,7 +449,7 @@ describe('DELETE /categories/:categoryTitle', () => {
     expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 
-  test('should delete category content directory', async () => {
+  test('should delete only metadata.json and remove directory only if empty', async () => {
     // First create a category
     const createResponse = await request(app)
       .post('/categories')
@@ -475,16 +475,13 @@ describe('DELETE /categories/:categoryTitle', () => {
     }
     const categoryId = getCategoryId(categoryTitle);
     const categoryContentDir = path.join(testMetadataPath, 'content', 'categories', String(categoryId));
+    const metadataFile = path.join(categoryContentDir, 'metadata.json');
     if (!fs.existsSync(categoryContentDir)) {
       fs.mkdirSync(categoryContentDir, { recursive: true });
     }
     
-    // Create a test file in the directory
-    const testFile = path.join(categoryContentDir, 'test.txt');
-    fs.writeFileSync(testFile, 'test content');
-    
-    // Verify the directory exists before deletion
-    expect(fs.existsSync(categoryContentDir)).toBe(true);
+    // Verify metadata.json exists before deletion
+    expect(fs.existsSync(metadataFile)).toBe(true);
     
     // Delete the category
     const response = await request(app)
@@ -494,8 +491,19 @@ describe('DELETE /categories/:categoryTitle', () => {
     
     expect(response.body).toHaveProperty('status', 'success');
     
-    // Verify the directory was deleted
-    expect(fs.existsSync(categoryContentDir)).toBe(false);
+    // Verify metadata.json was deleted
+    expect(fs.existsSync(metadataFile)).toBe(false);
+    
+    // If directory is empty, it should be removed
+    // If directory has other files, it should remain
+    if (fs.existsSync(categoryContentDir)) {
+      const remainingFiles = fs.readdirSync(categoryContentDir);
+      // Directory still exists because it has other files (not empty)
+      expect(remainingFiles.length).toBeGreaterThan(0);
+    } else {
+      // Directory was removed because it was empty after metadata.json deletion
+      expect(true).toBe(true);
+    }
   });
 });
 

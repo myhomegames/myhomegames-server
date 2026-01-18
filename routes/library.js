@@ -131,26 +131,20 @@ function getExecutablesWithOrder(metadataPath, gameId, gameMetadata = null) {
 // Helper function to delete a game
 function deleteGame(metadataPath, gameId) {
   const gameDir = path.join(metadataPath, "content", "games", String(gameId));
-  if (fs.existsSync(gameDir)) {
-    // Delete all files in the directory first
+  const metadataFile = getGameMetadataPath(metadataPath, gameId);
+  
+  // Delete only metadata.json
+  if (fs.existsSync(metadataFile)) {
     try {
-      const files = fs.readdirSync(gameDir);
-      files.forEach((file) => {
-        const filePath = path.join(gameDir, file);
-        try {
-          if (fs.statSync(filePath).isFile()) {
-            fs.unlinkSync(filePath);
-          } else if (fs.statSync(filePath).isDirectory()) {
-            fs.rmSync(filePath, { recursive: true, force: true });
-          }
-        } catch (e) {
-          // Ignore errors deleting individual files
-        }
-      });
-    } catch (e) {
-      // If we can't read the directory, try to remove it anyway
+      fs.unlinkSync(metadataFile);
+    } catch (err) {
+      console.error(`Failed to delete metadata.json for game ${gameId}:`, err.message);
+      throw err;
     }
-    // Remove directory only if it's empty
+  }
+  
+  // Remove directory only if it's empty after deleting metadata.json
+  if (fs.existsSync(gameDir)) {
     removeDirectoryIfEmpty(gameDir);
   }
 }
