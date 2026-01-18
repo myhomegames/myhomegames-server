@@ -888,8 +888,8 @@ describe('POST /games/:gameId/upload-executable', () => {
       
       expect(fs.existsSync(sanitizedPath)).toBe(true);
       
-      // Verify executables contains sanitized name
-      expect(response.body.game.executables).toContain('my_custom_label_');
+      // Verify executables contains original label (not sanitized) - this is what users see
+      expect(response.body.game.executables).toContain('my custom label!');
     }
   });
 
