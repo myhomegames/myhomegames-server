@@ -331,9 +331,27 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(404).json({ error: "Collection not found" });
     }
 
-    // Update the games array with the new order
+    // Remove duplicate game IDs while preserving order (first occurrence kept)
+    const seen = new Set();
+    const uniqueGameIds = [];
+    for (const gameId of gameIds) {
+      // Normalize gameId for comparison (convert to number if numeric, otherwise keep as string)
+      const normalizedGameId = /^\d+$/.test(String(gameId)) ? Number(gameId) : gameId;
+      if (!seen.has(normalizedGameId)) {
+        seen.add(normalizedGameId);
+        uniqueGameIds.push(normalizedGameId);
+      }
+    }
+    
+    // Log if duplicates were removed
+    if (uniqueGameIds.length !== gameIds.length) {
+      const duplicateCount = gameIds.length - uniqueGameIds.length;
+      console.log(`Removed ${duplicateCount} duplicate game ID(s) from collection ${collectionId}`);
+    }
+
+    // Update the games array with the deduplicated order
     const collection = collectionsCache[collectionIndex];
-    collection.games = gameIds;
+    collection.games = uniqueGameIds;
 
     // Save updated collection
     try {

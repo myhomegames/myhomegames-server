@@ -857,6 +857,119 @@ describe('DELETE /collections/:id/delete-background', () => {
   });
 });
 
+describe('PUT /collections/:id/games/order', () => {
+  test('should remove duplicate game IDs', async () => {
+    // First get some games from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length < 1) {
+      // Need at least 1 game for this test
+      return;
+    }
+    
+    const gameId = gamesResponse.body.games[0].id;
+    
+    // Create a collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Duplicate Removal' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add game with duplicates (same ID multiple times)
+    const gameIdsWithDuplicates = [gameId, gameId, gameId];
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: gameIdsWithDuplicates })
+      .expect(200);
+    
+    // Verify only one game is in the collection
+    const gamesResponseAfter = await request(app)
+      .get(`/collections/${collectionId}/games`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    expect(gamesResponseAfter.body.games.length).toBe(1);
+    expect(gamesResponseAfter.body.games[0].id).toBe(gameId);
+    
+    // Verify gameCount is 1
+    const collectionsResponse = await request(app)
+      .get('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    const collection = collectionsResponse.body.collections.find(c => c.id === collectionId);
+    expect(collection).toBeDefined();
+    expect(collection.gameCount).toBe(1);
+  });
+
+  test('should remove duplicate game IDs while preserving order', async () => {
+    // First get some games from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length < 2) {
+      // Need at least 2 games for this test
+      return;
+    }
+    
+    const gameId1 = gamesResponse.body.games[0].id;
+    const gameId2 = gamesResponse.body.games[1].id;
+    
+    // Create a collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Duplicate Order' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add games with duplicates (gameId1 appears twice, gameId2 appears once)
+    const gameIdsWithDuplicates = [gameId1, gameId2, gameId1];
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: gameIdsWithDuplicates })
+      .expect(200);
+    
+    // Verify games are in the collection with correct order (first occurrence kept)
+    const gamesResponseAfter = await request(app)
+      .get(`/collections/${collectionId}/games`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    expect(gamesResponseAfter.body.games.length).toBe(2);
+    expect(gamesResponseAfter.body.games[0].id).toBe(gameId1);
+    expect(gamesResponseAfter.body.games[1].id).toBe(gameId2);
+  });
+
+  test('should require authentication', async () => {
+    // First create a collection to get a valid ID
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Auth Games Order' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    const response = await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .send({ gameIds: [] })
+      .expect(401);
+    
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+});
+
 describe('GameCount calculation', () => {
   test('should calculate gameCount correctly excluding deleted games', async () => {
     // First get some games from the library
