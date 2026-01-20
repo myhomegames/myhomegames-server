@@ -542,6 +542,32 @@ app.put("/settings", requireToken, (req, res) => {
   }
 });
 
+// Endpoint: redirect to frontend URL (default redirect endpoint)
+// This endpoint allows the browser to accept the server certificate during redirect
+app.get("/", (req, res) => {
+  // Get frontend URL from environment or derive from API_BASE
+  let frontendUrl = process.env.FRONTEND_URL;
+  
+  if (!frontendUrl && API_BASE) {
+    // Try to derive frontend URL from API_BASE (remove port and path)
+    try {
+      const apiUrl = new URL(API_BASE);
+      // Default frontend ports: 5173 (Vite dev), 3000, or same as API port
+      const frontendPort = process.env.FRONTEND_PORT || '5173';
+      frontendUrl = `${apiUrl.protocol}//${apiUrl.hostname}:${frontendPort}`;
+    } catch (e) {
+      // Fallback if URL parsing fails
+      frontendUrl = 'http://localhost:5173';
+    }
+  }
+  
+  if (!frontendUrl) {
+    frontendUrl = 'http://localhost:5173';
+  }
+  
+  res.redirect(frontendUrl);
+});
+
 // Validate required environment variables
 function validateEnvironment() {
   const errors = [];

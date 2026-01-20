@@ -108,12 +108,39 @@ function registerIGDBRoutes(app, requireToken) {
 
       const igdbReq = https.request(options, (igdbRes) => {
         let data = "";
+        
+        // Check for HTTP errors
+        if (igdbRes.statusCode !== 200) {
+          let errorData = "";
+          igdbRes.on("data", (chunk) => {
+            errorData += chunk;
+          });
+          igdbRes.on("end", () => {
+            console.error(`IGDB API error (${igdbRes.statusCode}):`, errorData);
+            res.setHeader('Content-Type', 'application/json');
+            res.status(igdbRes.statusCode || 500).json({ 
+              error: "IGDB API error", 
+              statusCode: igdbRes.statusCode,
+              detail: errorData 
+            });
+          });
+          return;
+        }
+        
         igdbRes.on("data", (chunk) => {
           data += chunk;
         });
         igdbRes.on("end", () => {
           try {
             const games = JSON.parse(data);
+            
+            // Check if IGDB returned an error
+            if (!Array.isArray(games)) {
+              console.error("IGDB returned non-array response:", games);
+              res.setHeader('Content-Type', 'application/json');
+              return res.status(500).json({ error: "Invalid response from IGDB", detail: games });
+            }
+            
             const { formatIGDBReleaseDate } = require("../utils/dateUtils");
             const formattedGames = games.map((game) => {
               const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
@@ -131,6 +158,31 @@ function registerIGDBRoutes(app, requireToken) {
                 userRating: game.rating ? Math.round(game.rating / 10) : null,
               };
             });
+            
+            // Sort games: those with releaseDate first (ascending), then those without date at the end
+            formattedGames.sort((a, b) => {
+              const aHasDate = a.releaseDateFull && a.releaseDateFull.timestamp !== null && a.releaseDateFull.timestamp !== undefined;
+              const bHasDate = b.releaseDateFull && b.releaseDateFull.timestamp !== null && b.releaseDateFull.timestamp !== undefined;
+              
+              // If both have dates, sort by timestamp ascending
+              if (aHasDate && bHasDate) {
+                return a.releaseDateFull.timestamp - b.releaseDateFull.timestamp;
+              }
+              
+              // If only a has date, a comes first
+              if (aHasDate && !bHasDate) {
+                return -1;
+              }
+              
+              // If only b has date, b comes first
+              if (!aHasDate && bHasDate) {
+                return 1;
+              }
+              
+              // If neither has date, maintain original order
+              return 0;
+            });
+            
             res.setHeader('Content-Type', 'application/json');
             res.json({ games: formattedGames });
           } catch (e) {
