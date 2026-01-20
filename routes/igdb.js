@@ -80,6 +80,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "Missing search query" });
     }
 
+    // Get optional year filter
+    const year = req.query.year ? parseInt(req.query.year, 10) : null;
+
     // Get Twitch credentials from headers or query params
     const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
     const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
@@ -92,7 +95,16 @@ function registerIGDBRoutes(app, requireToken) {
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
 
-      const postData = `search "${query}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating; limit 20;`;
+      // Build IGDB query with optional year filter
+      let postData = `search "${query}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating;`;
+      if (year !== null && !isNaN(year)) {
+        // Filter by year: first_release_date is a Unix timestamp in seconds
+        // Calculate timestamp range for the year
+        const yearStart = Math.floor(new Date(year, 0, 1).getTime() / 1000);
+        const yearEnd = Math.floor(new Date(year, 11, 31, 23, 59, 59).getTime() / 1000);
+        postData += ` where first_release_date >= ${yearStart} & first_release_date <= ${yearEnd};`;
+      }
+      postData += ` limit 20;`;
 
       const options = {
         hostname: "api.igdb.com",
