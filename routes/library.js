@@ -3,6 +3,7 @@ const path = require("path");
 const multer = require("multer");
 const { ensureCategoryExists, loadCategories, deleteCategoryIfUnused } = require("./categories");
 const { removeGameFromRecommended } = require("./recommended");
+const { removeGameFromAllCollections } = require("./collections");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
@@ -185,7 +186,7 @@ function loadLibraryGames(metadataPath, allGames) {
 }
 
 
-function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
+function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null) {
   
   // Endpoint: get library games
   app.get("/libraries/library/games", requireToken, (req, res) => {
@@ -1299,6 +1300,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
       
       // Remove game from recommended/metadata.json
       removeGameFromRecommended(metadataPath, gameId);
+      
+      // Remove game from all collections
+      removeGameFromAllCollections(metadataPath, gameId, updateCollectionsCache);
       
       // Remove from in-memory cache
       delete allGames[gameId];

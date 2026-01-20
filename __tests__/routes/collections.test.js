@@ -1103,3 +1103,244 @@ describe('GameCount calculation', () => {
     expect(gamesResponseAfter.body.games.length).toBe(0);
   });
 });
+
+describe('removeGameFromAllCollections and createCacheUpdater', () => {
+  test('should remove game from collections and update cache via callback', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Get a real game ID from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length === 0) {
+      return; // Skip test if no games available
+    }
+    
+    const testGameId = gamesResponse.body.games[0].id;
+    
+    // Create a test collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for Cache Update' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add the game to the collection via API
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [testGameId] })
+      .expect(200);
+    
+    // Load collection metadata to get the actual structure
+    const collectionMetadataPath = path.join(testMetadataPath, 'content', 'collections', String(collectionId), 'metadata.json');
+    const collectionMetadata = JSON.parse(fs.readFileSync(collectionMetadataPath, 'utf8'));
+    
+    // Verify game is in collection before removal
+    expect(collectionMetadata.games).toContain(testGameId);
+    
+    // Ensure the collection ID matches (normalize to same type)
+    collectionMetadata.id = collectionId;
+    
+    // Create a mock cache with a copy of the collection
+    const mockCache = [JSON.parse(JSON.stringify(collectionMetadata))];
+    
+    // Verify the collection is in the cache before removal
+    expect(mockCache.length).toBe(1);
+    expect(mockCache[0].games).toContain(testGameId);
+    
+    // Create cache updater
+    const updateCache = collectionsRoutes.createCacheUpdater(mockCache);
+    
+    // Remove game from collections with callback
+    const updatedCount = collectionsRoutes.removeGameFromAllCollections(
+      testMetadataPath,
+      testGameId,
+      updateCache
+    );
+    
+    // Verify game was removed from collection
+    expect(updatedCount).toBe(1);
+    
+    // Verify cache was updated (game should be removed from cache)
+    const updatedCollection = mockCache.find(c => {
+      // Handle both number and string IDs
+      const cacheId = typeof c.id === 'number' ? c.id : Number(c.id);
+      const targetId = typeof collectionId === 'number' ? collectionId : Number(collectionId);
+      return !isNaN(cacheId) && !isNaN(targetId) && cacheId === targetId;
+    });
+    expect(updatedCollection).toBeDefined();
+    expect(updatedCollection.games).not.toContain(testGameId);
+    
+    // Verify file was updated
+    const updatedMetadata = JSON.parse(fs.readFileSync(collectionMetadataPath, 'utf8'));
+    expect(updatedMetadata.games).not.toContain(testGameId);
+  });
+
+  test('should handle multiple collections with same game', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Get a real game ID from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length === 0) {
+      return; // Skip test if no games available
+    }
+    
+    const testGameId = gamesResponse.body.games[0].id;
+    
+    // Create two test collections
+    const createResponse1 = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection 1 for Multi' })
+      .expect(200);
+    
+    const createResponse2 = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection 2 for Multi' })
+      .expect(200);
+    
+    const collectionId1 = createResponse1.body.collection.id;
+    const collectionId2 = createResponse2.body.collection.id;
+    
+    // Add the game to both collections via API
+    await request(app)
+      .put(`/collections/${collectionId1}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [testGameId] })
+      .expect(200);
+    
+    await request(app)
+      .put(`/collections/${collectionId2}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [testGameId] })
+      .expect(200);
+    
+    // Load collection metadata to get the actual structure
+    const collectionMetadataPath1 = path.join(testMetadataPath, 'content', 'collections', String(collectionId1), 'metadata.json');
+    const collectionMetadataPath2 = path.join(testMetadataPath, 'content', 'collections', String(collectionId2), 'metadata.json');
+    
+    const collectionMetadata1 = JSON.parse(fs.readFileSync(collectionMetadataPath1, 'utf8'));
+    const collectionMetadata2 = JSON.parse(fs.readFileSync(collectionMetadataPath2, 'utf8'));
+    
+    // Verify games are in collections before removal
+    expect(collectionMetadata1.games).toContain(testGameId);
+    expect(collectionMetadata2.games).toContain(testGameId);
+    
+    // Ensure the collection IDs match (normalize to same type)
+    collectionMetadata1.id = collectionId1;
+    collectionMetadata2.id = collectionId2;
+    
+    // Create a mock cache with copies of the collections
+    const mockCache = [
+      JSON.parse(JSON.stringify(collectionMetadata1)),
+      JSON.parse(JSON.stringify(collectionMetadata2))
+    ];
+    
+    // Verify the collections are in the cache before removal
+    expect(mockCache.length).toBe(2);
+    expect(mockCache[0].games).toContain(testGameId);
+    expect(mockCache[1].games).toContain(testGameId);
+    
+    // Create cache updater
+    const updateCache = collectionsRoutes.createCacheUpdater(mockCache);
+    
+    // Remove game from collections with callback
+    const updatedCount = collectionsRoutes.removeGameFromAllCollections(
+      testMetadataPath,
+      testGameId,
+      updateCache
+    );
+    
+    // Verify game was removed from both collections
+    expect(updatedCount).toBe(2);
+    
+    // Verify cache was updated for both collections
+    const updatedCollection1 = mockCache.find(c => {
+      const cacheId = typeof c.id === 'number' ? c.id : Number(c.id);
+      const targetId = typeof collectionId1 === 'number' ? collectionId1 : Number(collectionId1);
+      return !isNaN(cacheId) && !isNaN(targetId) && cacheId === targetId;
+    });
+    const updatedCollection2 = mockCache.find(c => {
+      const cacheId = typeof c.id === 'number' ? c.id : Number(c.id);
+      const targetId = typeof collectionId2 === 'number' ? collectionId2 : Number(collectionId2);
+      return !isNaN(cacheId) && !isNaN(targetId) && cacheId === targetId;
+    });
+    
+    expect(updatedCollection1).toBeDefined();
+    expect(updatedCollection2).toBeDefined();
+    expect(updatedCollection1.games).not.toContain(testGameId);
+    expect(updatedCollection2.games).not.toContain(testGameId);
+    
+    // Verify files were updated
+    const updatedMetadata1 = JSON.parse(fs.readFileSync(collectionMetadataPath1, 'utf8'));
+    const updatedMetadata2 = JSON.parse(fs.readFileSync(collectionMetadataPath2, 'utf8'));
+    
+    expect(updatedMetadata1.games).not.toContain(testGameId);
+    expect(updatedMetadata2.games).not.toContain(testGameId);
+  });
+
+  test('should work without callback (backward compatibility)', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Get a real game ID from the library
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    
+    if (gamesResponse.body.games.length === 0) {
+      return; // Skip test if no games available
+    }
+    
+    const testGameId = gamesResponse.body.games[0].id;
+    
+    // Create a test collection
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection No Callback' })
+      .expect(200);
+    
+    const collectionId = createResponse.body.collection.id;
+    
+    // Add the game to the collection via API
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [testGameId] })
+      .expect(200);
+    
+    // Remove game from collections without callback
+    const updatedCount = collectionsRoutes.removeGameFromAllCollections(
+      testMetadataPath,
+      testGameId
+    );
+    
+    // Verify game was removed from collection
+    expect(updatedCount).toBe(1);
+    
+    // Verify file was updated
+    const collectionMetadataPath = path.join(testMetadataPath, 'content', 'collections', String(collectionId), 'metadata.json');
+    const updatedMetadata = JSON.parse(fs.readFileSync(collectionMetadataPath, 'utf8'));
+    expect(updatedMetadata.games).not.toContain(testGameId);
+  });
+});

@@ -283,7 +283,6 @@ setTimeout(() => {
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
-libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames);
 recommendedRoutes.registerRecommendedRoutes(app, requireToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, requireToken);
@@ -294,6 +293,8 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   METADATA_PATH,
   allGames
 );
+const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
+libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {

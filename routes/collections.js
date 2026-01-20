@@ -82,6 +82,69 @@ function loadCollections(metadataPath) {
   return collections;
 }
 
+// Helper function to remove a game from all collections
+function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null) {
+  try {
+    const collections = loadCollections(metadataPath);
+    const updatedCollections = [];
+    let updatedCount = 0;
+    
+    for (const collection of collections) {
+      if (collection.games && Array.isArray(collection.games)) {
+        // Check if gameId is in the collection's games array
+        const gameIndex = collection.games.findIndex(id => {
+          // Handle both number and string IDs
+          const collectionGameId = typeof id === 'number' ? id : Number(id);
+          const targetGameId = typeof gameId === 'number' ? gameId : Number(gameId);
+          return !isNaN(collectionGameId) && !isNaN(targetGameId) && collectionGameId === targetGameId;
+        });
+        
+        if (gameIndex !== -1) {
+          // Remove gameId from the array
+          collection.games.splice(gameIndex, 1);
+          // Save updated collection
+          saveCollection(metadataPath, collection);
+          updatedCollections.push(collection);
+          updatedCount++;
+        }
+      }
+    }
+    
+    if (updatedCount > 0) {
+      console.log(`Removed game ${gameId} from ${updatedCount} collection(s)`);
+      
+      // Update cache only for modified collections if callback provided
+      if (updateCacheCallback && typeof updateCacheCallback === 'function') {
+        updateCacheCallback(updatedCollections);
+      }
+    }
+    
+    return updatedCount;
+  } catch (error) {
+    console.error(`Failed to remove game ${gameId} from collections:`, error);
+    return 0;
+  }
+}
+
+// Helper function to create cache updater
+function createCacheUpdater(collectionsCache) {
+  return (updatedCollections) => {
+    for (const updatedCollection of updatedCollections) {
+      // Find and update the collection in cache
+      const cacheIndex = collectionsCache.findIndex(c => {
+        if (typeof c.id === 'number' && typeof updatedCollection.id === 'number') {
+          return c.id === updatedCollection.id;
+        }
+        return String(c.id) === String(updatedCollection.id);
+      });
+      
+      if (cacheIndex !== -1) {
+        collectionsCache[cacheIndex] = updatedCollection;
+      }
+    }
+  };
+}
+
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
 
@@ -802,5 +865,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
 module.exports = {
   loadCollections,
   registerCollectionsRoutes,
+  removeGameFromAllCollections,
+  createCacheUpdater,
 };
 
