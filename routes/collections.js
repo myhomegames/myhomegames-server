@@ -145,6 +145,107 @@ function createCacheUpdater(collectionsCache) {
   };
 }
 
+// Helper function to compare two games by a specific field
+function compareGamesByField(gameA, gameB, field = 'releaseDate', ascending = true) {
+  let compareResult = 0;
+
+  switch (field) {
+    case 'releaseDate':
+      // Games not found or without release date go to the end
+      if (!gameA || (!gameA.year && !gameA.month && !gameA.day)) return 1;
+      if (!gameB || (!gameB.year && !gameB.month && !gameB.day)) return -1;
+
+      // Compare by year
+      if (gameA.year !== gameB.year) {
+        compareResult = (gameA.year || 0) - (gameB.year || 0);
+      } else if (gameA.month !== gameB.month) {
+        // If years are equal, compare by month
+        compareResult = (gameA.month || 0) - (gameB.month || 0);
+      } else {
+        // If months are equal, compare by day
+        compareResult = (gameA.day || 0) - (gameB.day || 0);
+      }
+      break;
+    case 'year':
+      const yearA = gameA?.year ?? 0;
+      const yearB = gameB?.year ?? 0;
+      if (yearA === 0 && yearB === 0) compareResult = 0;
+      else if (yearA === 0) compareResult = 1;
+      else if (yearB === 0) compareResult = -1;
+      else compareResult = yearA - yearB;
+      break;
+    case 'title':
+      const titleA = (gameA?.title || '').toLowerCase();
+      const titleB = (gameB?.title || '').toLowerCase();
+      compareResult = titleA.localeCompare(titleB);
+      break;
+    case 'stars':
+      const starsA = gameA?.stars ?? 0;
+      const starsB = gameB?.stars ?? 0;
+      compareResult = starsA - starsB;
+      break;
+    case 'criticRating':
+      const criticA = gameA?.criticratings ?? 0;
+      const criticB = gameB?.criticratings ?? 0;
+      compareResult = criticA - criticB;
+      break;
+    case 'userRating':
+      const userA = gameA?.userratings ?? 0;
+      const userB = gameB?.userratings ?? 0;
+      compareResult = userA - userB;
+      break;
+    default:
+      compareResult = 0;
+  }
+
+  return ascending ? compareResult : -compareResult;
+}
+
+// Helper function to sort game IDs by a specific field
+function sortGameIdsByField(gameIds, allGames, field = 'releaseDate', ascending = true) {
+  return [...gameIds].sort((idA, idB) => {
+    const gameA = allGames[idA];
+    const gameB = allGames[idB];
+    return compareGamesByField(gameA, gameB, field, ascending);
+  });
+}
+
+// Helper function to insert a game ID into an array at the correct position based on release date
+// Finds the first element with release date greater than the new game and inserts before it
+function insertGameIdInSortedPosition(gameIds, newGameId, allGames) {
+  // Check if game already exists
+  const normalizedNewId = /^\d+$/.test(String(newGameId)) ? Number(newGameId) : newGameId;
+  const exists = gameIds.some(id => {
+    const normalizedId = /^\d+$/.test(String(id)) ? Number(id) : id;
+    return normalizedId === normalizedNewId;
+  });
+  
+  if (exists) {
+    return gameIds; // Game already exists, return original array
+  }
+
+  const newGame = allGames[newGameId];
+  if (!newGame) {
+    // Game not found in allGames, append to end
+    return [...gameIds, newGameId];
+  }
+
+  // Find the first element with release date greater than the new game
+  for (let i = 0; i < gameIds.length; i++) {
+    const existingGame = allGames[gameIds[i]];
+    if (existingGame && compareGamesByField(newGame, existingGame, 'releaseDate', true) < 0) {
+      // Insert before this element
+      const result = [...gameIds];
+      result.splice(i, 0, newGameId);
+      return result;
+    }
+  }
+
+  // No element found with greater release date, append to end
+  return [...gameIds, newGameId];
+}
+
+
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
 
@@ -412,9 +513,38 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       console.log(`Removed ${duplicateCount} duplicate game ID(s) from collection ${collectionId}`);
     }
 
-    // Update the games array with the deduplicated order
+    // Get the current games in the collection (before update)
     const collection = collectionsCache[collectionIndex];
-    collection.games = uniqueGameIds;
+    const currentGameIds = collection.games || [];
+    
+    // Check if this is likely an addition (one new game added) vs a reorder
+    const isAddition = uniqueGameIds.length === currentGameIds.length + 1;
+    
+    let finalGameIds;
+    if (isAddition) {
+      // Find the new game and insert it in the correct position
+      const newGameId = uniqueGameIds.find(id => {
+        const normalizedId = /^\d+$/.test(String(id)) ? Number(id) : id;
+        return !currentGameIds.some(currentId => {
+          const normalizedCurrentId = /^\d+$/.test(String(currentId)) ? Number(currentId) : currentId;
+          return normalizedCurrentId === normalizedId;
+        });
+      });
+      
+      if (newGameId) {
+        // Insert the new game in the correct position
+        finalGameIds = insertGameIdInSortedPosition(currentGameIds, newGameId, allGames);
+      } else {
+        // Fallback: full sort if we can't identify the new game
+        finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
+      }
+    } else {
+      // Full reorder: sort all games by release date
+      finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
+    }
+
+    // Update the games array
+    collection.games = finalGameIds;
 
     // Save updated collection
     try {
