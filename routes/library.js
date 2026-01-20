@@ -1086,7 +1086,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
 
   // Endpoint: add game from IGDB to library
   app.post("/games/add-from-igdb", requireToken, async (req, res) => {
-    const { igdbId, name, summary, cover, background, releaseDate, genres, criticRating, userRating, themes, platforms, gameModes, playerPerspectives, websites, ageRatings, developers, publishers, franchise, collection, screenshots, videos, gameEngines, keywords, alternativeNames, similarGames } = req.body;
+    const { igdbId, name, summary, cover, background, releaseDate, genres, criticRating, userRating, stars, themes, platforms, gameModes, playerPerspectives, websites, ageRatings, developers, publishers, franchise, collection, screenshots, videos, gameEngines, keywords, alternativeNames, similarGames } = req.body;
     
     if (!igdbId || !name) {
       return res.status(400).json({ error: "Missing required fields: igdbId and name" });
@@ -1197,6 +1197,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames) {
         genre: validGenres && validGenres.length > 0 ? validGenres : null,
         criticratings: criticRating !== undefined && criticRating !== null ? criticRating / 10 : null, // Convert from 0-100 to 0-10
         userratings: userRating !== undefined && userRating !== null ? userRating / 10 : null, // Convert from 0-100 to 0-10
+        stars: stars !== undefined && stars !== null ? stars : null, // From myRating GOG Galaxy (already converted from 0-5 to 0-10 scale)
         themes: validThemes,
         platforms: validPlatforms,
         gameModes: validGameModes,
