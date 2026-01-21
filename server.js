@@ -276,9 +276,7 @@ setTimeout(() => {
   
   // Load games in background
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
-  // Recommended games are now just IDs pointing to games already in allGames
-  // Ensure recommended/metadata.json has all sections and is populated
-  recommendedRoutes.ensureRecommendedSectionsComplete(METADATA_PATH);
+  // Recommended sections are created/updated only when games are created
 }, 100); // Small delay to ensure server starts listening first
 
 // Register routes
@@ -294,7 +292,7 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   allGames
 );
 const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
-libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache);
+libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache, recommendedRoutes.ensureRecommendedSectionsComplete);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {

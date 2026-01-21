@@ -186,7 +186,7 @@ function loadLibraryGames(metadataPath, allGames) {
 }
 
 
-function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null) {
+function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null, updateRecommendedSections = null) {
   
   // Endpoint: get library games
   app.get("/libraries/library/games", requireToken, (req, res) => {
@@ -1237,6 +1237,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       // Add to allGames cache
       allGames[gameId] = newGame;
+
+      // Update recommended sections if callback provided
+      if (updateRecommendedSections && typeof updateRecommendedSections === 'function') {
+        updateRecommendedSections(metadataPath);
+      }
 
       // Return the new game data
       const gameData = {

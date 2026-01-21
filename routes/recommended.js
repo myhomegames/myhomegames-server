@@ -66,17 +66,11 @@ function populateRecommendedSections(sections, games) {
     return sections; // Return sections as-is if no games available
   }
 
-  const gameIds = games.map(g => g.id).filter(id => id != null);
-  if (gameIds.length === 0) {
-    return sections;
-  }
-
-  // Helper to get games by genre, sorted by criticratings (descending)
-  const getGamesByGenre = (genre) => {
+  // Helper to get games by keyword, sorted by criticratings (descending)
+  const getGamesByKeyword = (keyword) => {
     return games.filter(g => {
-      if (!g.genre) return false;
-      const genres = Array.isArray(g.genre) ? g.genre : [g.genre];
-      return genres.some(g => String(g).toLowerCase().includes(String(genre).toLowerCase()));
+      if (!g.keywords || !Array.isArray(g.keywords) || g.keywords.length === 0) return false;
+      return g.keywords.some(k => String(k).toLowerCase() === String(keyword).toLowerCase());
     })
     .sort((a, b) => {
       // Sort by criticratings descending (higher ratings first)
@@ -88,116 +82,12 @@ function populateRecommendedSections(sections, games) {
     .map(g => g.id);
   };
 
-  // Helper to get games by year range
-  const getGamesByYearRange = (minYear, maxYear) => {
-    return games.filter(g => g.year && g.year >= minYear && g.year <= maxYear).map(g => g.id);
-  };
-
-  // Helper to get games by stars
-  const getGamesByStars = (minStars) => {
-    return games.filter(g => g.stars && g.stars >= minStars).map(g => g.id);
-  };
-
-  // Helper to get games with low user ratings (underrated)
-  const getGamesByLowUserRatings = (maxRating) => {
-    return games.filter(g => g.userratings && g.userratings <= maxRating).map(g => g.id);
-  };
-
-  // Helper to get random games
-  const getRandomGames = (count) => {
-    const shuffled = [...gameIds].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, Math.min(count, shuffled.length));
-  };
-
-  // Populate sections based on their title (formatted title like categories)
+  // Populate sections based on keywords
   return sections.map(section => {
-    let sectionGames = [];
-    
-    // Use formatted title directly for switch
     const sectionTitle = section.title || section.id;
     
-    switch (sectionTitle) {
-      case "Oldest":
-        sectionGames = games.sort((a, b) => (a.year || 9999) - (b.year || 9999)).slice(0, 10).map(g => g.id);
-        break;
-      case "Classics":
-        sectionGames = getGamesByYearRange(1980, 2000).slice(0, 10);
-        break;
-      case "Most Played":
-        sectionGames = getRandomGames(10);
-        break;
-      case "Recently Installed":
-        sectionGames = getRandomGames(10);
-        break;
-      case "Best Western":
-        sectionGames = getGamesByGenre("western").slice(0, 10);
-        break;
-      case "Indie Gems":
-        sectionGames = getGamesByGenre("indie").slice(0, 10);
-        break;
-      case "Action Games":
-        sectionGames = getGamesByGenre("action").slice(0, 10);
-        break;
-      case "RPG Games":
-        sectionGames = getGamesByGenre("rpg").slice(0, 10);
-        break;
-      case "Strategy Games":
-        sectionGames = getGamesByGenre("strategy").slice(0, 10);
-        break;
-      case "Puzzle Games":
-        sectionGames = getGamesByGenre("puzzle").slice(0, 10);
-        break;
-      case "Sports Games":
-        sectionGames = getGamesByGenre("sport").slice(0, 10);
-        break;
-      case "Racing Games":
-        sectionGames = getGamesByGenre("racing").slice(0, 10);
-        break;
-      case "Horror Games":
-        sectionGames = getGamesByGenre("horror").slice(0, 10);
-        break;
-      case "Fantasy Games":
-        sectionGames = getGamesByGenre("fantasy").slice(0, 10);
-        break;
-      case "Sci-Fi Games":
-        sectionGames = getGamesByGenre("sci-fi").slice(0, 10);
-        break;
-      case "Historical Games":
-        sectionGames = getGamesByGenre("historical").slice(0, 10);
-        break;
-      case "Multiplayer Games":
-        sectionGames = getGamesByGenre("multiplayer").slice(0, 10);
-        break;
-      case "Single Player Games":
-        sectionGames = getRandomGames(10);
-        break;
-      case "Top Rated":
-        sectionGames = getGamesByStars(8).slice(0, 10);
-        break;
-      case "New Releases":
-        const currentYear = new Date().getFullYear();
-        sectionGames = getGamesByYearRange(currentYear - 2, currentYear).slice(0, 10);
-        break;
-      case "Modern Games":
-        sectionGames = getGamesByYearRange(2010, new Date().getFullYear()).slice(0, 10);
-        break;
-      case "Retro Games":
-        sectionGames = getGamesByYearRange(1980, 1999).slice(0, 10);
-        break;
-      case "Underrated Games":
-        // Get games with low user ratings (underrated) - userratings <= 5
-        sectionGames = getGamesByLowUserRatings(5).slice(0, 10);
-        break;
-      default:
-        // For other categories, use random games
-        sectionGames = getRandomGames(5);
-        break;
-    }
-
-    // If no games found for this category, use random games
-    if (sectionGames.length === 0) {
-      sectionGames = getRandomGames(5);
-    }
+    // Get games by keyword
+    const sectionGames = getGamesByKeyword(sectionTitle).slice(0, 10);
 
     return {
       ...section,
@@ -214,8 +104,39 @@ function ensureRecommendedSectionsComplete(metadataPath) {
   // Load existing sections from filesystem
   const existingSections = loadRecommendedSections(metadataPath);
   
-  // Populate games for each existing section
-  const populatedSections = populateRecommendedSections(existingSections, games);
+  // Collect all unique keywords from all games
+  const keywordMap = new Map(); // keyword -> count of games
+  games.forEach(game => {
+    if (game.keywords && Array.isArray(game.keywords) && game.keywords.length > 0) {
+      game.keywords.forEach(keyword => {
+        if (keyword && typeof keyword === 'string' && keyword.trim()) {
+          const normalizedKeyword = keyword.trim();
+          const count = keywordMap.get(normalizedKeyword) || 0;
+          keywordMap.set(normalizedKeyword, count + 1);
+        }
+      });
+    }
+  });
+
+  // Create sections for keywords that appear in at least 2 games
+  const keywordSections = Array.from(keywordMap.entries())
+    .filter(([keyword, count]) => count >= 2)
+    .map(([keyword]) => {
+      const sectionId = getRecommendedSectionId(keyword);
+      return {
+        id: String(sectionId),
+        title: keyword,
+        games: [] // Will be populated later
+      };
+    });
+
+  // Combine existing sections with keyword sections (avoid duplicates)
+  const existingTitles = new Set(existingSections.map(s => s.title?.toLowerCase()));
+  const newKeywordSections = keywordSections.filter(s => !existingTitles.has(s.title?.toLowerCase()));
+  const allSections = [...existingSections, ...newKeywordSections];
+  
+  // Populate games for each section
+  const populatedSections = populateRecommendedSections(allSections, games);
   
   // Save/update each section with populated games
   populatedSections.forEach((section) => {
