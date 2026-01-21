@@ -142,8 +142,7 @@ function ensureRecommendedSectionsComplete(metadataPath) {
   populatedSections.forEach((section) => {
     saveSection(metadataPath, section);
   });
-  
-  console.log(`Ensured ${populatedSections.length} recommended sections are complete`);
+
 }
 
 // Helper function to get section directory path using numeric ID
