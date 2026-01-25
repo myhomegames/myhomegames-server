@@ -114,6 +114,11 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("./utils/
 const libraryRoutes = require("./routes/library");
 const recommendedRoutes = require("./routes/recommended");
 const categoriesRoutes = require("./routes/categories");
+const themesRoutes = require("./routes/themes");
+const platformsRoutes = require("./routes/platforms");
+const gameEnginesRoutes = require("./routes/gameengines");
+const gameModesRoutes = require("./routes/gamemodes");
+const playerPerspectivesRoutes = require("./routes/playerperspectives");
 const collectionsRoutes = require("./routes/collections");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
@@ -147,6 +152,11 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "games"),
     path.join(METADATA_PATH, "content", "collections"),
     path.join(METADATA_PATH, "content", "categories"),
+    path.join(METADATA_PATH, "content", "themes"),
+    path.join(METADATA_PATH, "content", "platforms"),
+    path.join(METADATA_PATH, "content", "game-engines"),
+    path.join(METADATA_PATH, "content", "game-modes"),
+    path.join(METADATA_PATH, "content", "player-perspectives"),
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "certs"),
   ];
@@ -232,7 +242,10 @@ if (process.env.NODE_ENV === 'test') {
 // Create settings.json with default settings if it doesn't exist (quick check)
 if (!fs.existsSync(SETTINGS_FILE)) {
   try {
-    const defaultSettings = { language: "en" };
+    const defaultSettings = {
+      language: "en",
+      visibleLibraries: ["recommended", "library", "collections", "categories"],
+    };
     writeSettings(defaultSettings);
   } catch (error) {
     // Continue if settings creation fails
@@ -293,6 +306,11 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
 );
 const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
 libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache, recommendedRoutes.ensureRecommendedSectionsComplete);
+themesRoutes.registerThemesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+gameModesRoutes.registerGameModesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {
@@ -482,13 +500,23 @@ app.post("/reload-games", requireToken, (req, res) => {
   const collectionsCache = collectionsHandler.reload();
   const recommendedSections = recommendedRoutes.loadRecommendedSections(METADATA_PATH);
   const categories = categoriesRoutes.loadCategories(METADATA_PATH);
+  const themes = themesRoutes.loadThemes(METADATA_PATH);
+  const platforms = platformsRoutes.loadPlatforms(METADATA_PATH);
+  const gameEngines = gameEnginesRoutes.loadGameEngines(METADATA_PATH);
+  const gameModes = gameModesRoutes.loadGameModes(METADATA_PATH);
+  const playerPerspectives = playerPerspectivesRoutes.loadPlayerPerspectives(METADATA_PATH);
   const totalCount = Object.keys(allGames).length;
   res.json({ 
     status: "reloaded", 
     count: totalCount, 
     collections: collectionsCache.length,
     recommended: recommendedSections.length,
-    categories: categories.length
+    categories: categories.length,
+    themes: themes.length,
+    platforms: platforms.length,
+    gameEngines: gameEngines.length,
+    gameModes: gameModes.length,
+    playerPerspectives: playerPerspectives.length
   });
 });
 
@@ -496,6 +524,7 @@ app.post("/reload-games", requireToken, (req, res) => {
 function readSettings() {
   const defaultSettings = {
     language: "en",
+    visibleLibraries: ["recommended", "library", "collections", "categories"],
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object

@@ -1,11 +1,20 @@
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
-const { ensureCategoryExists, loadCategories, deleteCategoryIfUnused } = require("./categories");
+const { ensureCategoryExists, deleteCategoryIfUnused } = require("./categories");
+const { ensureThemeExists, deleteThemeIfUnused } = require("./themes");
+const { ensurePlatformExists, deletePlatformIfUnused } = require("./platforms");
+const { ensureGameEngineExists, deleteGameEngineIfUnused } = require("./gameengines");
+const { ensureGameModeExists, deleteGameModeIfUnused } = require("./gamemodes");
+const {
+  ensurePlayerPerspectiveExists,
+  deletePlayerPerspectiveIfUnused,
+} = require("./playerperspectives");
 const { removeGameFromRecommended } = require("./recommended");
 const { removeGameFromAllCollections } = require("./collections");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+
 
 /**
  * Library routes module
@@ -319,7 +328,21 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'year', 'month', 'day', 'stars', 'genre', 'executables'];
+    const allowedFields = [
+      "title",
+      "summary",
+      "year",
+      "month",
+      "day",
+      "stars",
+      "genre",
+      "themes",
+      "platforms",
+      "gameEngines",
+      "gameModes",
+      "playerPerspectives",
+      "executables",
+    ];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -341,6 +364,67 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (genre && typeof genre === "string") {
           ensureCategoryExists(metadataPath, genre);
         }
+      }
+    }
+
+    if ("themes" in filteredUpdates && filteredUpdates.themes) {
+      const themes = Array.isArray(filteredUpdates.themes)
+        ? filteredUpdates.themes
+        : [filteredUpdates.themes];
+      const validThemes = themes.filter(
+        (theme) => theme && typeof theme === "string" && theme.trim()
+      );
+      for (const theme of validThemes) {
+        ensureThemeExists(metadataPath, theme);
+      }
+    }
+
+    if ("platforms" in filteredUpdates && filteredUpdates.platforms) {
+      const platforms = Array.isArray(filteredUpdates.platforms)
+        ? filteredUpdates.platforms
+        : [filteredUpdates.platforms];
+      const validPlatforms = platforms.filter(
+        (platform) => platform && typeof platform === "string" && platform.trim()
+      );
+      for (const platform of validPlatforms) {
+        ensurePlatformExists(metadataPath, platform);
+      }
+    }
+
+    if ("gameEngines" in filteredUpdates && filteredUpdates.gameEngines) {
+      const gameEngines = Array.isArray(filteredUpdates.gameEngines)
+        ? filteredUpdates.gameEngines
+        : [filteredUpdates.gameEngines];
+      const validGameEngines = gameEngines.filter(
+        (engine) => engine && typeof engine === "string" && engine.trim()
+      );
+      for (const engine of validGameEngines) {
+        ensureGameEngineExists(metadataPath, engine);
+      }
+    }
+
+    if ("gameModes" in filteredUpdates && filteredUpdates.gameModes) {
+      const gameModes = Array.isArray(filteredUpdates.gameModes)
+        ? filteredUpdates.gameModes
+        : [filteredUpdates.gameModes];
+      const validGameModes = gameModes.filter(
+        (mode) => mode && typeof mode === "string" && mode.trim()
+      );
+      for (const mode of validGameModes) {
+        ensureGameModeExists(metadataPath, mode);
+      }
+    }
+
+    if ("playerPerspectives" in filteredUpdates && filteredUpdates.playerPerspectives) {
+      const playerPerspectives = Array.isArray(filteredUpdates.playerPerspectives)
+        ? filteredUpdates.playerPerspectives
+        : [filteredUpdates.playerPerspectives];
+      const validPlayerPerspectives = playerPerspectives.filter(
+        (perspective) =>
+          perspective && typeof perspective === "string" && perspective.trim()
+      );
+      for (const perspective of validPlayerPerspectives) {
+        ensurePlayerPerspectiveExists(metadataPath, perspective);
       }
     }
     
@@ -1232,6 +1316,36 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         }
       }
 
+      if (validThemes && validThemes.length > 0) {
+        for (const theme of validThemes) {
+          ensureThemeExists(metadataPath, theme);
+        }
+      }
+
+      if (validPlatforms && validPlatforms.length > 0) {
+        for (const platform of validPlatforms) {
+          ensurePlatformExists(metadataPath, platform);
+        }
+      }
+
+      if (validGameEngines && validGameEngines.length > 0) {
+        for (const engine of validGameEngines) {
+          ensureGameEngineExists(metadataPath, engine);
+        }
+      }
+
+      if (validGameModes && validGameModes.length > 0) {
+        for (const mode of validGameModes) {
+          ensureGameModeExists(metadataPath, mode);
+        }
+      }
+
+      if (validPlayerPerspectives && validPlayerPerspectives.length > 0) {
+        for (const perspective of validPlayerPerspectives) {
+          ensurePlayerPerspectiveExists(metadataPath, perspective);
+        }
+      }
+
       // Save game to its own folder
       saveGame(metadataPath, newGame);
 
@@ -1297,8 +1411,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
     
     try {
-      // Get game genres before deletion (to check for orphaned categories)
+      // Get game tags before deletion (to check for orphaned entries)
       const gameGenres = game.genre ? (Array.isArray(game.genre) ? game.genre : [game.genre]) : [];
+      const gameThemes = game.themes ? (Array.isArray(game.themes) ? game.themes : [game.themes]) : [];
+      const gamePlatforms = game.platforms ? (Array.isArray(game.platforms) ? game.platforms : [game.platforms]) : [];
+      const gameEngines = game.gameEngines ? (Array.isArray(game.gameEngines) ? game.gameEngines : [game.gameEngines]) : [];
+      const gameModes = game.gameModes ? (Array.isArray(game.gameModes) ? game.gameModes : [game.gameModes]) : [];
+      const gamePerspectives = game.playerPerspectives
+        ? (Array.isArray(game.playerPerspectives) ? game.playerPerspectives : [game.playerPerspectives])
+        : [];
       
       // Delete game folder and its metadata.json
       deleteGame(metadataPath, gameId);
@@ -1314,39 +1435,26 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       // Note: Game content directory (cover, background, etc.) is also deleted with the folder
       
-      // Check for orphaned categories and delete them
-      if (gameGenres.length > 0) {
-        // Load all remaining games for checking category usage
+      const tagSetsToClean = [
+        { values: gameGenres, deleteFn: deleteCategoryIfUnused },
+        { values: gameThemes, deleteFn: deleteThemeIfUnused },
+        { values: gamePlatforms, deleteFn: deletePlatformIfUnused },
+        { values: gameEngines, deleteFn: deleteGameEngineIfUnused },
+        { values: gameModes, deleteFn: deleteGameModeIfUnused },
+        { values: gamePerspectives, deleteFn: deletePlayerPerspectiveIfUnused },
+      ];
+
+      if (tagSetsToClean.some((set) => set.values.length > 0)) {
         const remainingGames = loadLibraryGames(metadataPath, {});
         const remainingGamesMap = {};
         remainingGames.forEach((g) => {
           remainingGamesMap[g.id] = g;
         });
-        
-        // Get all categories (array of {id, title} objects)
-        const allCategories = loadCategories(metadataPath);
-        
-        // For each genre of the deleted game, check if the corresponding category is orphaned
-        for (const genre of gameGenres) {
-          if (!genre || typeof genre !== "string") continue;
-          
-          // Check if category exists (case-insensitive match)
-          const categoryExists = allCategories.some(cat => cat.title.toLowerCase() === genre.toLowerCase());
-          if (categoryExists) {
-            // Check if category is still used by any remaining game (case-insensitive match)
-            const genreLower = genre.toLowerCase();
-            const isStillUsed = Object.values(remainingGamesMap).some((remainingGame) => {
-              if (!remainingGame.genre) return false;
-              if (Array.isArray(remainingGame.genre)) {
-                return remainingGame.genre.some(g => String(g).toLowerCase() === genreLower);
-              }
-              return String(remainingGame.genre).toLowerCase() === genreLower;
-            });
-            
-            // If category is not used by any remaining game, delete it
-            if (!isStillUsed) {
-              deleteCategoryIfUnused(metadataPath, metadataPath, genre, remainingGamesMap);
-            }
+
+        for (const { values, deleteFn } of tagSetsToClean) {
+          for (const value of values) {
+            if (!value || typeof value !== "string") continue;
+            deleteFn(metadataPath, metadataPath, value, remainingGamesMap);
           }
         }
       }

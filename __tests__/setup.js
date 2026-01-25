@@ -18,6 +18,11 @@ fs.mkdirSync(path.join(testMetadataPath, 'content'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'library'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'collections'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'categories'), { recursive: true });
+fs.mkdirSync(path.join(testMetadataPath, 'content', 'themes'), { recursive: true });
+fs.mkdirSync(path.join(testMetadataPath, 'content', 'platforms'), { recursive: true });
+fs.mkdirSync(path.join(testMetadataPath, 'content', 'game-engines'), { recursive: true });
+fs.mkdirSync(path.join(testMetadataPath, 'content', 'game-modes'), { recursive: true });
+fs.mkdirSync(path.join(testMetadataPath, 'content', 'player-perspectives'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'recommended'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'games'), { recursive: true });
 

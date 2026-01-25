@@ -16,15 +16,24 @@ function getLocalMediaPath({ metadataPath, resourceId, resourceType, mediaType, 
   let normalizedId;
   let contentDir;
   
-  if (resourceType === 'games') {
+  const tagResourceTypes = new Set([
+    "categories",
+    "themes",
+    "platforms",
+    "game-engines",
+    "game-modes",
+    "player-perspectives",
+  ]);
+
+  if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
-  } else if (resourceType === 'collections') {
+  } else if (resourceType === "collections") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "collections", normalizedId);
-  } else if (resourceType === 'categories') {
+  } else if (tagResourceTypes.has(resourceType)) {
     normalizedId = String(resourceId);
-    contentDir = path.join(metadataPath, "content", "categories", normalizedId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else {
     return null;
   }
@@ -33,16 +42,6 @@ function getLocalMediaPath({ metadataPath, resourceId, resourceType, mediaType, 
   const filePath = path.join(contentDir, fileName);
   
   if (fs.existsSync(filePath)) {
-    // For categories, we need to use the category title instead of ID in the URL
-    if (resourceType === 'categories') {
-      // We need to find the category title from the ID
-      // This is a bit tricky since we only have the ID here
-      // For now, we'll use the ID and let the endpoint handle the title lookup
-      // Actually, for categories, the urlPrefix should include the title, not the ID
-      // But we don't have the title here, so we'll return the path with ID
-      // The endpoint will need to handle the conversion
-      return `${urlPrefix}/${encodeURIComponent(resourceId)}`;
-    }
     return `${urlPrefix}/${encodeURIComponent(resourceId)}`;
   }
   
@@ -155,15 +154,24 @@ function deleteMediaFile({ metadataPath, resourceId, resourceType, mediaType }) 
   let normalizedId;
   let contentDir;
   
-  if (resourceType === 'games') {
+  const tagResourceTypes = new Set([
+    "categories",
+    "themes",
+    "platforms",
+    "game-engines",
+    "game-modes",
+    "player-perspectives",
+  ]);
+
+  if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
-  } else if (resourceType === 'collections') {
+  } else if (resourceType === "collections") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "collections", normalizedId);
-  } else if (resourceType === 'categories') {
+  } else if (tagResourceTypes.has(resourceType)) {
     normalizedId = String(resourceId);
-    contentDir = path.join(metadataPath, "content", "categories", normalizedId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else {
     throw new Error(`Invalid resourceType: ${resourceType}`);
   }

@@ -242,6 +242,16 @@ describe('POST /reload-games', () => {
     expect(typeof response.body.recommended).toBe('number');
     expect(response.body).toHaveProperty('categories');
     expect(typeof response.body.categories).toBe('number');
+    expect(response.body).toHaveProperty('themes');
+    expect(typeof response.body.themes).toBe('number');
+    expect(response.body).toHaveProperty('platforms');
+    expect(typeof response.body.platforms).toBe('number');
+    expect(response.body).toHaveProperty('gameEngines');
+    expect(typeof response.body.gameEngines).toBe('number');
+    expect(response.body).toHaveProperty('gameModes');
+    expect(typeof response.body.gameModes).toBe('number');
+    expect(response.body).toHaveProperty('playerPerspectives');
+    expect(typeof response.body.playerPerspectives).toBe('number');
   });
 
   test('should require authentication', async () => {
