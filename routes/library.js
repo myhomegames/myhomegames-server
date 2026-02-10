@@ -235,6 +235,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           keywords: g.keywords || null,
           alternativeNames: g.alternativeNames || null,
           similarGames: g.similarGames || null,
+          showTitle: g.showTitle,
         };
         const backgroundUrl = getBackgroundUrl(g, metadataPath);
         if (backgroundUrl) {
@@ -287,6 +288,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       keywords: game.keywords || null,
       alternativeNames: game.alternativeNames || null,
       similarGames: game.similarGames || null,
+      showTitle: game.showTitle,
     };
     const backgroundUrl = getBackgroundUrl(game, metadataPath);
     if (backgroundUrl) {
@@ -342,6 +344,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "gameModes",
       "playerPerspectives",
       "executables",
+      "showTitle",
     ];
     
     // Filter updates to only include allowed fields
@@ -618,6 +621,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: updatedGame.keywords || null,
         alternativeNames: updatedGame.alternativeNames || null,
         similarGames: updatedGame.similarGames || null,
+        showTitle: updatedGame.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(updatedGame, metadataPath);
       if (backgroundUrl) {
@@ -675,6 +679,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: game.keywords || null,
         alternativeNames: game.alternativeNames || null,
         similarGames: game.similarGames || null,
+        showTitle: game.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(game, metadataPath);
       if (backgroundUrl) {
@@ -751,6 +756,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: game.keywords || null,
         alternativeNames: game.alternativeNames || null,
         similarGames: game.similarGames || null,
+        showTitle: game.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(game, metadataPath);
       if (backgroundUrl) {
@@ -827,6 +833,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: game.keywords || null,
         alternativeNames: game.alternativeNames || null,
         similarGames: game.similarGames || null,
+        showTitle: game.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(game, metadataPath);
       if (backgroundUrl) {
@@ -918,6 +925,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: game.keywords || null,
         alternativeNames: game.alternativeNames || null,
         similarGames: game.similarGames || null,
+        showTitle: game.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(game, metadataPath);
       if (backgroundUrl) {
@@ -1009,6 +1017,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: game.keywords || null,
         alternativeNames: game.alternativeNames || null,
         similarGames: game.similarGames || null,
+        showTitle: game.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(game, metadataPath);
       if (backgroundUrl) {
@@ -1301,6 +1310,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         similarGames: validSimilarGames,
         igdbCover: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
         igdbBackground: background && typeof background === "string" && background.trim() ? background.trim() : null,
+        showTitle: true,
       };
 
       // Note: Game content directory is not created during game creation.
@@ -1387,6 +1397,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: newGame.keywords || null,
         alternativeNames: newGame.alternativeNames || null,
         similarGames: newGame.similarGames || null,
+        showTitle: newGame.showTitle,
       };
       const backgroundUrl = getBackgroundUrl(newGame, metadataPath);
       if (backgroundUrl) {

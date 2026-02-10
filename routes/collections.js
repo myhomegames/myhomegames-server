@@ -265,6 +265,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           id: c.id,
           title: c.title,
           summary: c.summary || "",
+          showTitle: c.showTitle,
           gameCount: actualGameCount,
         };
         // Check if cover exists locally
@@ -325,6 +326,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       id: collectionId,
       title: trimmedTitle,
       summary: (summary && typeof summary === "string") ? summary.trim() : "",
+      showTitle: true,
       games: [],
     };
 
@@ -343,6 +345,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: newCollection.id,
         title: newCollection.title,
         summary: newCollection.summary || "",
+        showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
       };
@@ -385,6 +388,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       id: collection.id,
       title: collection.title,
       summary: collection.summary || "",
+      showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
     };
     const localCover = getLocalMediaPath({
@@ -575,7 +579,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary'];
+    const allowedFields = ['title', 'summary', 'showTitle'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -600,6 +604,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
       };
@@ -712,6 +717,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
       };
@@ -777,6 +783,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
       };
@@ -832,6 +839,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
           resourceId: collection.id,
@@ -893,6 +901,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
           resourceId: collection.id,
@@ -949,6 +958,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
         gameCount: (collection.games || []).length,
       };

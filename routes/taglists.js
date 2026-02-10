@@ -69,7 +69,9 @@ function createTagRoutes(config) {
         const tagData = {
           id: tagId,
           title: metadata.title,
+          showTitle: metadata.showTitle,
         };
+        // Same pattern as library (games): local file or fallback. Library fallback = IGDB; tags fallback = this URL (redirects to FRONTEND_URL)
         const coverPath = path.join(tagsDir, folderName, "cover.webp");
         if (fs.existsSync(coverPath)) {
           tagData.cover = `/${coverPrefix}/${encodeURIComponent(metadata.title)}`;
@@ -102,7 +104,7 @@ function createTagRoutes(config) {
     const tagDir = getTagDir(metadataPath, tagId);
     ensureDirectoryExists(tagDir);
     const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
-    const metadata = { title: tagTitle };
+    const metadata = { title: tagTitle, showTitle: true };
     writeJsonFile(metadataFilePath, metadata);
   }
 
@@ -114,6 +116,17 @@ function createTagRoutes(config) {
     const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
     const metadata = readJsonFile(metadataFilePath, null);
     return metadata && metadata.title ? metadata.title : null;
+  }
+
+  function updateTagMetadata(metadataPath, tagId, updates) {
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = readJsonFile(metadataFilePath, null);
+    if (!metadata || !metadata.title) {
+      return null;
+    }
+    const updated = { ...metadata, ...updates };
+    writeJsonFile(metadataFilePath, updated);
+    return updated;
   }
 
   function deleteTag(metadataPath, tagTitle) {
@@ -222,6 +235,9 @@ function createTagRoutes(config) {
           if (tag.cover) {
             tagData.cover = tag.cover;
           }
+          if (tag.showTitle !== undefined) {
+            tagData.showTitle = tag.showTitle;
+          }
           return tagData;
         }),
       });
@@ -256,6 +272,51 @@ function createTagRoutes(config) {
       res.json({
         [responseKey]: tagTitle,
       });
+    });
+
+    app.put(`${normalizedRouteBase}/:tagTitle`, requireToken, (req, res) => {
+      const tagTitle = decodeURIComponent(req.params.tagTitle);
+      const tagId = findTagIdByTitle(metadataPath, tagTitle);
+
+      if (!tagId) {
+        return res.status(404).json({ error: `${humanName} not found` });
+      }
+
+      const updates = {};
+      if (typeof req.body.showTitle === "boolean") {
+        updates.showTitle = req.body.showTitle;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No valid fields to update" });
+      }
+
+      try {
+        const metadata = updateTagMetadata(metadataPath, tagId, updates);
+        if (!metadata) {
+          return res.status(404).json({ error: `${humanName} not found` });
+        }
+
+        const tag = loadTags(metadataPath).find((t) => t.id === tagId);
+        const tagData = {
+          id: tagId,
+          title: metadata.title,
+        };
+        if (metadata.showTitle !== undefined) {
+          tagData.showTitle = metadata.showTitle;
+        }
+        if (tag && tag.cover) {
+          tagData.cover = tag.cover;
+        }
+
+        res.json({
+          status: "success",
+          [responseKey]: tagData,
+        });
+      } catch (err) {
+        console.error(`Failed to update ${humanName.toLowerCase()} ${tagTitle}:`, err.message);
+        res.status(500).json({ error: `Failed to update ${humanName.toLowerCase()}` });
+      }
     });
 
     app.delete(`${normalizedRouteBase}/:tagTitle`, requireToken, (req, res) => {
