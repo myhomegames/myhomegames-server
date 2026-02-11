@@ -97,10 +97,13 @@ function populateRecommendedSections(sections, games) {
 }
 
 // Ensure recommended sections are complete (populate games for existing sections)
-function ensureRecommendedSectionsComplete(metadataPath) {
-  // Load games from library
-  const games = loadLibraryGamesForRecommended(metadataPath);
-  
+// optionalGames: when provided (object id -> game), use it instead of loading from disk
+function ensureRecommendedSectionsComplete(metadataPath, optionalGames) {
+  const games =
+    optionalGames && typeof optionalGames === "object" && !Array.isArray(optionalGames)
+      ? Object.values(optionalGames)
+      : loadLibraryGamesForRecommended(metadataPath);
+
   // Load existing sections from filesystem
   const existingSections = loadRecommendedSections(metadataPath);
   

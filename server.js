@@ -305,7 +305,7 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   allGames
 );
 const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
-libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache, recommendedRoutes.ensureRecommendedSectionsComplete);
+libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache, recommendedRoutes.ensureRecommendedSectionsComplete, collectionsHandler.getCache);
 themesRoutes.registerThemesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);

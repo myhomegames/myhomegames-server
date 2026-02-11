@@ -14,6 +14,7 @@ const routes = createTagRoutes({
 module.exports = {
   loadGameEngines: routes.loadTags,
   ensureGameEngineExists: routes.ensureTagExists,
+  ensureGameEnginesExistBatch: routes.ensureTagsExist,
   deleteGameEngineIfUnused: routes.deleteTagIfUnused,
   registerGameEnginesRoutes: routes.registerTagRoutes,
 };

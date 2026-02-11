@@ -13,6 +13,7 @@ const routes = createTagRoutes({
 module.exports = {
   loadCategories: routes.loadTags,
   ensureCategoryExists: routes.ensureTagExists,
+  ensureCategoriesExistBatch: routes.ensureTagsExist,
   deleteCategoryIfUnused: routes.deleteTagIfUnused,
   registerCategoriesRoutes: routes.registerTagRoutes,
 };

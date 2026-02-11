@@ -13,6 +13,7 @@ const routes = createTagRoutes({
 module.exports = {
   loadPlatforms: routes.loadTags,
   ensurePlatformExists: routes.ensureTagExists,
+  ensurePlatformsExistBatch: routes.ensureTagsExist,
   deletePlatformIfUnused: routes.deleteTagIfUnused,
   registerPlatformsRoutes: routes.registerTagRoutes,
 };

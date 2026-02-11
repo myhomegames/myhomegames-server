@@ -14,6 +14,7 @@ const routes = createTagRoutes({
 module.exports = {
   loadPlayerPerspectives: routes.loadTags,
   ensurePlayerPerspectiveExists: routes.ensureTagExists,
+  ensurePlayerPerspectivesExistBatch: routes.ensureTagsExist,
   deletePlayerPerspectiveIfUnused: routes.deleteTagIfUnused,
   registerPlayerPerspectivesRoutes: routes.registerTagRoutes,
 };

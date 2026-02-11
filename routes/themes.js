@@ -13,6 +13,7 @@ const routes = createTagRoutes({
 module.exports = {
   loadThemes: routes.loadTags,
   ensureThemeExists: routes.ensureTagExists,
+  ensureThemesExistBatch: routes.ensureTagsExist,
   deleteThemeIfUnused: routes.deleteTagIfUnused,
   registerThemesRoutes: routes.registerTagRoutes,
 };

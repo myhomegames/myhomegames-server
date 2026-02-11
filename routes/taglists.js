@@ -174,6 +174,26 @@ function createTagRoutes(config) {
     }
   }
 
+  /** Ensure multiple tags exist with a single load; only writes new tags. */
+  function ensureTagsExist(metadataPath, tagTitles) {
+    if (!tagTitles || !Array.isArray(tagTitles) || tagTitles.length === 0) {
+      return;
+    }
+    const tags = loadTags(metadataPath);
+    const existingLower = new Set(tags.map((t) => (t.title || "").toLowerCase()));
+    for (const raw of tagTitles) {
+      if (!raw || typeof raw !== "string" || !raw.trim()) continue;
+      const trimmed = raw.trim();
+      if (existingLower.has(trimmed.toLowerCase())) continue;
+      try {
+        saveTag(metadataPath, trimmed);
+        existingLower.add(trimmed.toLowerCase());
+      } catch (e) {
+        console.error(`Failed to save ${humanName} ${trimmed}:`, e.message);
+      }
+    }
+  }
+
   function registerTagRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
     const upload = multer({ storage: multer.memoryStorage() });
 
@@ -459,6 +479,7 @@ function createTagRoutes(config) {
     loadTags,
     loadTag,
     ensureTagExists,
+    ensureTagsExist,
     deleteTagIfUnused,
     registerTagRoutes,
   };

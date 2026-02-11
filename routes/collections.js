@@ -83,9 +83,11 @@ function loadCollections(metadataPath) {
 }
 
 // Helper function to remove a game from all collections
-function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null) {
+// collectionsCache: optional in-memory array; when provided, use it instead of loading from disk
+function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null, collectionsCache = null) {
   try {
-    const collections = loadCollections(metadataPath);
+    const collections =
+      collectionsCache && Array.isArray(collectionsCache) ? collectionsCache : loadCollections(metadataPath);
     const updatedCollections = [];
     let updatedCount = 0;
     
