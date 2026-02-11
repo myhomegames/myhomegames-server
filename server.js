@@ -120,6 +120,8 @@ const gameEnginesRoutes = require("./routes/gameengines");
 const gameModesRoutes = require("./routes/gamemodes");
 const playerPerspectivesRoutes = require("./routes/playerperspectives");
 const collectionsRoutes = require("./routes/collections");
+const developersRoutes = require("./routes/developers");
+const publishersRoutes = require("./routes/publishers");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
 
@@ -157,6 +159,8 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "game-engines"),
     path.join(METADATA_PATH, "content", "game-modes"),
     path.join(METADATA_PATH, "content", "player-perspectives"),
+    path.join(METADATA_PATH, "content", "developers"),
+    path.join(METADATA_PATH, "content", "publishers"),
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "certs"),
   ];
@@ -304,8 +308,32 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   METADATA_PATH,
   allGames
 );
+const developersHandler = developersRoutes.registerDevelopersRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  METADATA_PATH,
+  allGames
+);
+const publishersHandler = publishersRoutes.registerPublishersRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  METADATA_PATH,
+  allGames
+);
 const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
-libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames, updateCollectionsCache, recommendedRoutes.ensureRecommendedSectionsComplete, collectionsHandler.getCache);
+libraryRoutes.registerLibraryRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  allGames,
+  updateCollectionsCache,
+  recommendedRoutes.ensureRecommendedSectionsComplete,
+  collectionsHandler.getCache,
+  developersHandler.getCache,
+  publishersHandler.getCache
+);
 themesRoutes.registerThemesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
@@ -498,6 +526,8 @@ app.post("/reload-games", requireToken, (req, res) => {
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
   // Recommended games are now just IDs pointing to games already in allGames
   const collectionsCache = collectionsHandler.reload();
+  developersHandler.reload();
+  publishersHandler.reload();
   const recommendedSections = recommendedRoutes.loadRecommendedSections(METADATA_PATH);
   const categories = categoriesRoutes.loadCategories(METADATA_PATH);
   const themes = themesRoutes.loadThemes(METADATA_PATH);
@@ -510,6 +540,8 @@ app.post("/reload-games", requireToken, (req, res) => {
     status: "reloaded", 
     count: totalCount, 
     collections: collectionsCache.length,
+    developers: developersHandler.getCache().length,
+    publishers: publishersHandler.getCache().length,
     recommended: recommendedSections.length,
     categories: categories.length,
     themes: themes.length,

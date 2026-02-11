@@ -269,7 +269,7 @@ function registerIGDBRoutes(app, requireToken) {
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
 
-      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name; where id = ${igdbId};`;
+      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name; where id = ${igdbId};`;
 
       const options = {
         hostname: "api.igdb.com",
@@ -373,12 +373,26 @@ function registerIGDBRoutes(app, requireToken) {
               }
             }
 
-            // Process involved companies
+            // Process involved companies – return { id, name } for developers/publishers (IGDB company.id)
             const developers = game.involved_companies
-              ? game.involved_companies.filter((ic) => ic.developer).map((ic) => ic.company?.name || '').filter(Boolean)
+              ? game.involved_companies
+                  .filter((ic) => ic.developer)
+                  .map((ic) => {
+                    const c = ic.company;
+                    if (!c || !c.id || !c.name) return null;
+                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
+                  })
+                  .filter(Boolean)
               : [];
             const publishers = game.involved_companies
-              ? game.involved_companies.filter((ic) => ic.publisher).map((ic) => ic.company?.name || '').filter(Boolean)
+              ? game.involved_companies
+                  .filter((ic) => ic.publisher)
+                  .map((ic) => {
+                    const c = ic.company;
+                    if (!c || !c.id || !c.name) return null;
+                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
+                  })
+                  .filter(Boolean)
               : [];
 
             // Process screenshots
@@ -413,8 +427,8 @@ function registerIGDBRoutes(app, requireToken) {
               playerPerspectives: game.player_perspectives ? game.player_perspectives.map((p) => p.name || p).filter(Boolean) : [],
               websites: game.websites ? game.websites.map((w) => ({ url: w.url, category: w.category })).filter((w) => w.url) : [],
               ageRatings: ageRatings.length > 0 ? ageRatings : undefined,
-              developers: developers.length > 0 ? developers : undefined,
-              publishers: publishers.length > 0 ? publishers : undefined,
+              developers: developers.length > 0 ? developers.map((d) => ({ id: d.id, name: d.name, logo: d.logo, description: d.description })) : undefined,
+              publishers: publishers.length > 0 ? publishers.map((p) => ({ id: p.id, name: p.name, logo: p.logo, description: p.description })) : undefined,
               franchise: (game.franchises || []).map((f) => ({ id: f.id, name: f.name || "" })).filter((f) => f.name),
               collection: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
               series: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),

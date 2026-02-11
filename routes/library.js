@@ -12,6 +12,8 @@ const {
 } = require("./playerperspectives");
 const { removeGameFromRecommended } = require("./recommended");
 const { removeGameFromAllCollections } = require("./collections");
+const { ensureDevelopersExistBatch, removeGameFromAllDevelopers, removeGameFromDeveloper } = require("./developers");
+const { ensurePublishersExistBatch, removeGameFromAllPublishers, removeGameFromPublisher } = require("./publishers");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
@@ -202,7 +204,7 @@ function loadLibraryGames(metadataPath, allGames) {
 }
 
 
-function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null, updateRecommendedSections = null, getCollectionsCache = null) {
+function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null, updateRecommendedSections = null, getCollectionsCache = null, getDevelopersCache = null, getPublishersCache = null) {
   
   // Endpoint: get existing game IDs (lightweight, for importer to exclude from IGDB search)
   app.get("/games/ids", requireToken, (req, res) => {
@@ -370,6 +372,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "gameEngines",
       "gameModes",
       "playerPerspectives",
+      "developers",
+      "publishers",
       "executables",
       "showTitle",
     ];
@@ -412,6 +416,32 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const playerPerspectives = Array.isArray(filteredUpdates.playerPerspectives) ? filteredUpdates.playerPerspectives : [filteredUpdates.playerPerspectives];
       const validPlayerPerspectives = playerPerspectives.filter((p) => p && typeof p === "string" && p.trim());
       if (validPlayerPerspectives.length > 0) ensurePlayerPerspectivesExistBatch(metadataPath, validPlayerPerspectives);
+    }
+    // Developers and publishers: [{ id, name }] – remove from old, add to new
+    const validateDevPubArray = (arr) => {
+      if (!arr || !Array.isArray(arr)) return null;
+      const filtered = arr.filter((item) => item && typeof item === "object" && item.id != null && item.name);
+      return filtered.map((x) => ({ id: Number(x.id), name: String(x.name).trim() })).filter((x) => !isNaN(x.id) && x.name);
+    };
+    if ("developers" in filteredUpdates) {
+      const newDevs = validateDevPubArray(filteredUpdates.developers) || [];
+      const oldDevs = game.developers || [];
+      const oldIds = new Set(oldDevs.map((d) => Number(typeof d === "object" ? d.id : d)));
+      const newIds = new Set(newDevs.map((d) => d.id));
+      for (const oldId of oldIds) {
+        if (!newIds.has(oldId)) removeGameFromDeveloper(metadataPath, oldId, gameId);
+      }
+      if (newDevs.length > 0) ensureDevelopersExistBatch(metadataPath, newDevs, gameId);
+    }
+    if ("publishers" in filteredUpdates) {
+      const newPubs = validateDevPubArray(filteredUpdates.publishers) || [];
+      const oldPubs = game.publishers || [];
+      const oldIds = new Set(oldPubs.map((p) => Number(typeof p === "object" ? p.id : p)));
+      const newIds = new Set(newPubs.map((p) => p.id));
+      for (const oldId of oldIds) {
+        if (!newIds.has(oldId)) removeGameFromPublisher(metadataPath, oldId, gameId);
+      }
+      if (newPubs.length > 0) ensurePublishersExistBatch(metadataPath, newPubs, gameId);
     }
 
     // Track if we need to delete executables (when executables is null)
@@ -1262,8 +1292,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       let validPlayerPerspectives = validateStringArray(playerPerspectives);
       let validWebsites = validateObjectArray(websites);
       let validAgeRatings = validateObjectArray(ageRatings);
-      let validDevelopers = validateStringArray(developers);
-      let validPublishers = validateStringArray(publishers);
+      // Developers and publishers: [{ id, name, logo?, description? }] from IGDB
+      const validateDeveloperPublisherArray = (arr) => {
+        if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
+        const filtered = arr.filter((item) => item && typeof item === "object" && item.id != null && item.name);
+        return filtered.map((x) => ({ id: Number(x.id), name: String(x.name).trim(), logo: x.logo || null, description: x.description || "" })).filter((x) => !isNaN(x.id) && x.name);
+      };
+      const rawDevelopers = validateDeveloperPublisherArray(developers);
+      const rawPublishers = validateDeveloperPublisherArray(publishers);
+      let validDevelopers = rawDevelopers ? rawDevelopers.map((d) => ({ id: d.id, name: d.name })) : null;
+      let validPublishers = rawPublishers ? rawPublishers.map((p) => ({ id: p.id, name: p.name })) : null;
       let validVideos = validateStringArray(videos);
       let validGameEngines = validateStringArray(gameEngines);
       let validKeywords = validateStringArray(keywords);
@@ -1332,6 +1370,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       if (validGameEngines && validGameEngines.length > 0) ensureGameEnginesExistBatch(metadataPath, validGameEngines);
       if (validGameModes && validGameModes.length > 0) ensureGameModesExistBatch(metadataPath, validGameModes);
       if (validPlayerPerspectives && validPlayerPerspectives.length > 0) ensurePlayerPerspectivesExistBatch(metadataPath, validPlayerPerspectives);
+      if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
+      if (rawPublishers && rawPublishers.length > 0) ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
 
       // Save game to its own folder
       saveGame(metadataPath, newGame);
@@ -1419,6 +1459,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       // Remove game from all collections (use in-memory cache when available)
       const collectionsCache = getCollectionsCache && typeof getCollectionsCache === "function" ? getCollectionsCache() : null;
       removeGameFromAllCollections(metadataPath, gameId, updateCollectionsCache, collectionsCache);
+      // Remove game from all developers and publishers
+      const developersCache = getDevelopersCache && typeof getDevelopersCache === "function" ? getDevelopersCache() : null;
+      const publishersCache = getPublishersCache && typeof getPublishersCache === "function" ? getPublishersCache() : null;
+      removeGameFromAllDevelopers(metadataPath, gameId, null, developersCache);
+      removeGameFromAllPublishers(metadataPath, gameId, null, publishersCache);
       
       // Remove from in-memory cache
       delete allGames[gameId];
