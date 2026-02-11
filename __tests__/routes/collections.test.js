@@ -161,6 +161,89 @@ describe('GET /collections/:id', () => {
   });
 });
 
+describe('POST /collections', () => {
+  test('should create collection with correct structure', async () => {
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Collection for POST' })
+      .expect(200);
+
+    expect(createResponse.body).toHaveProperty('status', 'success');
+    expect(createResponse.body).toHaveProperty('collection');
+    const collection = createResponse.body.collection;
+    expect(collection).toHaveProperty('id');
+    expect(typeof collection.id).toBe('number');
+    expect(collection).toHaveProperty('title', 'Test Collection for POST');
+    expect(collection).toHaveProperty('gameCount', 0);
+    expect(collection.cover).toContain('/collection-covers/');
+  });
+
+  test('should return 409 when collection with same title exists', async () => {
+    const title = 'Test Collection Duplicate Title';
+    await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title })
+      .expect(200);
+
+    const duplicateResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title })
+      .expect(409);
+
+    expect(duplicateResponse.body).toHaveProperty('error', 'Collection with this title already exists');
+    expect(duplicateResponse.body).toHaveProperty('collection');
+    expect(duplicateResponse.body.collection).toHaveProperty('title', title);
+  });
+
+  test('should assign deterministic ID from title hash', async () => {
+    const title = 'DeterministicHashTestCollection123';
+    const createResponse1 = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title })
+      .expect(200);
+
+    const collectionId1 = createResponse1.body.collection.id;
+    expect(typeof collectionId1).toBe('number');
+
+    await request(app)
+      .delete(`/collections/${collectionId1}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    const createResponse2 = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title })
+      .expect(200);
+
+    const collectionId2 = createResponse2.body.collection.id;
+    expect(collectionId2).toBe(collectionId1);
+  });
+
+  test('should require authentication', async () => {
+    const response = await request(app)
+      .post('/collections')
+      .send({ title: 'Test Collection' })
+      .expect(401);
+
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+
+  test('should return 400 when title is missing', async () => {
+    const response = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({})
+      .expect(400);
+
+    expect(response.body).toHaveProperty('error', 'Title is required');
+  });
+});
+
 describe('GET /collections/:id/games', () => {
   test('should return games for a valid collection', async () => {
     // First create a collection to get a valid ID

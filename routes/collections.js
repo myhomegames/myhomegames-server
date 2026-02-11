@@ -9,6 +9,18 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmp
  * Handles collections endpoints
  */
 
+// Generate numeric collection ID from title hash (deterministic, same title = same ID)
+function getCollectionIdFromTitle(title) {
+  let hash = 0;
+  const str = String(title).toLowerCase().trim();
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
 // Helper function to get collection metadata file path
 function getCollectionMetadataPath(metadataPath, collectionId) {
   return path.join(metadataPath, "content", "collections", String(collectionId), "metadata.json");
@@ -320,8 +332,12 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       });
     }
 
-    // Generate numeric collection ID (timestamp-based for uniqueness)
-    const collectionId = Date.now();
+    // Generate numeric collection ID from title hash (deterministic, same title = same ID)
+    // On rare hash collision, increment until we get an ID not already used
+    let collectionId = getCollectionIdFromTitle(trimmedTitle);
+    while (collectionsCache.some((c) => c.id === collectionId)) {
+      collectionId++;
+    }
     
     // Create new collection
     const newCollection = {
