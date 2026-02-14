@@ -182,6 +182,18 @@ This will:
 3. Create a GitHub release with the changelog
 4. Attach the `.pkg` installer as a release asset
 
+### Build prerequisites
+
+The full build (`npm run build`) produces packages for multiple platforms. Requirements:
+
+- **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper). The script builds both x64 and arm64 `.pkg` installers.
+- **Linux (.tar.gz):** No extra tools; Node and npm only.
+- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
+- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
+- **Windows (.zip):** No extra tools; Node and npm only.
+
+Temporary build files (including RPM working directory) are created under `build/` and removed at the end; only the final packages remain in `build/`.
+
 ### GitHub Token Configuration
 
 `release-it` requires a GitHub Personal Access Token to create releases automatically. Without it, you'll need to create the release manually through the web interface.

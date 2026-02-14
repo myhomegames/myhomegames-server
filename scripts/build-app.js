@@ -844,6 +844,7 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
               description: 'MyHomeGames server',
               vendor: 'MyHomeGames',
               rpmDest: BUILD_DIR,
+              tempDir: path.join(BUILD_DIR, 'rpm-work'),
               verbose: false,
               files: [
                 { src: path.join(optDir, 'myhomegames-server'), dest: '/opt/myhomegames-server/' },
