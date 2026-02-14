@@ -2,8 +2,8 @@
  * Shared tests for collection-like resources: developers, publishers.
  * Same pattern as taglists.shared.js for themes, platforms, etc.
  *
- * Developers/publishers are created when games are added (no POST create).
- * Tests create items by updating a game with developers/publishers.
+ * Items can be created via POST (create endpoint) or when games are added (PUT game with positive id).
+ * Negative ids in game payload are skipped (no new folder created).
  */
 
 const request = require("supertest");
@@ -41,34 +41,106 @@ function runCollectionLikeTests(config) {
   let sharedItem = null;
 
   beforeAll(async () => {
-    const libraryResponse = await request(app)
-      .get("/libraries/library/games")
+    const uniqueTitle = `Test ${humanName} ${Date.now()}`;
+    const postRes = await request(app)
+      .post(normalizedRouteBase)
       .set("X-Auth-Token", "test-token")
-      .expect(200);
+      .send({ title: uniqueTitle, summary: "Test summary" });
 
-    if (libraryResponse.body.games.length > 0) {
-      const testId = 99999000 + Math.floor(Math.random() * 1000);
-      const testName = `Test ${humanName} ${Date.now()}`;
-
-      const gameId = libraryResponse.body.games[0].id;
-      const putRes = await request(app)
-        .put(`/games/${gameId}`)
-        .set("X-Auth-Token", "test-token")
-        .send({ [gameField]: [{ id: testId, name: testName }] });
-
-      if (putRes.status === 200) {
-        await request(app)
-          .post("/reload-games")
-          .set("X-Auth-Token", "test-token")
-          .expect(200);
-        sharedItem = { id: testId, name: testName };
-      }
+    if (postRes.status === 201 && postRes.body[singleResponseKey]) {
+      const created = postRes.body[singleResponseKey];
+      sharedItem = { id: created.id, name: created.title };
     }
   });
 
   function getItem() {
     return sharedItem;
   }
+
+  describe(`POST ${normalizedRouteBase}`, () => {
+    test("should require authentication", async () => {
+      await request(app)
+        .post(normalizedRouteBase)
+        .send({ title: "New Item" })
+        .expect(401);
+    });
+
+    test("should return 400 when title is missing", async () => {
+      const response = await request(app)
+        .post(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .send({})
+        .expect(400);
+      expect(response.body).toHaveProperty("error", "Title is required");
+    });
+
+    test(`should create ${humanNameLower} and return 201 with body`, async () => {
+      const title = `New ${humanName} ${Date.now()}`;
+      const response = await request(app)
+        .post(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .send({ title, summary: "A summary" })
+        .expect(201);
+
+      expect(response.body).toHaveProperty("status", "success");
+      expect(response.body).toHaveProperty(singleResponseKey);
+      expect(response.body[singleResponseKey]).toHaveProperty("id");
+      expect(response.body[singleResponseKey]).toHaveProperty("title", title);
+      expect(response.body[singleResponseKey]).toHaveProperty("summary", "A summary");
+      expect(response.body[singleResponseKey]).toHaveProperty("gameCount", 0);
+    });
+
+    test("should return 409 when title already exists", async () => {
+      const created = getItem();
+      if (!created) return;
+
+      const response = await request(app)
+        .post(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .send({ title: created.name })
+        .expect(409);
+
+      expect(response.body).toHaveProperty("error");
+      expect(response.body).toHaveProperty(singleResponseKey);
+      expect(response.body[singleResponseKey]).toHaveProperty("id", created.id);
+      expect(response.body[singleResponseKey]).toHaveProperty("title", created.name);
+    });
+  });
+
+  describe("ensureBatch skips negative ids", () => {
+    test(`PUT game with negative ${gameField} id should not create new ${humanNameLower}`, async () => {
+      const listBefore = await request(app)
+        .get(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .expect(200);
+      const countBefore = (listBefore.body[listKey] || []).length;
+
+      const libraryRes = await request(app)
+        .get("/libraries/library/games")
+        .set("X-Auth-Token", "test-token")
+        .expect(200);
+      if (libraryRes.body.games.length === 0) return;
+
+      const gameId = libraryRes.body.games[0].id;
+      await request(app)
+        .put(`/games/${gameId}`)
+        .set("X-Auth-Token", "test-token")
+        .send({ [gameField]: [{ id: -999999, name: "Negative Id Item" }] })
+        .expect(200);
+
+      const listAfter = await request(app)
+        .get(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .expect(200);
+      const countAfter = (listAfter.body[listKey] || []).length;
+
+      expect(countAfter).toBe(countBefore);
+      const negativeItem = (listAfter.body[listKey] || []).find(
+        (i) => Number(i.id) === -999999 || i.title === "Negative Id Item"
+      );
+      expect(negativeItem).toBeUndefined();
+    });
+  });
 
   describe(`GET ${normalizedRouteBase}`, () => {
     test(`should return list of ${humanNameLower}s`, async () => {

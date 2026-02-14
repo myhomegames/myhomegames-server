@@ -34,6 +34,17 @@ function createCollectionLikeRoutes(config) {
 
   const normalizedRouteBase = routeBase.startsWith("/") ? routeBase : `/${routeBase}`;
 
+  function getIdFromTitle(title) {
+    let hash = 0;
+    const str = String(title).toLowerCase().trim();
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
+  }
+
   function ensureBatch(metadataPath, items, gameId) {
     if (!items || !Array.isArray(items) || items.length === 0) return;
     const list = loadItems(metadataPath, contentFolder);
@@ -44,7 +55,7 @@ function createCollectionLikeRoutes(config) {
       const name = typeof item === "object" && item && item.name ? item.name : String(item);
       if (!id || !name) continue;
       const numId = Number(id);
-      if (isNaN(numId)) continue;
+      if (isNaN(numId) || numId < 0) continue;
 
       const logo = typeof item === "object" && item && item.logo ? item.logo : null;
       const description =
@@ -119,9 +130,68 @@ function createCollectionLikeRoutes(config) {
       res.sendFile(backgroundPath);
     });
 
-    app.get(normalizedRouteBase, requireToken, (req, res) => {
+    app.post(normalizedRouteBase, requireToken, (req, res) => {
+      const { title, summary } = req.body || {};
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      const trimmedTitle = title.trim();
+      updateCache();
       const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
-      if (!cache.length) updateCache();
+      const existing = list.find((c) => String(c.title).toLowerCase() === trimmedTitle.toLowerCase());
+      if (existing) {
+        return res.status(409).json({
+          error: `${humanName} with this title already exists`,
+          [singleResponseKey]: { id: existing.id, title: existing.title },
+        });
+      }
+      let newId = getIdFromTitle(trimmedTitle);
+      while (list.some((c) => String(c.id) === String(newId))) {
+        newId++;
+      }
+      const newItem = {
+        id: newId,
+        title: trimmedTitle,
+        summary: (summary && typeof summary === "string") ? summary.trim() : "",
+        showTitle: true,
+        games: [],
+      };
+      try {
+        saveItem(metadataPath, contentFolder, newItem);
+        updateCache();
+      } catch (e) {
+        console.error(`Failed to save ${humanName}:`, e.message);
+        return res.status(500).json({ error: `Failed to create ${humanName}` });
+      }
+      const cover = getLocalMediaPath({
+        metadataPath,
+        resourceId: newItem.id,
+        resourceType: contentFolder,
+        mediaType: "cover",
+        urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
+      });
+      const data = {
+        id: newItem.id,
+        title: newItem.title,
+        summary: newItem.summary || "",
+        showTitle: newItem.showTitle,
+        gameCount: 0,
+        cover: cover || null,
+      };
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: newItem.id,
+        resourceType: contentFolder,
+        mediaType: "background",
+        urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
+      });
+      if (background) data.background = background;
+      res.status(201).json({ status: "success", [singleResponseKey]: data });
+    });
+
+    app.get(normalizedRouteBase, requireToken, (req, res) => {
+      updateCache();
+      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
       res.json({
         [listResponseKey]: list.map((d) => {
           const gameIds = d.games || [];
@@ -151,7 +221,13 @@ function createCollectionLikeRoutes(config) {
 
     app.get(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      let entry = findById(list, id);
+      if (!entry) {
+        updateCache();
+        list = cache;
+        entry = findById(list, id);
+      }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const data = {
         id: entry.id,
@@ -181,7 +257,13 @@ function createCollectionLikeRoutes(config) {
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      let entry = findById(list, id);
+      if (!entry) {
+        updateCache();
+        list = cache;
+        entry = findById(list, id);
+      }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const games = (entry.games || [])
         .map((gId) => allGames[gId])
