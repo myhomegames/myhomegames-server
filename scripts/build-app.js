@@ -21,28 +21,29 @@ fs.mkdirSync(BUILD_DIR, { recursive: true });
 
 console.log('Building macOS app bundle...');
 
-// Step 1: Build executable with pkg
-console.log('Step 1: Creating executable with pkg...');
+// Step 1: Build all executables with pkg in one run (bytecode enabled)
+console.log('Step 1: Creating executables (macOS x64, macOS arm64, Linux, Windows)...');
 try {
-  // Use pkg from package.json config - output to temp build directory
-  execSync('npx pkg . --targets node18-macos-x64 --output-path build', {
+  execSync('npx pkg . --targets node18-macos-x64,node18-macos-arm64,node18-linux-x64,node18-win-x64 --output-path build', {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit'
   });
 } catch (error) {
-  console.error('Error building executable:', error.message);
+  console.error('Error building executables:', error.message);
   process.exit(1);
 }
 
-// Step 2: Create .app bundle structure
+// Step 2: Create .app bundle structure (macOS only)
 console.log('Step 2: Creating .app bundle structure...');
 fs.mkdirSync(CONTENTS_PATH, { recursive: true });
 fs.mkdirSync(MACOS_PATH, { recursive: true });
 fs.mkdirSync(RESOURCES_PATH, { recursive: true });
 
-// Step 3: Move executable to MacOS folder
-// pkg creates executable with name based on package.json name
-const possibleNames = [
+// Step 3: Move macOS x64 executable to MacOS folder (first .app is x64; arm64 .pkg is built later)
+// pkg with multiple targets uses -platform-arch (no nodeRange when same): macos-x64, macos-arm64, linux-x64, win-x64
+const possibleMacNames = [
+  'myhomegames-server-macos-x64',
+  'myhomegames-server-node18-macos-x64',
   'myhomegames-server-macos',
   'myhomegames-server',
   'server-macos',
@@ -50,7 +51,7 @@ const possibleNames = [
 ];
 
 let executablePath = null;
-for (const name of possibleNames) {
+for (const name of possibleMacNames) {
   const testPath = path.join(BUILD_DIR, name);
   if (fs.existsSync(testPath)) {
     executablePath = testPath;
@@ -198,6 +199,95 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false // Don't terminate when window closes (we have no window)
     }
+    
+    @objc func showAbout(_ sender: Any?) {
+        let L = AboutStrings.current
+        let alert = NSAlert()
+        alert.messageText = "${APP_NAME}"
+        alert.alertStyle = .informational
+        let contentWidth: CGFloat = 420
+        let contentHeight: CGFloat = 140
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.isAutomaticLinkDetectionEnabled = true
+        if let url = Bundle.main.url(forResource: "server-info", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let version = info["version"] as? String,
+           let buildDate = info["buildDate"] as? String {
+            let attr = NSMutableAttributedString()
+            attr.append(NSAttributedString(string: "\\(L.version) \\(version)\\n"))
+            attr.append(NSAttributedString(string: "\\(L.build) \\(buildDate)\\n"))
+            if let creator = info["creator"] as? String {
+                attr.append(NSAttributedString(string: "\\(L.creator) \\(creator)\\n"))
+            }
+            if let community = info["community"] as? String {
+                attr.append(NSAttributedString(string: "\\(L.community) \\(community)\\n"))
+            }
+            if let website = info["website"] as? String, let linkURL = URL(string: website) {
+                attr.append(NSAttributedString(string: "\\(L.website) "))
+                let linkStr = NSMutableAttributedString(string: website)
+                linkStr.addAttribute(.link, value: linkURL, range: NSRange(location: 0, length: website.count))
+                attr.append(linkStr)
+            }
+            textView.textStorage?.setAttributedString(attr)
+        } else {
+            textView.string = "\\(L.version) –"
+        }
+        textView.textColor = .labelColor
+        let wrapper = NSView(frame: NSRect(x: 0, y: 0, width: contentWidth, height: contentHeight))
+        wrapper.addSubview(textView)
+        alert.accessoryView = wrapper
+        alert.runModal()
+    }
+}
+
+struct AboutStrings {
+    let version: String
+    let build: String
+    let creator: String
+    let community: String
+    let website: String
+    static var current: AboutStrings {
+        let pref = Locale.preferredLanguages.first ?? ""
+        return pref.hasPrefix("it") ? AboutStrings.it : AboutStrings.en
+    }
+    static let en = AboutStrings(
+        version: "Version",
+        build: "Build:",
+        creator: "Creator:",
+        community: "Community:",
+        website: "Website:"
+    )
+    static let it = AboutStrings(
+        version: "Versione",
+        build: "Build:",
+        creator: "Creatore:",
+        community: "Community:",
+        website: "Sito web:"
+    )
+}
+
+struct MenuStrings {
+    let aboutApp: String
+    let quitApp: String
+    let quit: String
+    static var current: MenuStrings {
+        let pref = Locale.preferredLanguages.first ?? ""
+        return pref.hasPrefix("it") ? MenuStrings.it : MenuStrings.en
+    }
+    static let en = MenuStrings(
+        aboutApp: "About ${APP_NAME}",
+        quitApp: "Quit ${APP_NAME}",
+        quit: "Quit"
+    )
+    static let it = MenuStrings(
+        aboutApp: "Informazioni su ${APP_NAME}",
+        quitApp: "Esci da ${APP_NAME}",
+        quit: "Esci"
+    )
 }
 
 // Create and run the app
@@ -205,18 +295,29 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 
-// Create a menu bar item to keep the app running
+// Menu principale (nome app in alto a sinistra) – testi in base alla lingua di sistema
+let menuL = MenuStrings.current
+let mainMenu = NSMenu()
+let appMenuItem = NSMenuItem()
+mainMenu.addItem(appMenuItem)
+let appMenu = NSMenu(title: "${APP_NAME}")
+appMenuItem.submenu = appMenu
+let aboutItem = NSMenuItem(title: menuL.aboutApp, action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
+aboutItem.target = delegate
+appMenu.addItem(aboutItem)
+appMenu.addItem(NSMenuItem.separator())
+appMenu.addItem(NSMenuItem(title: menuL.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+NSApp.mainMenu = mainMenu
+
+// Icona nella menu bar (destra) per accesso rapido
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 if let button = statusItem.button {
     button.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "MyHomeGames Server")
     button.toolTip = "MyHomeGames Server"
 }
-
-// Create menu
-let menu = NSMenu()
-let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-menu.addItem(quitItem)
-statusItem.menu = menu
+let statusMenu = NSMenu()
+statusMenu.addItem(NSMenuItem(title: menuL.quit, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+statusItem.menu = statusMenu
 
 app.run()
 `;
@@ -260,6 +361,16 @@ exit ${dollar}?
 // Step 4: Create Info.plist
 console.log('Step 3: Creating Info.plist...');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
+const serverInfo = {
+  name: packageJson.name,
+  version: packageJson.version,
+  buildDate: new Date().toISOString(),
+  creator: 'Luca Stancapiano',
+  community: 'Vige',
+  website: 'https://myhomegames.vige.it',
+};
+const serverInfoJson = JSON.stringify(serverInfo, null, 2);
+const SERVER_INFO_FILENAME = 'server-info.json';
 const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -316,6 +427,7 @@ API_BASE=https://localhost:41440
 FRONTEND_URL=https://myhomegames.vige.it/app/
 `;
 fs.writeFileSync(path.join(RESOURCES_PATH, '.env'), envContent);
+fs.writeFileSync(path.join(RESOURCES_PATH, SERVER_INFO_FILENAME), serverInfoJson);
 console.log('✅ .env file created with default configuration');
 
 // Step 6: Create icon from favicon design
@@ -478,32 +590,30 @@ img.save(sys.argv[1], 'PNG')
   console.log('   The app will work but may not display an icon.');
 }
 
-// Step 7: Create .pkg installer
-console.log('Step 7: Creating .pkg installer...');
-const PKG_NAME = `${APP_NAME}-${packageJson.version}.pkg`;
-const PKG_PATH = path.join(BUILD_DIR, PKG_NAME);
+// Step 7: Create .pkg installers (mac-x64 and mac-arm64)
+console.log('Step 7: Creating .pkg installers (mac-x64 and mac-arm64)...');
+const version = packageJson.version;
+// pkg multi-target: -macos-arm64 (no node18); single-target: plain "myhomegames-server"
+const macArm64Exe =
+  (['myhomegames-server-macos-arm64', 'myhomegames-server-node18-macos-arm64', 'myhomegames-server'].map((name) => path.join(BUILD_DIR, name)).find((p) => fs.existsSync(p))) || null;
 
 // Remove old .pkg files with the same version (if any)
-const existingPkgs = fs.readdirSync(BUILD_DIR).filter(file => 
-  file.endsWith('.pkg') && file.includes(packageJson.version)
+const existingPkgs = fs.readdirSync(BUILD_DIR).filter(file =>
+  file.endsWith('.pkg') && file.includes(version)
 );
 existingPkgs.forEach(file => {
-  const oldPkgPath = path.join(BUILD_DIR, file);
-  console.log(`Removing old package: ${file}`);
-  fs.unlinkSync(oldPkgPath);
+  fs.unlinkSync(path.join(BUILD_DIR, file));
 });
 
-try {
-  // Create a temporary directory for pkgbuild
+function createPkg(pkgSuffix) {
+  const pkgName = `${APP_NAME}-${version}-mac-${pkgSuffix}.pkg`;
+  const pkgPath = path.join(BUILD_DIR, pkgName);
   const pkgRoot = path.join(BUILD_DIR, 'pkgroot');
   const applicationsDir = path.join(pkgRoot, 'Applications');
   fs.mkdirSync(applicationsDir, { recursive: true });
-  
-  // Copy .app to Applications folder in pkgroot
   const appInPkg = path.join(applicationsDir, APP_BUNDLE);
   fs.cpSync(TEMP_APP_PATH, appInPkg, { recursive: true });
-  
-  // Fix permissions recursively: directories 755, files 644, executable 755
+
   function fixPermissions(dir) {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -512,7 +622,6 @@ try {
         fs.chmodSync(fullPath, '755');
         fixPermissions(fullPath);
       } else {
-        // Check if it's the executable
         if (entry.name === APP_NAME || entry.name.endsWith('.icns')) {
           fs.chmodSync(fullPath, '755');
         } else {
@@ -522,42 +631,26 @@ try {
     }
   }
   fixPermissions(appInPkg);
-  
-  // Create scripts directory for pkgbuild
+
   const scriptsDir = path.join(BUILD_DIR, 'scripts');
-  if (fs.existsSync(scriptsDir)) {
-    fs.rmSync(scriptsDir, { recursive: true, force: true });
-  }
+  if (fs.existsSync(scriptsDir)) fs.rmSync(scriptsDir, { recursive: true, force: true });
   fs.mkdirSync(scriptsDir, { recursive: true });
-  
-  // Create postinstall script to fix permissions after installation
   const postinstallScript = `#!/bin/bash
-# Fix permissions for MyHomeGames.app after installation
 APP_PATH="/Applications/${APP_BUNDLE}"
 if [ -d "$APP_PATH" ]; then
-    # Get the user who installed the package (from installer environment or last logged in user)
     INSTALL_USER=$(stat -f "%Su" /dev/console 2>/dev/null || echo "$USER")
     if [ -z "$INSTALL_USER" ] || [ "$INSTALL_USER" = "root" ]; then
-        # Try to get the last logged in user
         INSTALL_USER=$(defaults read /Library/Preferences/com.apple.loginwindow lastUserName 2>/dev/null || echo "")
     fi
-    
-    # Set directory permissions
     find "$APP_PATH" -type d -exec chmod 755 {} \\;
-    # Set file permissions (except executable)
     find "$APP_PATH" -type f ! -name "${APP_NAME}" ! -name "*.icns" -exec chmod 644 {} \\;
-    # Set executable permissions
     if [ -f "$APP_PATH/Contents/MacOS/${APP_NAME}" ]; then
         chmod 755 "$APP_PATH/Contents/MacOS/${APP_NAME}"
     fi
-    # Set icon permissions
     find "$APP_PATH" -name "*.icns" -exec chmod 644 {} \\;
-    
-    # Fix ownership to the installing user (if not root and user exists)
     if [ -n "$INSTALL_USER" ] && [ "$INSTALL_USER" != "root" ] && id "$INSTALL_USER" &>/dev/null; then
         chown -R "$INSTALL_USER:staff" "$APP_PATH"
     else
-        # If we can't determine the user, at least make it readable by all
         chmod -R a+rX "$APP_PATH"
     fi
 fi
@@ -566,8 +659,7 @@ exit 0
   const postinstallPath = path.join(scriptsDir, 'postinstall');
   fs.writeFileSync(postinstallPath, postinstallScript);
   fs.chmodSync(postinstallPath, '755');
-  
-  // Create component plist for pkgbuild (must be an array of dictionaries)
+
   const componentPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -578,7 +670,7 @@ exit 0
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleVersion</key>
-    <string>${packageJson.version}</string>
+    <string>${version}</string>
     <key>RootRelativeBundlePath</key>
     <string>Applications/${APP_BUNDLE}</string>
     <key>IFPkgFlagInstalledSize</key>
@@ -586,32 +678,196 @@ exit 0
   </dict>
 </array>
 </plist>`;
-  
   const componentPlistPath = path.join(BUILD_DIR, 'component.plist');
   fs.writeFileSync(componentPlistPath, componentPlist);
-  
-  // Build the .pkg using pkgbuild with postinstall script
-  execSync(`pkgbuild --root "${pkgRoot}" --component-plist "${componentPlistPath}" --scripts "${scriptsDir}" --install-location / "${PKG_PATH}"`, {
+
+  execSync(`pkgbuild --root "${pkgRoot}" --component-plist "${componentPlistPath}" --scripts "${scriptsDir}" --install-location / "${pkgPath}"`, {
     stdio: 'inherit'
   });
-  
-  // Clean up pkgroot, component.plist, and scripts directory (keep .app and .pkg)
-  if (fs.existsSync(pkgRoot)) {
-    fs.rmSync(pkgRoot, { recursive: true, force: true });
+
+  if (fs.existsSync(pkgRoot)) fs.rmSync(pkgRoot, { recursive: true, force: true });
+  if (fs.existsSync(componentPlistPath)) fs.unlinkSync(componentPlistPath);
+  if (fs.existsSync(scriptsDir)) fs.rmSync(scriptsDir, { recursive: true, force: true });
+  console.log(`✅ ${pkgName}`);
+}
+
+try {
+  createPkg('x64');
+
+  if (macArm64Exe) {
+    // Replace executable in .app with arm64 for the second .pkg
+    fs.copyFileSync(macArm64Exe, originalExecutablePath);
+    fs.chmodSync(originalExecutablePath, '755');
+    createPkg('arm64');
+  } else {
+    console.log('⚠️  arm64 executable not found, only mac-x64.pkg was created.');
   }
-  if (fs.existsSync(componentPlistPath)) {
-    fs.unlinkSync(componentPlistPath);
-  }
-  if (fs.existsSync(scriptsDir)) {
-    fs.rmSync(scriptsDir, { recursive: true, force: true });
-  }
-  
-  console.log(`\n✅ Build complete!`);
+
   console.log(`\n📦 App bundle: ${TEMP_APP_PATH}`);
-  console.log(`📦 Installer package: ${PKG_PATH}`);
-  console.log(`\nTo install, double-click ${PKG_NAME} or run:`);
-  console.log(`   sudo installer -pkg "${PKG_PATH}" -target /`);
+  console.log(`\nTo install: double-click the .pkg or run sudo installer -pkg "build/<pkg>" -target /`);
 } catch (error) {
   console.error('Error creating .pkg:', error.message);
   console.log(`\n⚠️  App bundle created at: ${TEMP_APP_PATH} but .pkg creation failed.`);
+}
+
+// Step 8: Package Linux and Windows (executable + .env, then archive)
+const envContentStandalone = `HTTP_PORT=4000
+HTTPS_ENABLED=true
+HTTPS_PORT=41440
+API_BASE=https://localhost:41440
+FRONTEND_URL=https://myhomegames.vige.it/app/
+`;
+const linuxExe = ['myhomegames-server-linux-x64', 'myhomegames-server-node18-linux-x64'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
+const winExe = ['myhomegames-server-win-x64.exe', 'myhomegames-server-node18-win-x64.exe'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
+
+function keepOnlyFinalArtifacts() {
+  const keepPatterns = [
+    /\.pkg$/,
+    /-linux-x64\.tar\.gz$/,
+    /-win-x64\.zip$/,
+    /^myhomegames-server_.*_amd64\.deb$/,
+    /^myhomegames-server-.*\.x86_64\.rpm$/,
+  ];
+  const toKeep = (name) => keepPatterns.some((re) => re.test(name));
+  for (const name of fs.readdirSync(BUILD_DIR)) {
+    const full = path.join(BUILD_DIR, name);
+    if (toKeep(name)) continue;
+    try {
+      if (fs.statSync(full).isDirectory()) fs.rmSync(full, { recursive: true, force: true });
+      else fs.unlinkSync(full);
+    } catch (_) {}
+  }
+  console.log('\n✅ build/ contiene solo i pacchetti finali.');
+}
+
+if (linuxExe || winExe) {
+  console.log('\nStep 8: Packaging Linux and Windows...');
+  const version = packageJson.version;
+
+  if (linuxExe) {
+    fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
+    fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
+    const tarName = `MyHomeGames-${version}-linux-x64.tar.gz`;
+    const tarPath = path.join(BUILD_DIR, tarName);
+    try {
+      execSync(`tar -czf "${tarPath}" -C "${BUILD_DIR}" "${linuxExe}" ".env" "${SERVER_INFO_FILENAME}"`, { stdio: 'inherit' });
+      console.log(`✅ Linux: ${tarName}`);
+    } catch (e) {
+      console.log('⚠️  Linux tarball failed:', e.message);
+    }
+  }
+
+  if (winExe) {
+    if (!fs.existsSync(path.join(BUILD_DIR, '.env'))) {
+      fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
+    }
+    if (!fs.existsSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME))) {
+      fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
+    }
+    const zipName = `MyHomeGames-${version}-win-x64.zip`;
+    const zipPath = path.join(BUILD_DIR, zipName);
+    try {
+      execSync(`cd "${BUILD_DIR}" && zip -q "${zipPath}" "${winExe}" ".env" "${SERVER_INFO_FILENAME}"`, { stdio: 'inherit' });
+      console.log(`✅ Windows: ${zipName}`);
+    } catch (e) {
+      console.log('⚠️  Windows zip failed:', e.message);
+    }
+  }
+
+  // Step 9: Linux .deb (deboa) and .rpm (rpm-builder) — solo npm; .rpm richiede rpmbuild su sistema
+  if (linuxExe) {
+    (async () => {
+      const pkgRoot = path.join(BUILD_DIR, 'linux-pkgroot');
+      if (fs.existsSync(pkgRoot)) fs.rmSync(pkgRoot, { recursive: true, force: true });
+      const optDir = path.join(pkgRoot, 'opt', 'myhomegames-server');
+      const usrBinDir = path.join(pkgRoot, 'usr', 'bin');
+      fs.mkdirSync(optDir, { recursive: true });
+      fs.mkdirSync(usrBinDir, { recursive: true });
+      fs.copyFileSync(path.join(BUILD_DIR, linuxExe), path.join(optDir, 'myhomegames-server'));
+      fs.chmodSync(path.join(optDir, 'myhomegames-server'), '755');
+      if (!fs.existsSync(path.join(BUILD_DIR, '.env'))) {
+        fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
+      }
+      fs.copyFileSync(path.join(BUILD_DIR, '.env'), path.join(optDir, '.env'));
+      fs.writeFileSync(path.join(optDir, SERVER_INFO_FILENAME), serverInfoJson);
+      const wrapper = `#!/bin/sh
+cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
+`;
+      fs.writeFileSync(path.join(usrBinDir, 'myhomegames-server'), wrapper);
+      fs.chmodSync(path.join(usrBinDir, 'myhomegames-server'), '755');
+
+      // .deb con deboa (npm, cross-platform)
+      try {
+        const { Deboa } = require('deboa');
+        const deboa = new Deboa({
+          sourceDir: optDir,
+          targetDir: BUILD_DIR,
+          installationRoot: 'opt/myhomegames-server',
+          controlFileOptions: {
+            packageName: 'myhomegames-server',
+            version,
+            shortDescription: 'MyHomeGames server',
+            maintainer: 'MyHomeGames <noreply@myhomegames.local>',
+            architecture: 'amd64',
+          },
+          modifyTarHeader: (header) => {
+            if (header.name && header.name.endsWith('myhomegames-server') && !header.name.endsWith('.env')) {
+              header.mode = parseInt('0755', 8);
+            }
+            return header;
+          },
+          beforePackage: (dataFolderDestination) => {
+            const usrBin = path.join(dataFolderDestination, 'usr', 'bin');
+            fs.mkdirSync(usrBin, { recursive: true });
+            const wrapperPath = path.join(usrBin, 'myhomegames-server');
+            fs.writeFileSync(wrapperPath, wrapper);
+            fs.chmodSync(wrapperPath, '755');
+          },
+        });
+        await deboa.package();
+        console.log(`✅ Linux: myhomegames-server_${version}_amd64.deb`);
+      } catch (e) {
+        console.log('⚠️  .deb failed:', e.message);
+      }
+
+      // .rpm con rpm-builder (npm); richiede rpmbuild su sistema (Linux o brew install rpm su macOS)
+      try {
+        const buildRpm = require('rpm-builder');
+        await new Promise((resolve, reject) => {
+          buildRpm(
+            {
+              name: 'myhomegames-server',
+              version,
+              release: '1',
+              buildArch: 'x86_64',
+              summary: 'MyHomeGames server',
+              description: 'MyHomeGames server',
+              vendor: 'MyHomeGames',
+              rpmDest: BUILD_DIR,
+              verbose: false,
+              files: [
+                { src: path.join(optDir, 'myhomegames-server'), dest: '/opt/myhomegames-server/' },
+                { src: path.join(optDir, '.env'), dest: '/opt/myhomegames-server/' },
+                { src: path.join(optDir, SERVER_INFO_FILENAME), dest: '/opt/myhomegames-server/' },
+                { src: path.join(usrBinDir, 'myhomegames-server'), dest: '/usr/bin/' },
+              ],
+            },
+            (err, rpmPath) => {
+              if (err) return reject(err);
+              if (rpmPath) console.log(`✅ Linux: myhomegames-server-${version}-1.x86_64.rpm`);
+              resolve();
+            }
+          );
+        });
+      } catch (e) {
+        console.log('⚠️  .rpm skipped (rpmbuild required, e.g. on Linux or: brew install rpm):', e.message);
+      }
+
+      if (fs.existsSync(pkgRoot)) fs.rmSync(pkgRoot, { recursive: true, force: true });
+
+      keepOnlyFinalArtifacts();
+    })();
+  } else if (winExe) {
+    keepOnlyFinalArtifacts();
+  }
 }
