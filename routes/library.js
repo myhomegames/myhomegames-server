@@ -224,6 +224,20 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     res.json({ ids });
   });
 
+  // Endpoint: get unique keywords from all games (for tag suggestions)
+  app.get("/keywords", requireToken, (req, res) => {
+    const set = new Set();
+    for (const game of Object.values(allGames)) {
+      const kw = game.keywords;
+      if (!kw || !Array.isArray(kw)) continue;
+      for (const k of kw) {
+        if (k != null && typeof k === "string" && k.trim()) set.add(k.trim());
+      }
+    }
+    const keywords = Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    res.json({ keywords });
+  });
+
   // Endpoint: get library games
   app.get("/libraries/library/games", requireToken, (req, res) => {
       const libraryGames = loadLibraryGames(metadataPath, allGames);
@@ -374,6 +388,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "playerPerspectives",
       "developers",
       "publishers",
+      "franchise",
+      "collection",
       "executables",
       "showTitle",
     ];
@@ -442,6 +458,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (!newIds.has(oldId)) removeGameFromPublisher(metadataPath, oldId, gameId);
       }
       if (newPubs.length > 0) ensurePublishersExistBatch(metadataPath, newPubs, gameId);
+    }
+    // Franchise and collection (series): normalize to array of { id, name }
+    if ("franchise" in filteredUpdates) {
+      filteredUpdates.franchise = validateDevPubArray(filteredUpdates.franchise) || null;
+    }
+    if ("collection" in filteredUpdates) {
+      filteredUpdates.collection = validateDevPubArray(filteredUpdates.collection) || null;
     }
 
     // Track if we need to delete executables (when executables is null)

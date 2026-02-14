@@ -119,6 +119,7 @@ const platformsRoutes = require("./routes/platforms");
 const gameEnginesRoutes = require("./routes/gameengines");
 const gameModesRoutes = require("./routes/gamemodes");
 const playerPerspectivesRoutes = require("./routes/playerperspectives");
+const seriesAndFranchisesRoutes = require("./routes/seriesAndFranchises");
 const collectionsRoutes = require("./routes/collections");
 const developersRoutes = require("./routes/developers");
 const publishersRoutes = require("./routes/publishers");
@@ -161,6 +162,8 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "player-perspectives"),
     path.join(METADATA_PATH, "content", "developers"),
     path.join(METADATA_PATH, "content", "publishers"),
+    path.join(METADATA_PATH, "content", "series"),
+    path.join(METADATA_PATH, "content", "franchises"),
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "certs"),
   ];
@@ -339,6 +342,7 @@ platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADA
 gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 gameModesRoutes.registerGameModesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+seriesAndFranchisesRoutes.registerSeriesAndFranchisesRoutes(app, requireToken, allGames, METADATA_PATH);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {
