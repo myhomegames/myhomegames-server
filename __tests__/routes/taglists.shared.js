@@ -237,7 +237,7 @@ function runTagListTests(config) {
         .expect(200);
 
       const response = await request(app)
-        .post(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}/upload-cover`)
+        .post(`${normalizedRouteBase}/${getTagId(tagTitle)}/upload-cover`)
         .set("X-Auth-Token", "test-token")
         .attach("file", fileContent, "cover.webp")
         .expect(200);
@@ -283,7 +283,7 @@ function runTagListTests(config) {
         .expect(200);
 
       await request(app)
-        .post(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}/upload-cover`)
+        .post(`${normalizedRouteBase}/${getTagId(tagTitle)}/upload-cover`)
         .set("X-Auth-Token", "test-token")
         .attach("file", fileContent, "cover.webp")
         .expect(200);
@@ -299,7 +299,7 @@ function runTagListTests(config) {
       expect(fs.existsSync(coverPath)).toBe(true);
 
       const response = await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}/delete-cover`)
+        .delete(`${normalizedRouteBase}/${tagId}/delete-cover`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
 
@@ -434,7 +434,7 @@ function runTagListTests(config) {
       const tagTitle = createResponse.body[responseKey];
 
       const deleteResponse = await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+        .delete(`${normalizedRouteBase}/${getTagId(tagTitle)}`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
 
@@ -468,6 +468,7 @@ function runTagListTests(config) {
         if (tagsResponse.body[listKey].length > 0) {
           const tag = tagsResponse.body[listKey][0];
           const tagTitle = typeof tag === "string" ? tag : tag.title;
+          const tagId = typeof tag === "object" && tag && "id" in tag ? tag.id : getTagId(tagTitle);
 
           await request(app)
             .put(`/games/${gameId}`)
@@ -476,7 +477,7 @@ function runTagListTests(config) {
             .expect(200);
 
           const deleteResponse = await request(app)
-            .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+            .delete(`${normalizedRouteBase}/${tagId}`)
             .set("X-Auth-Token", "test-token")
             .expect(409);
 
@@ -496,7 +497,7 @@ function runTagListTests(config) {
 
     test(`should return 404 if ${humanNameLower} does not exist`, async () => {
       const response = await request(app)
-        .delete(`${normalizedRouteBase}/nonexistent_${slug}`)
+        .delete(`${normalizedRouteBase}/999999999`)
         .set("X-Auth-Token", "test-token")
         .expect(404);
 
@@ -505,7 +506,7 @@ function runTagListTests(config) {
 
     test("should require authentication", async () => {
       const response = await request(app)
-        .delete(`${normalizedRouteBase}/some_${slug}`)
+        .delete(`${normalizedRouteBase}/1`)
         .expect(401);
 
       expect(response.body).toHaveProperty("error", "Unauthorized");
@@ -519,6 +520,7 @@ function runTagListTests(config) {
         .expect(200);
 
       const tagTitle = createResponse.body[responseKey];
+      const tagIdForDelete = getTagId(tagTitle);
       const { testMetadataPath } = require("../setup");
       const fs = require("fs");
       const path = require("path");
@@ -538,7 +540,7 @@ function runTagListTests(config) {
       expect(fs.existsSync(metadataFile)).toBe(true);
 
       const response = await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+        .delete(`${normalizedRouteBase}/${tagIdForDelete}`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
 
@@ -580,11 +582,9 @@ function runTagListTests(config) {
 
         expect(updateResponse.body.game).toHaveProperty(gameField);
         expect(Array.isArray(updateResponse.body.game[gameField])).toBe(true);
-        // API returns tag fields as [{ id, title }, ...]
-        const hasNewTag = updateResponse.body.game[gameField].some(
-          (t) => (typeof t === "object" && t && t.title === newTagTitle) || t === newTagTitle
-        );
-        expect(hasNewTag).toBe(true);
+        // API returns tag fields as id-only array
+        expect(updateResponse.body.game[gameField].length).toBe(1);
+        expect(updateResponse.body.game[gameField].every((t) => typeof t === "number")).toBe(true);
 
         const tagsResponse = await request(app)
           .get(normalizedRouteBase)
@@ -596,16 +596,13 @@ function runTagListTests(config) {
         );
         expect(tagExists).toBe(true);
 
+        // Remove tag from game (server auto-deletes orphaned tag)
         await request(app)
           .put(`/games/${gameId}`)
           .set("X-Auth-Token", "test-token")
           .send({ [gameField]: [] })
           .expect(200);
-
-        await request(app)
-          .delete(`${normalizedRouteBase}/${encodeURIComponent(newTagTitle)}`)
-          .set("X-Auth-Token", "test-token")
-          .expect(200);
+        // Tag was already deleted by server when it became orphaned; no need to DELETE
       }
     });
 
@@ -625,6 +622,7 @@ function runTagListTests(config) {
           .expect(200);
 
         const tagTitle = createTagResponse.body[responseKey];
+        const tagId = getTagId(tagTitle);
 
         await request(app)
           .put(`/games/${gameId}`)
@@ -633,7 +631,7 @@ function runTagListTests(config) {
           .expect(200);
 
         const deleteWhileInUseResponse = await request(app)
-          .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+          .delete(`${normalizedRouteBase}/${tagId}`)
           .set("X-Auth-Token", "test-token")
           .expect(409);
 
@@ -648,13 +646,7 @@ function runTagListTests(config) {
           .send({ [gameField]: [] })
           .expect(200);
 
-        const deleteResponse = await request(app)
-          .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
-          .set("X-Auth-Token", "test-token")
-          .expect(200);
-
-        expect(deleteResponse.body).toHaveProperty("status", "success");
-
+        // Verify tag was auto-removed when it became orphaned
         const tagsResponse = await request(app)
           .get(normalizedRouteBase)
           .set("X-Auth-Token", "test-token")
@@ -698,7 +690,7 @@ function runTagListTests(config) {
       expect(tagExists).toBe(true);
 
       await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+        .delete(`${normalizedRouteBase}/${getTagId(tagTitle)}`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
     });
@@ -744,7 +736,7 @@ function runTagListTests(config) {
       expect(tagExists).toBe(true);
 
       await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+        .delete(`${normalizedRouteBase}/${getTagId(tagTitle)}`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
     });
@@ -772,7 +764,7 @@ function runTagListTests(config) {
       expect(tagExists).toBe(true);
 
       await request(app)
-        .delete(`${normalizedRouteBase}/${encodeURIComponent(tagTitle)}`)
+        .delete(`${normalizedRouteBase}/${getTagId(tagTitle)}`)
         .set("X-Auth-Token", "test-token")
         .expect(200);
     });

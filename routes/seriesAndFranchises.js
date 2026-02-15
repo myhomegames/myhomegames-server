@@ -7,20 +7,27 @@ const fs = require("fs");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
-/** Ensure metadata dir + metadata.json exist for each item. Items: [{ id, name }]. */
+/** Ensure metadata dir + metadata.json exist. Items: number[] (ids only) or [{ id, name }] for IGDB import (names used only for initial metadata title). */
 function ensureFranchiseSeriesExistBatch(metadataPath, items, folder) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
-  for (const item of items) {
-    const id = Number(item.id);
-    if (Number.isNaN(id)) continue;
-    const name = item.name != null ? String(item.name).trim() : (item.title != null ? String(item.title).trim() : "");
-    if (!name) continue;
+  for (const raw of items) {
+    let id = null;
+    let title = null;
+    if (typeof raw === "number" && !Number.isNaN(raw)) {
+      id = raw;
+      title = String(raw);
+    } else if (typeof raw === "object" && raw != null && raw.id != null) {
+      id = Number(raw.id);
+      if (Number.isNaN(id)) continue;
+      title = raw.name != null ? String(raw.name).trim() : (raw.title != null ? String(raw.title).trim() : String(id));
+    }
+    if (id == null || !title) continue;
     const dir = getItemDir(metadataPath, folder, id);
     const metaPath = getMetadataPath(metadataPath, folder, id);
     const existing = readJsonFile(metaPath, null);
     if (existing && existing.title != null) continue;
     ensureDirectoryExists(dir);
-    writeJsonFile(metaPath, { title: name, showTitle: true });
+    writeJsonFile(metaPath, { title, showTitle: true });
   }
 }
 
@@ -30,12 +37,10 @@ function toArray(val) {
   return [val];
 }
 
+/** Only numeric ids; title comes from metadata in mergeWithStored. */
 function normalizeItem(item) {
   if (item == null) return null;
-  if (typeof item === "object" && item.id != null) {
-    const name = item.name != null ? String(item.name) : String(item.id);
-    return { id: Number(item.id), title: name };
-  }
+  if (typeof item === "number" && !Number.isNaN(item)) return { id: item, title: String(item) };
   return null;
 }
 
@@ -73,10 +78,47 @@ function mergeWithStored(metadataPath, folder, items, coverRouteBase) {
     const meta = loadStoredMetadata(metadataPath, folder, item.id);
     const coverPath = path.join(getItemDir(metadataPath, folder, item.id), "cover.webp");
     const result = { ...item };
-    if (meta && typeof meta.showTitle === "boolean") result.showTitle = meta.showTitle;
+    if (meta) {
+      if (typeof meta.showTitle === "boolean") result.showTitle = meta.showTitle;
+      if (meta.title != null) result.title = String(meta.title).trim();
+    }
     if (fs.existsSync(coverPath)) result.cover = `${coverRouteBase}/${item.id}/cover.webp`;
     return result;
   });
+}
+
+/** Only numeric ids. Returns null for non-numbers. */
+function toId(val) {
+  if (val == null) return null;
+  if (typeof val !== "number" || Number.isNaN(val)) return null;
+  return val;
+}
+
+/**
+ * Resolve array of numeric ids to [{ id, name }, ...].
+ * Name is read from content/{folder}/{id}/metadata.json (title). Input: only numbers.
+ */
+function resolveFranchiseOrSeriesIdsToObjects(metadataPath, folder, ids) {
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return [];
+  const seen = new Set();
+  const result = [];
+  for (const raw of ids) {
+    const id = toId(raw);
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    const meta = loadStoredMetadata(metadataPath, folder, id);
+    const name = (meta && meta.title != null ? String(meta.title) : String(id)).trim();
+    result.push({ id, name });
+  }
+  return result;
+}
+
+function resolveFranchiseIdsToObjects(metadataPath, idsOrObjects) {
+  return resolveFranchiseOrSeriesIdsToObjects(metadataPath, "franchises", idsOrObjects);
+}
+
+function resolveSeriesIdsToObjects(metadataPath, idsOrObjects) {
+  return resolveFranchiseOrSeriesIdsToObjects(metadataPath, "series", idsOrObjects);
 }
 
 /**
@@ -237,4 +279,6 @@ module.exports = {
   registerSeriesAndFranchisesRoutes,
   ensureFranchiseSeriesExistBatch,
   deleteFranchiseOrSeriesIfUnused,
+  resolveFranchiseIdsToObjects,
+  resolveSeriesIdsToObjects,
 };

@@ -537,11 +537,9 @@ describe('Game update with category creation and deletion', () => {
       
       expect(updateResponse.body.game).toHaveProperty('genre');
       expect(Array.isArray(updateResponse.body.game.genre)).toBe(true);
-      // API returns genre as [{ id, title }, ...]
-      const hasGenre = updateResponse.body.game.genre.some(
-        (g) => (typeof g === 'object' && g && g.title === newCategoryTitle) || g === newCategoryTitle
-      );
-      expect(hasGenre).toBe(true);
+      // API returns genre as id-only array
+      expect(updateResponse.body.game.genre.length).toBe(1);
+      expect(updateResponse.body.game.genre.every((g) => typeof g === 'number')).toBe(true);
       
       // Verify category still exists
       const categoriesResponse = await request(app)
@@ -552,20 +550,13 @@ describe('Game update with category creation and deletion', () => {
       const categoryExists = categoriesResponse.body.categories.some(cat => cat.title === newCategoryTitle);
       expect(categoryExists).toBe(true);
       
-      // Cleanup: remove genre from game and delete category by id
+      // Cleanup: remove genre from game (server auto-deletes orphaned category)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ genre: [] })
         .expect(200);
-
-      const cat = categoriesResponse.body.categories.find(c => c.title === newCategoryTitle);
-      if (cat) {
-        await request(app)
-          .delete(`/categories/${cat.id}`)
-          .set('X-Auth-Token', 'test-token')
-          .expect(200);
-      }
+      // Category was already deleted by server when it became orphaned; no need to DELETE
     }
   });
 
@@ -595,11 +586,11 @@ describe('Game update with category creation and deletion', () => {
       expect(cat).toBeDefined();
       const categoryId = cat.id;
 
-      // Assign category to game
+      // Assign category to game (send title; server resolves to id)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
-        .send({ genre: [{ id: categoryId, title: categoryTitle }] })
+        .send({ genre: [categoryTitle] })
         .expect(200);
 
       // Verify category cannot be deleted while in use
@@ -610,22 +601,14 @@ describe('Game update with category creation and deletion', () => {
 
       expect(deleteWhileInUseResponse.body).toHaveProperty('error', 'Category is still in use by one or more games');
 
-      // Remove category from game
+      // Remove category from game (server auto-deletes orphaned category)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ genre: [] })
         .expect(200);
 
-      // Now category should be deletable
-      const deleteResponse = await request(app)
-        .delete(`/categories/${categoryId}`)
-        .set('X-Auth-Token', 'test-token')
-        .expect(200);
-
-      expect(deleteResponse.body).toHaveProperty('status', 'success');
-
-      // Verify category was removed
+      // Verify category was auto-removed when it became orphaned
       const categoriesAfter = await request(app)
         .get('/categories')
         .set('X-Auth-Token', 'test-token')
