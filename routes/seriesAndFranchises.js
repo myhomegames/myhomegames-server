@@ -5,7 +5,24 @@
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("../utils/fileUtils");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+
+/** Ensure metadata dir + metadata.json exist for each item. Items: [{ id, name }]. */
+function ensureFranchiseSeriesExistBatch(metadataPath, items, folder) {
+  if (!items || !Array.isArray(items) || items.length === 0) return;
+  for (const item of items) {
+    const id = Number(item.id);
+    if (Number.isNaN(id)) continue;
+    const name = item.name != null ? String(item.name).trim() : (item.title != null ? String(item.title).trim() : "");
+    if (!name) continue;
+    const dir = getItemDir(metadataPath, folder, id);
+    const metaPath = getMetadataPath(metadataPath, folder, id);
+    const existing = readJsonFile(metaPath, null);
+    if (existing && existing.title != null) continue;
+    ensureDirectoryExists(dir);
+    writeJsonFile(metaPath, { title: name, showTitle: true });
+  }
+}
 
 function toArray(val) {
   if (val == null) return [];
@@ -60,6 +77,53 @@ function mergeWithStored(metadataPath, folder, items, coverRouteBase) {
     if (fs.existsSync(coverPath)) result.cover = `${coverRouteBase}/${item.id}/cover.webp`;
     return result;
   });
+}
+
+/**
+ * Delete franchise or series from server if no game uses it and it has no cover.
+ * @param {string} metadataPath
+ * @param {"franchises"|"series"} folder - "franchises" or "series"
+ * @param {number} id - franchise/series id
+ * @param {Object} allGames - map of game id -> game (remaining games, without the one being updated/deleted)
+ * @returns {boolean} true if deleted
+ */
+function deleteFranchiseOrSeriesIfUnused(metadataPath, folder, id, allGames) {
+  const gameField = folder === "franchises" ? "franchise" : "collection";
+  const isUsed = Object.values(allGames).some((game) => {
+    const raw = game[gameField];
+    const arr = toArray(raw);
+    return arr.some((item) => {
+      const normalized = normalizeItem(item);
+      return normalized && normalized.id === id;
+    });
+  });
+  if (isUsed) return false;
+
+  const dir = getItemDir(metadataPath, folder, id);
+  const coverPath = path.join(dir, "cover.webp");
+  if (fs.existsSync(coverPath)) return false;
+
+  const metaPath = getMetadataPath(metadataPath, folder, id);
+  if (fs.existsSync(metaPath)) {
+    try {
+      fs.unlinkSync(metaPath);
+    } catch (err) {
+      console.error(`Failed to delete ${folder} ${id} metadata:`, err.message);
+      return false;
+    }
+  }
+  if (fs.existsSync(dir)) {
+    try {
+      if (typeof fs.rmSync === "function") {
+        fs.rmSync(dir, { recursive: true });
+      } else {
+        removeDirectoryIfEmpty(dir);
+      }
+    } catch (err) {
+      removeDirectoryIfEmpty(dir);
+    }
+  }
+  return true;
 }
 
 function registerSeriesAndFranchisesRoutes(app, requireToken, allGames, metadataPath) {
@@ -171,4 +235,6 @@ function registerSeriesAndFranchisesRoutes(app, requireToken, allGames, metadata
 
 module.exports = {
   registerSeriesAndFranchisesRoutes,
+  ensureFranchiseSeriesExistBatch,
+  deleteFranchiseOrSeriesIfUnused,
 };

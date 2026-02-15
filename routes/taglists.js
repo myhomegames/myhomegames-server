@@ -108,6 +108,14 @@ function createTagRoutes(config) {
     return metadata && metadata.title ? metadata.title : null;
   }
 
+  /** Get full tag object by id; returns null if not found. */
+  function findTagById(metadataPath, tagId) {
+    const tags = loadTags(metadataPath);
+    const id = Number(tagId);
+    if (Number.isNaN(id)) return null;
+    return tags.find((t) => t.id === id) || null;
+  }
+
   /**
    * Resolve an array of tag ids (or legacy titles) to [{ id, title }, ...].
    * Skips invalid ids and unknown titles.
@@ -378,11 +386,10 @@ function createTagRoutes(config) {
       });
     });
 
-    app.put(`${normalizedRouteBase}/:tagTitle`, requireToken, (req, res) => {
-      const tagTitle = decodeURIComponent(req.params.tagTitle);
-      const tagId = findTagIdByTitle(metadataPath, tagTitle);
+    app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
 
-      if (!tagId) {
+      if (!tag) {
         return res.status(404).json({ error: `${humanName} not found` });
       }
 
@@ -396,21 +403,21 @@ function createTagRoutes(config) {
       }
 
       try {
-        const metadata = updateTagMetadata(metadataPath, tagId, updates);
+        const metadata = updateTagMetadata(metadataPath, tag.id, updates);
         if (!metadata) {
           return res.status(404).json({ error: `${humanName} not found` });
         }
 
-        const tag = loadTags(metadataPath).find((t) => t.id === tagId);
+        const updatedTag = loadTags(metadataPath).find((t) => t.id === tag.id);
         const tagData = {
-          id: tagId,
+          id: tag.id,
           title: metadata.title,
         };
         if (metadata.showTitle !== undefined) {
           tagData.showTitle = metadata.showTitle;
         }
-        if (tag && tag.cover) {
-          tagData.cover = tag.cover;
+        if (updatedTag && updatedTag.cover) {
+          tagData.cover = updatedTag.cover;
         }
 
         res.json({
@@ -418,23 +425,17 @@ function createTagRoutes(config) {
           [responseKey]: tagData,
         });
       } catch (err) {
-        console.error(`Failed to update ${humanName.toLowerCase()} ${tagTitle}:`, err.message);
+        console.error(`Failed to update ${humanName.toLowerCase()} ${tag.title}:`, err.message);
         res.status(500).json({ error: `Failed to update ${humanName.toLowerCase()}` });
       }
     });
 
-    app.delete(`${normalizedRouteBase}/:tagTitle`, requireToken, (req, res) => {
-      const tagTitle = decodeURIComponent(req.params.tagTitle);
-      const tags = loadTags(metadataPath);
-
-      const tag = tags.find(
-        (item) => item.title.toLowerCase() === tagTitle.toLowerCase()
-      );
+    app.delete(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
       if (!tag) {
         return res.status(404).json({ error: `${humanName} not found` });
       }
 
-      const tagId = tag.id;
       const tagTitleLower = tag.title.toLowerCase();
       const isUsed = Object.values(allGames).some((game) => {
         const values = game[gameField];
@@ -442,7 +443,7 @@ function createTagRoutes(config) {
         const list = Array.isArray(values) ? values : [values];
         return list.some((value) => {
           const v = value != null && typeof value === "object" && "id" in value ? value.id : value;
-          if (typeof v === "number" && !Number.isNaN(v)) return v === tagId;
+          if (typeof v === "number" && !Number.isNaN(v)) return v === tag.id;
           if (typeof v === "string") return v.trim().toLowerCase() === tagTitleLower;
           return false;
         });
@@ -451,24 +452,23 @@ function createTagRoutes(config) {
       if (isUsed) {
         return res.status(409).json({
           error: `${humanName} is still in use by one or more games`,
-          [responseKey]: tagTitle,
+          [responseKey]: tag.title,
         });
       }
 
       try {
-        deleteTag(metadataPath, tagTitle);
+        deleteTag(metadataPath, tag.title);
         res.json({ status: "success" });
       } catch (err) {
-        console.error(`Failed to delete ${humanName.toLowerCase()} ${tagTitle}:`, err.message);
+        console.error(`Failed to delete ${humanName.toLowerCase()} ${tag.title}:`, err.message);
         res.status(500).json({ error: `Failed to delete ${humanName.toLowerCase()}` });
       }
     });
 
-    app.post(`${normalizedRouteBase}/:tagTitle/upload-cover`, requireToken, upload.single("file"), (req, res) => {
-      const tagTitle = decodeURIComponent(req.params.tagTitle);
-      const tagId = findTagIdByTitle(metadataPath, tagTitle);
+    app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
 
-      if (!tagId) {
+      if (!tag) {
         return res.status(404).json({ error: `${humanName} not found` });
       }
 
@@ -483,7 +483,7 @@ function createTagRoutes(config) {
       }
 
       try {
-        const tagDir = getTagDir(metadataPath, tagId);
+        const tagDir = getTagDir(metadataPath, tag.id);
         ensureDirectoryExists(tagDir);
         const coverPath = path.join(tagDir, "cover.webp");
         fs.writeFileSync(coverPath, file.buffer);
@@ -491,37 +491,38 @@ function createTagRoutes(config) {
         res.json({
           status: "success",
           [responseKey]: {
-            title: tagTitle,
-            cover: `/${coverPrefix}/${encodeURIComponent(tagTitle)}`,
+            id: tag.id,
+            title: tag.title,
+            cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
           },
         });
       } catch (error) {
-        console.error(`Failed to save cover for ${humanName.toLowerCase()} ${tagTitle}:`, error);
+        console.error(`Failed to save cover for ${humanName.toLowerCase()} ${tag.title}:`, error);
         res.status(500).json({ error: "Failed to save cover image" });
       }
     });
 
-    app.delete(`${normalizedRouteBase}/:tagTitle/delete-cover`, requireToken, (req, res) => {
-      const tagTitle = decodeURIComponent(req.params.tagTitle);
-      const tagId = findTagIdByTitle(metadataPath, tagTitle);
-      if (!tagId) {
+    app.delete(`${normalizedRouteBase}/:id/delete-cover`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
+      if (!tag) {
         return res.status(404).json({ error: `${humanName} not found` });
       }
 
       try {
         deleteMediaFile({
           metadataPath,
-          resourceId: tagId,
+          resourceId: tag.id,
           resourceType,
           mediaType: "cover",
         });
 
         const tagData = {
-          title: tagTitle,
+          id: tag.id,
+          title: tag.title,
         };
-        const coverPath = path.join(metadataPath, "content", contentFolder, String(tagId), "cover.webp");
+        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
         if (fs.existsSync(coverPath)) {
-          tagData.cover = `/${coverPrefix}/${encodeURIComponent(tagTitle)}`;
+          tagData.cover = `${normalizedRouteBase}/${tag.id}/cover.webp`;
         }
 
         res.json({
@@ -529,7 +530,7 @@ function createTagRoutes(config) {
           [responseKey]: tagData,
         });
       } catch (error) {
-        console.error(`Failed to delete cover for ${humanName.toLowerCase()} ${tagTitle}:`, error);
+        console.error(`Failed to delete cover for ${humanName.toLowerCase()} ${tag.title}:`, error);
         res.status(500).json({ error: "Failed to delete cover image" });
       }
     });
@@ -568,6 +569,13 @@ function createTagRoutes(config) {
     });
 
     if (isUsed) {
+      return false;
+    }
+
+    // Only delete if the tag has no cover (user may want to keep tags that have a custom cover)
+    const tagDir = getTagDir(metadataPath, tagId);
+    const coverPath = path.join(tagDir, "cover.webp");
+    if (fs.existsSync(coverPath)) {
       return false;
     }
 

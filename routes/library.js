@@ -41,6 +41,7 @@ const { removeGameFromRecommended } = require("./recommended");
 const { removeGameFromAllCollections } = require("./collections");
 const { ensureDevelopersExistBatch, removeGameFromAllDevelopers, removeGameFromDeveloper } = require("./developers");
 const { ensurePublishersExistBatch, removeGameFromAllPublishers, removeGameFromPublisher } = require("./publishers");
+const { ensureFranchiseSeriesExistBatch, deleteFranchiseOrSeriesIfUnused } = require("./seriesAndFranchises");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
@@ -610,12 +611,73 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
       if (newPubs.length > 0) ensurePublishersExistBatch(metadataPath, newPubs, gameId);
     }
-    // Franchise and collection (series): normalize to array of { id, name }
+    // Franchise and collection (series): normalize to array of { id, name }; ensure metadata exists for new ones
     if ("franchise" in filteredUpdates) {
       filteredUpdates.franchise = validateDevPubArray(filteredUpdates.franchise) || null;
+      if (filteredUpdates.franchise && filteredUpdates.franchise.length > 0) {
+        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.franchise, "franchises");
+      }
     }
     if ("collection" in filteredUpdates) {
       filteredUpdates.collection = validateDevPubArray(filteredUpdates.collection) || null;
+      if (filteredUpdates.collection && filteredUpdates.collection.length > 0) {
+        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.collection, "series");
+      }
+    }
+
+    // Compute which tag ids were removed (for cleanup: delete tag from server if unused and no cover)
+    const toTagIdArray = (val) => {
+      if (val == null) return [];
+      const arr = Array.isArray(val) ? val : [val];
+      return arr
+        .map((x) => {
+          if (typeof x === "number" && !Number.isNaN(x)) return x;
+          if (typeof x === "object" && x != null && "id" in x) return Number(x.id);
+          return null;
+        })
+        .filter((x) => x != null && !Number.isNaN(x));
+    };
+    const tagCleanup = [];
+    if ("genre" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.genre);
+      const newIds = toTagIdArray(filteredUpdates.genre);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "genre", id, deleteFn: deleteCategoryIfUnused }));
+    }
+    if ("themes" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.themes);
+      const newIds = toTagIdArray(filteredUpdates.themes);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "themes", id, deleteFn: deleteThemeIfUnused }));
+    }
+    if ("platforms" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.platforms);
+      const newIds = toTagIdArray(filteredUpdates.platforms);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "platforms", id, deleteFn: deletePlatformIfUnused }));
+    }
+    if ("gameEngines" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.gameEngines);
+      const newIds = toTagIdArray(filteredUpdates.gameEngines);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "gameEngines", id, deleteFn: deleteGameEngineIfUnused }));
+    }
+    if ("gameModes" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.gameModes);
+      const newIds = toTagIdArray(filteredUpdates.gameModes);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "gameModes", id, deleteFn: deleteGameModeIfUnused }));
+    }
+    if ("playerPerspectives" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.playerPerspectives);
+      const newIds = toTagIdArray(filteredUpdates.playerPerspectives);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "playerPerspectives", id, deleteFn: deletePlayerPerspectiveIfUnused }));
+    }
+    const franchiseSeriesCleanup = [];
+    if ("franchise" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.franchise);
+      const newIds = toTagIdArray(filteredUpdates.franchise);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => franchiseSeriesCleanup.push({ folder: "franchises", id }));
+    }
+    if ("collection" in filteredUpdates) {
+      const oldIds = toTagIdArray(game.collection);
+      const newIds = toTagIdArray(filteredUpdates.collection);
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => franchiseSeriesCleanup.push({ folder: "series", id }));
     }
 
     // Track if we need to delete executables (when executables is null)
@@ -767,6 +829,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(allGames[gameId], filteredUpdates);
         invalidateLibraryGamesResponseCache();
+      }
+      // Remove tags that are no longer used by any game (and have no cover)
+      for (const { id, deleteFn } of tagCleanup) {
+        deleteFn(metadataPath, metadataPath, id, allGames);
+      }
+      for (const { folder, id } of franchiseSeriesCleanup) {
+        deleteFranchiseOrSeriesIfUnused(metadataPath, folder, id, allGames);
       }
       // Sync executables in cache with metadata (respecting order)
       if (shouldDeleteExecutables || 'executables' in filteredUpdates) {
@@ -1308,6 +1377,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
       if (rawPublishers && rawPublishers.length > 0) ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
+      if (newGame.franchise && newGame.franchise.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, newGame.franchise, "franchises");
+      if (newGame.collection && newGame.collection.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, newGame.collection, "series");
 
       // Save game to its own folder
       saveGame(metadataPath, newGame);
@@ -1386,7 +1457,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const gamePerspectives = game.playerPerspectives
         ? (Array.isArray(game.playerPerspectives) ? game.playerPerspectives : [game.playerPerspectives])
         : [];
-      
+      const toFranchiseSeriesIdArray = (val) => {
+        if (val == null) return [];
+        const arr = Array.isArray(val) ? val : [val];
+        return arr
+          .map((x) => (typeof x === "object" && x != null && "id" in x ? Number(x.id) : null))
+          .filter((x) => x != null && !Number.isNaN(x));
+      };
+      const gameFranchiseIds = toFranchiseSeriesIdArray(game.franchise);
+      const gameCollectionIds = toFranchiseSeriesIdArray(game.collection);
+
       // Delete game folder and its metadata.json
       deleteGame(metadataPath, gameId);
       
@@ -1417,16 +1497,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         { values: gamePerspectives, deleteFn: deletePlayerPerspectiveIfUnused },
       ];
 
-      if (tagSetsToClean.some((set) => set.values.length > 0)) {
-        // Use in-memory allGames (already without deleted game) instead of loading from disk
-        const remainingGamesMap = { ...allGames };
+      const remainingGamesMap = { ...allGames };
 
+      if (tagSetsToClean.some((set) => set.values.length > 0)) {
         for (const { values, deleteFn } of tagSetsToClean) {
           for (const value of values) {
             if (value === null || value === undefined) continue;
             deleteFn(metadataPath, metadataPath, value, remainingGamesMap);
           }
         }
+      }
+
+      for (const id of gameFranchiseIds) {
+        deleteFranchiseOrSeriesIfUnused(metadataPath, "franchises", id, remainingGamesMap);
+      }
+      for (const id of gameCollectionIds) {
+        deleteFranchiseOrSeriesIfUnused(metadataPath, "series", id, remainingGamesMap);
       }
       
       res.json({ status: "success" });

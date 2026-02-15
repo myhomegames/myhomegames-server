@@ -466,6 +466,54 @@ describe('PUT /games/:gameId', () => {
       }
     }
   });
+
+  test('should delete orphaned franchise when removing from game via PUT', async () => {
+    const franchiseId = 66666;
+    const igdbId = 999990;
+
+    const addRes = await request(app)
+      .post('/games/add-from-igdb')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        igdbId,
+        name: 'Test Game to Remove Franchise',
+        summary: 'Test',
+        releaseDate: 1609459200,
+        franchise: [{ id: franchiseId, name: 'Orphan Franchise After PUT' }],
+        criticRating: 70,
+        userRating: 65
+      })
+      .expect(200);
+    const gameId = addRes.body.gameId;
+
+    let franchisesRes = await request(app)
+      .get('/franchises')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(franchisesRes.body.franchises.some((f) => f.id === franchiseId)).toBe(true);
+
+    await request(app)
+      .put(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ franchise: null })
+      .expect(200);
+
+    franchisesRes = await request(app)
+      .get('/franchises')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(franchisesRes.body.franchises.some((f) => f.id === franchiseId)).toBe(false);
+
+    const fs = require('fs');
+    const path = require('path');
+    const franchiseDir = path.join(testMetadataPath, 'content', 'franchises', String(franchiseId));
+    expect(fs.existsSync(franchiseDir)).toBe(false);
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
 });
 
 describe('POST /games/:gameId/reload', () => {
@@ -1508,6 +1556,65 @@ describe('DELETE /games/:gameId', () => {
       (c) => (typeof c === 'string' ? c : c.title) === categoryTitle
     );
     expect(categoryExistsFinal).toBe(false);
+  });
+
+  test('should delete orphaned franchise and series when deleting a game', async () => {
+    const franchiseId = 88888;
+    const seriesId = 77777;
+    const igdbId = 999991;
+
+    const addGameResponse = await request(app)
+      .post('/games/add-from-igdb')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        igdbId,
+        name: 'Test Game with Orphan Franchise and Series',
+        summary: 'Test summary',
+        releaseDate: 1609459200,
+        franchise: [{ id: franchiseId, name: 'Orphan Franchise' }],
+        collection: [{ id: seriesId, name: 'Orphan Series' }],
+        criticRating: 80,
+        userRating: 75
+      })
+      .expect(200);
+
+    const gameId = addGameResponse.body.gameId;
+
+    let franchisesRes = await request(app)
+      .get('/franchises')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(franchisesRes.body.franchises.some((f) => f.id === franchiseId)).toBe(true);
+
+    let seriesRes = await request(app)
+      .get('/series')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(seriesRes.body.series.some((s) => s.id === seriesId)).toBe(true);
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    franchisesRes = await request(app)
+      .get('/franchises')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(franchisesRes.body.franchises.some((f) => f.id === franchiseId)).toBe(false);
+
+    seriesRes = await request(app)
+      .get('/series')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(seriesRes.body.series.some((s) => s.id === seriesId)).toBe(false);
+
+    const fs = require('fs');
+    const path = require('path');
+    const franchiseDir = path.join(testMetadataPath, 'content', 'franchises', String(franchiseId));
+    const seriesDir = path.join(testMetadataPath, 'content', 'series', String(seriesId));
+    expect(fs.existsSync(franchiseDir)).toBe(false);
+    expect(fs.existsSync(seriesDir)).toBe(false);
   });
 });
 
