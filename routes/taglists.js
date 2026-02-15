@@ -89,7 +89,7 @@ function createTagRoutes(config) {
 
   function findTagIdByTitle(metadataPath, tagTitle) {
     const tags = loadTags(metadataPath);
-    const trimmedTitle = tagTitle.trim();
+    const trimmedTitle = String(tagTitle).trim();
     const existingTag = tags.find(
       (tag) => tag.title.toLowerCase() === trimmedTitle.toLowerCase()
     );
@@ -97,6 +97,90 @@ function createTagRoutes(config) {
       return existingTag.id;
     }
     return null;
+  }
+
+  /** Get tag title by id; returns null if not found. */
+  function findTagTitleById(metadataPath, tagId) {
+    const id = Number(tagId);
+    if (isNaN(id)) return null;
+    const metadataFilePath = getTagMetadataPath(metadataPath, id);
+    const metadata = readJsonFile(metadataFilePath, null);
+    return metadata && metadata.title ? metadata.title : null;
+  }
+
+  /**
+   * Resolve an array of tag ids (or legacy titles) to [{ id, title }, ...].
+   * Skips invalid ids and unknown titles.
+   */
+  function resolveTagIdsToObjects(metadataPath, tagIdsOrTitles) {
+    if (!tagIdsOrTitles || !Array.isArray(tagIdsOrTitles) || tagIdsOrTitles.length === 0) {
+      return [];
+    }
+    const tags = loadTags(metadataPath);
+    const byId = new Map(tags.map((t) => [t.id, t]));
+    const byTitleLower = new Map(tags.map((t) => [t.title.toLowerCase(), t]));
+    const seen = new Set();
+    const result = [];
+    for (const raw of tagIdsOrTitles) {
+      if (raw === null || raw === undefined) continue;
+      let idOrTitle = raw;
+      if (typeof raw === "object" && raw !== null && "id" in raw) idOrTitle = raw.id;
+      const asNum = Number(idOrTitle);
+      const tag = !Number.isNaN(asNum)
+        ? byId.get(asNum)
+        : byTitleLower.get(String(idOrTitle).toLowerCase().trim());
+      if (tag && !seen.has(tag.id)) {
+        seen.add(tag.id);
+        result.push({ id: tag.id, title: tag.title });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Normalize tag field from request: string[] (titles) or number[] (ids) -> number[] (ids).
+   * Ensures tags exist when titles are sent; returns null if invalid.
+   */
+  function normalizeTagFieldToIds(metadataPath, value) {
+    if (value == null) return null;
+    const arr = Array.isArray(value) ? value : [value];
+    if (arr.length === 0) return null;
+    const tags = loadTags(metadataPath);
+    const byId = new Map(tags.map((t) => [t.id, t]));
+    const byTitleLower = new Map(tags.map((t) => [t.title.toLowerCase(), t]));
+    const ids = [];
+    const titlesToCreate = [];
+    for (const raw of arr) {
+      if (raw === null || raw === undefined) continue;
+      if (typeof raw === "object" && raw !== null && "id" in raw) {
+        const id = Number(raw.id);
+        if (!Number.isNaN(id) && byId.has(id)) ids.push(id);
+        continue;
+      }
+      const asNum = Number(raw);
+      if (!Number.isNaN(asNum) && byId.has(asNum)) {
+        ids.push(asNum);
+        continue;
+      }
+      if (typeof raw === "string" && raw.trim()) {
+        const t = byTitleLower.get(raw.trim().toLowerCase());
+        if (t) {
+          ids.push(t.id);
+        } else {
+          titlesToCreate.push(raw.trim());
+        }
+      }
+    }
+    if (titlesToCreate.length > 0) {
+      ensureTagsExist(metadataPath, titlesToCreate);
+      const tagsAfter = loadTags(metadataPath);
+      const byTitleLowerAfter = new Map(tagsAfter.map((t) => [t.title.toLowerCase(), t]));
+      for (const title of titlesToCreate) {
+        const tag = byTitleLowerAfter.get(title.toLowerCase());
+        if (tag) ids.push(tag.id);
+      }
+    }
+    return ids.length > 0 ? ids : null;
   }
 
   function saveTag(metadataPath, tagTitle) {
@@ -350,14 +434,18 @@ function createTagRoutes(config) {
         return res.status(404).json({ error: `${humanName} not found` });
       }
 
-      const tagTitleLower = tagTitle.toLowerCase();
+      const tagId = tag.id;
+      const tagTitleLower = tag.title.toLowerCase();
       const isUsed = Object.values(allGames).some((game) => {
         const values = game[gameField];
         if (!values) return false;
-        if (Array.isArray(values)) {
-          return values.some((value) => String(value).toLowerCase() === tagTitleLower);
-        }
-        return String(values).toLowerCase() === tagTitleLower;
+        const list = Array.isArray(values) ? values : [values];
+        return list.some((value) => {
+          const v = value != null && typeof value === "object" && "id" in value ? value.id : value;
+          if (typeof v === "number" && !Number.isNaN(v)) return v === tagId;
+          if (typeof v === "string") return v.trim().toLowerCase() === tagTitleLower;
+          return false;
+        });
       });
 
       if (isUsed) {
@@ -447,30 +535,43 @@ function createTagRoutes(config) {
     });
   }
 
-  function deleteTagIfUnused(metadataPath, metadataGamesDir, tagTitle, allGamesFromFile) {
+  /**
+   * Delete tag if no game references it.
+   * @param {string} metadataPath
+   * @param {string} metadataGamesDir
+   * @param {number|string} tagIdOrTitle - tag id (number) or title (string)
+   * @param {Object} allGamesFromFile - map of game id -> game
+   * @returns {boolean}
+   */
+  function deleteTagIfUnused(metadataPath, metadataGamesDir, tagIdOrTitle, allGamesFromFile) {
     const tags = loadTags(metadataPath);
-    const tag = tags.find(
-      (item) => item.title.toLowerCase() === tagTitle.toLowerCase()
-    );
+    const tag =
+      typeof tagIdOrTitle === "number" || /^\d+$/.test(String(tagIdOrTitle))
+        ? tags.find((t) => t.id === Number(tagIdOrTitle))
+        : tags.find((t) => t.title.toLowerCase() === String(tagIdOrTitle).toLowerCase());
     if (!tag) {
       return false;
     }
 
-    const tagTitleLower = tagTitle.toLowerCase();
+    const tagId = tag.id;
+    const tagTitleLower = tag.title.toLowerCase();
     const isUsed = Object.values(allGamesFromFile).some((game) => {
       const values = game[gameField];
       if (!values) return false;
-      if (Array.isArray(values)) {
-        return values.some((value) => String(value).toLowerCase() === tagTitleLower);
-      }
-      return String(values).toLowerCase() === tagTitleLower;
+      const list = Array.isArray(values) ? values : [values];
+      return list.some((value) => {
+        const v = value != null && typeof value === "object" && "id" in value ? value.id : value;
+        if (typeof v === "number" && !Number.isNaN(v)) return v === tagId;
+        if (typeof v === "string") return v.trim().toLowerCase() === tagTitleLower;
+        return false;
+      });
     });
 
     if (isUsed) {
       return false;
     }
 
-    deleteTag(metadataPath, tagTitle);
+    deleteTag(metadataPath, tag.title);
 
     return true;
   }
@@ -478,6 +579,10 @@ function createTagRoutes(config) {
   return {
     loadTags,
     loadTag,
+    findTagIdByTitle,
+    findTagTitleById,
+    resolveTagIdsToObjects,
+    normalizeTagFieldToIds,
     ensureTagExists,
     ensureTagsExist,
     deleteTagIfUnused,

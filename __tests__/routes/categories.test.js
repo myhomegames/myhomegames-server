@@ -536,7 +536,11 @@ describe('Game update with category creation and deletion', () => {
       
       expect(updateResponse.body.game).toHaveProperty('genre');
       expect(Array.isArray(updateResponse.body.game.genre)).toBe(true);
-      expect(updateResponse.body.game.genre).toContain(newCategoryTitle);
+      // API returns genre as [{ id, title }, ...]
+      const hasGenre = updateResponse.body.game.genre.some(
+        (g) => (typeof g === 'object' && g && g.title === newCategoryTitle) || g === newCategoryTitle
+      );
+      expect(hasGenre).toBe(true);
       
       // Verify category still exists
       const categoriesResponse = await request(app)

@@ -62,32 +62,36 @@ describe('GET /libraries/library/games', () => {
     }
   });
 
+  // Helper: tag fields in API are [{ id, title }, ...]; support legacy string[] in assertions
+  const tagArrayContainsTitle = (arr, title) =>
+    Array.isArray(arr) && arr.some((t) => (typeof t === 'object' && t && t.title === title) || t === title);
+
   test('should return games with genres from fixtures', async () => {
     const response = await request(app)
       .get('/libraries/library/games')
       .set('X-Auth-Token', 'test-token')
       .expect(200);
-    
+
     const game1 = response.body.games.find(g => g.id === 1);
     if (game1) {
       expect(game1).toHaveProperty('genre');
       expect(Array.isArray(game1.genre)).toBe(true);
-      expect(game1.genre).toContain('Adventure');
+      expect(tagArrayContainsTitle(game1.genre, 'Adventure')).toBe(true);
     }
-    
+
     const game2 = response.body.games.find(g => g.id === 2);
     if (game2) {
       expect(game2).toHaveProperty('genre');
       expect(Array.isArray(game2.genre)).toBe(true);
-      expect(game2.genre).toContain('Role-playing (RPG)');
+      expect(tagArrayContainsTitle(game2.genre, 'Role-playing (RPG)')).toBe(true);
     }
-    
+
     const game3 = response.body.games.find(g => g.id === 3);
     if (game3) {
       expect(game3).toHaveProperty('genre');
       expect(Array.isArray(game3.genre)).toBe(true);
-      expect(game3.genre).toContain('Puzzle');
-      expect(game3.genre).toContain('Strategy');
+      expect(tagArrayContainsTitle(game3.genre, 'Puzzle')).toBe(true);
+      expect(tagArrayContainsTitle(game3.genre, 'Strategy')).toBe(true);
     }
   });
 
@@ -1399,7 +1403,11 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(gameResponse.body.genre).toContain('orphanedcategory');
+    expect(
+      (gameResponse.body.genre || []).some(
+        (g) => (typeof g === 'object' && g && g.title === 'orphanedcategory') || g === 'orphanedcategory'
+      )
+    ).toBe(true);
     
     // Delete the game
     const deleteResponse = await request(app)
@@ -1496,7 +1504,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    const categoryExistsFinal = categoriesFinal.body.categories.includes(categoryTitle);
+    const categoryExistsFinal = categoriesFinal.body.categories.some(
+      (c) => (typeof c === 'string' ? c : c.title) === categoryTitle
+    );
     expect(categoryExistsFinal).toBe(false);
   });
 });
@@ -1535,10 +1545,13 @@ describe('POST /games/add-from-igdb', () => {
     expect(response.body.game).toHaveProperty('title', 'Test Game from IGDB');
     expect(response.body.game).toHaveProperty('genre');
     expect(Array.isArray(response.body.game.genre)).toBe(true);
-    // Genres should be preserved as-is
-    expect(response.body.game.genre).toContain('New Genre 1');
-    expect(response.body.game.genre).toContain('New Genre 2');
-    
+    expect(
+      response.body.game.genre.some((g) => (typeof g === 'object' && g && g.title === 'New Genre 1') || g === 'New Genre 1')
+    ).toBe(true);
+    expect(
+      response.body.game.genre.some((g) => (typeof g === 'object' && g && g.title === 'New Genre 2') || g === 'New Genre 2')
+    ).toBe(true);
+
     // Verify categories were created
     const categoriesAfter = await request(app)
       .get('/categories')
@@ -1598,10 +1611,12 @@ describe('POST /games/add-from-igdb', () => {
     
     expect(response.body).toHaveProperty('status', 'success');
     
-    // Verify genre was preserved
+    // Verify genre was preserved (API returns [{ id, title }, ...])
     expect(response.body.game).toHaveProperty('genre');
     expect(Array.isArray(response.body.game.genre)).toBe(true);
-    expect(response.body.game.genre).toContain('Existing Genre');
+    expect(
+      response.body.game.genre.some((g) => (typeof g === 'object' && g && g.title === 'Existing Genre') || g === 'Existing Genre')
+    ).toBe(true);
     
     // Verify category count didn't increase
     const categoriesAfter = await request(app)
@@ -1801,11 +1816,12 @@ describe('POST /games/add-from-igdb', () => {
     expect(response.body).toHaveProperty('status', 'success');
     expect(response.body.game).toHaveProperty('genre');
     expect(Array.isArray(response.body.game.genre)).toBe(true);
-    
-    // Verify genres are preserved as-is
-    expect(response.body.game.genre).toContain('ACTION');
-    expect(response.body.game.genre).toContain('ADVENTURE');
-    expect(response.body.game.genre).toContain('RPG');
+
+    // API returns genre as [{ id, title }, ...]
+    const genreTitles = response.body.game.genre.map((g) => (typeof g === 'object' && g && g.title ? g.title : g));
+    expect(genreTitles).toContain('ACTION');
+    expect(genreTitles).toContain('ADVENTURE');
+    expect(genreTitles).toContain('RPG');
     
     // Verify categories were created
     // Note: On case-insensitive filesystems (like macOS), category folder names use the first case created

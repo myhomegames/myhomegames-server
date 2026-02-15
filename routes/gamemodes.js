@@ -17,4 +17,6 @@ module.exports = {
   ensureGameModesExistBatch: routes.ensureTagsExist,
   deleteGameModeIfUnused: routes.deleteTagIfUnused,
   registerGameModesRoutes: routes.registerTagRoutes,
+  resolveGameModeIdsToObjects: routes.resolveTagIdsToObjects,
+  normalizeGameModeFieldToIds: routes.normalizeTagFieldToIds,
 };

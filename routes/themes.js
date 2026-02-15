@@ -16,4 +16,6 @@ module.exports = {
   ensureThemesExistBatch: routes.ensureTagsExist,
   deleteThemeIfUnused: routes.deleteTagIfUnused,
   registerThemesRoutes: routes.registerTagRoutes,
+  resolveThemeIdsToObjects: routes.resolveTagIdsToObjects,
+  normalizeThemeFieldToIds: routes.normalizeTagFieldToIds,
 };

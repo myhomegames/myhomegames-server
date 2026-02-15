@@ -17,4 +17,6 @@ module.exports = {
   ensureGameEnginesExistBatch: routes.ensureTagsExist,
   deleteGameEngineIfUnused: routes.deleteTagIfUnused,
   registerGameEnginesRoutes: routes.registerTagRoutes,
+  resolveGameEngineIdsToObjects: routes.resolveTagIdsToObjects,
+  normalizeGameEngineFieldToIds: routes.normalizeTagFieldToIds,
 };

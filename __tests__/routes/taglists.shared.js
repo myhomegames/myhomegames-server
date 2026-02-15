@@ -580,7 +580,11 @@ function runTagListTests(config) {
 
         expect(updateResponse.body.game).toHaveProperty(gameField);
         expect(Array.isArray(updateResponse.body.game[gameField])).toBe(true);
-        expect(updateResponse.body.game[gameField]).toContain(newTagTitle);
+        // API returns tag fields as [{ id, title }, ...]
+        const hasNewTag = updateResponse.body.game[gameField].some(
+          (t) => (typeof t === "object" && t && t.title === newTagTitle) || t === newTagTitle
+        );
+        expect(hasNewTag).toBe(true);
 
         const tagsResponse = await request(app)
           .get(normalizedRouteBase)
