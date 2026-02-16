@@ -42,7 +42,6 @@ function loadItems(metadataPath, contentFolder) {
           games: meta.games || [],
           showTitle: meta.showTitle !== false,
           igdbCover: meta.igdbCover || null,
-          igdbSummary: meta.igdbSummary || null,
           ...meta,
         });
       }
