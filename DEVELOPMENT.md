@@ -49,6 +49,32 @@ openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PA
 
 **Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a service like Cloudflare Tunnel.
 
+### Browser Security Warning
+
+When using self-signed certificates, your browser will show a security warning (e.g., `ERR_CERT_AUTHORITY_INVALID`). This is normal for development:
+
+1. Open `https://localhost:41440` (or your configured HTTPS port) in your browser
+2. Click "Advanced" or "Show Details"
+3. Click "Proceed to localhost" or "Accept the Risk and Continue"
+
+After accepting the certificate, the browser will trust it for that session and API requests from the client will work correctly.
+
+For a better development experience without warnings, you can use `mkcert` to generate trusted certificates:
+
+```bash
+# Install mkcert (macOS)
+brew install mkcert
+mkcert -install
+
+# Generate trusted certificates in metadata_path/certs/
+cd ~/Library/Application\ Support/MyHomeGames/certs
+mkcert localhost 127.0.0.1
+mv localhost+1.pem cert.pem
+mv localhost+1-key.pem key.pem
+```
+
+Then restart the server. With `mkcert`, certificates are trusted by your system and no warnings will appear.
+
 ### Configure Server for HTTPS
 
 Add the following to your `.env` file:
@@ -155,6 +181,18 @@ This will:
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
 4. Attach the `.pkg` installer as a release asset
+
+### Build prerequisites
+
+The full build (`npm run build`) produces packages for multiple platforms. Requirements:
+
+- **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper). The script builds both x64 and arm64 `.pkg` installers.
+- **Linux (.tar.gz):** No extra tools; Node and npm only.
+- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
+- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
+- **Windows (.zip):** No extra tools; Node and npm only.
+
+Temporary build files (including RPM working directory) are created under `build/` and removed at the end; only the final packages remain in `build/`.
 
 ### GitHub Token Configuration
 

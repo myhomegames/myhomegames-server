@@ -8,6 +8,47 @@ Express.js server for the MyHomeGames application.
 npm install
 ```
 
+## First Time Setup (For End Users)
+
+If you've installed MyHomeGames from the `.pkg` installer, follow these steps to get started:
+
+### 1. Start the Application
+
+Launch the MyHomeGames application from your Applications folder. The server will automatically start and generate SSL certificates on first run.
+
+### 2. Accept the SSL Certificate
+
+When you first access the web interface, your browser will show a security warning because the application uses a self-signed SSL certificate. This is normal and safe for local use.
+
+**To fix this:**
+
+1. Open your browser and navigate to `https://localhost:41440`
+2. You'll see a security warning (e.g., "Your connection is not private" or "ERR_CERT_AUTHORITY_INVALID")
+3. Click **"Advanced"** or **"Show Details"**
+4. Click **"Proceed to localhost"** or **"Accept the Risk and Continue"**
+
+After accepting the certificate, the browser will trust it and you can use the application normally.
+
+**Note:** You only need to do this once per browser. The certificate will be trusted for future sessions.
+
+### 3. Alternative: Use Trusted Certificates (Optional)
+
+If you want to avoid the security warning, you can use `mkcert` to generate trusted certificates:
+
+```bash
+# Install mkcert (macOS)
+brew install mkcert
+mkcert -install
+
+# Generate trusted certificates
+cd ~/Library/Application\ Support/MyHomeGames/certs
+mkcert localhost 127.0.0.1
+mv localhost+1.pem cert.pem
+mv localhost+1-key.pem key.pem
+```
+
+Then restart the MyHomeGames application. With `mkcert`, certificates are trusted by your system and no warnings will appear.
+
 ## Configuration
 
 The server can be configured using environment variables. 
@@ -191,3 +232,26 @@ All authenticated endpoints require the `X-Auth-Token` header with either:
 - The development token (value from `API_TOKEN` environment variable, if set)
 - A valid Twitch OAuth access token
 
+## Troubleshooting
+
+### SSL Certificate Errors
+
+If you see errors like `ERR_CERT_AUTHORITY_INVALID` or "Your connection is not private" when accessing the application:
+
+1. This is normal on first launch - the application uses self-signed certificates for local HTTPS
+2. Follow the steps in the [First Time Setup](#first-time-setup-for-end-users) section above to accept the certificate
+3. You only need to do this once per browser
+
+### Application Won't Start
+
+- Check that ports 4000 (HTTP) and 41440 (HTTPS) are available
+- Verify that the application has proper permissions to create files in `~/Library/Application Support/MyHomeGames`
+- Check the console logs for error messages
+
+### Authentication Issues
+
+- Verify that Twitch OAuth credentials are correctly configured (if using Twitch authentication)
+- Check that `API_BASE` is set correctly in the environment variables
+- Review server logs for authentication errors
+
+For more troubleshooting information, see [DEVELOPMENT.md](DEVELOPMENT.md).

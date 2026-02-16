@@ -114,7 +114,16 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("./utils/
 const libraryRoutes = require("./routes/library");
 const recommendedRoutes = require("./routes/recommended");
 const categoriesRoutes = require("./routes/categories");
+const themesRoutes = require("./routes/themes");
+const platformsRoutes = require("./routes/platforms");
+const gameEnginesRoutes = require("./routes/gameengines");
+const gameModesRoutes = require("./routes/gamemodes");
+const playerPerspectivesRoutes = require("./routes/playerperspectives");
+const seriesRoutes = require("./routes/series");
+const franchisesRoutes = require("./routes/franchises");
 const collectionsRoutes = require("./routes/collections");
+const developersRoutes = require("./routes/developers");
+const publishersRoutes = require("./routes/publishers");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
 
@@ -147,6 +156,15 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "games"),
     path.join(METADATA_PATH, "content", "collections"),
     path.join(METADATA_PATH, "content", "categories"),
+    path.join(METADATA_PATH, "content", "themes"),
+    path.join(METADATA_PATH, "content", "platforms"),
+    path.join(METADATA_PATH, "content", "game-engines"),
+    path.join(METADATA_PATH, "content", "game-modes"),
+    path.join(METADATA_PATH, "content", "player-perspectives"),
+    path.join(METADATA_PATH, "content", "developers"),
+    path.join(METADATA_PATH, "content", "publishers"),
+    path.join(METADATA_PATH, "content", "series"),
+    path.join(METADATA_PATH, "content", "franchises"),
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "certs"),
   ];
@@ -232,7 +250,10 @@ if (process.env.NODE_ENV === 'test') {
 // Create settings.json with default settings if it doesn't exist (quick check)
 if (!fs.existsSync(SETTINGS_FILE)) {
   try {
-    const defaultSettings = { language: "en" };
+    const defaultSettings = {
+      language: "en",
+      visibleLibraries: ["recommended", "library", "collections", "categories"],
+    };
     writeSettings(defaultSettings);
   } catch (error) {
     // Continue if settings creation fails
@@ -276,14 +297,11 @@ setTimeout(() => {
   
   // Load games in background
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
-  // Recommended games are now just IDs pointing to games already in allGames
-  // Ensure recommended/metadata.json has all sections and is populated
-  recommendedRoutes.ensureRecommendedSectionsComplete(METADATA_PATH);
+  // Recommended sections are created/updated only when games are created
 }, 100); // Small delay to ensure server starts listening first
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
-libraryRoutes.registerLibraryRoutes(app, requireToken, METADATA_PATH, allGames);
 recommendedRoutes.registerRecommendedRoutes(app, requireToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, requireToken);
@@ -294,6 +312,39 @@ const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   METADATA_PATH,
   allGames
 );
+const developersHandler = developersRoutes.registerDevelopersRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  METADATA_PATH,
+  allGames
+);
+const publishersHandler = publishersRoutes.registerPublishersRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  METADATA_PATH,
+  allGames
+);
+const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
+libraryRoutes.registerLibraryRoutes(
+  app,
+  requireToken,
+  METADATA_PATH,
+  allGames,
+  updateCollectionsCache,
+  recommendedRoutes.ensureRecommendedSectionsComplete,
+  collectionsHandler.getCache,
+  developersHandler.getCache,
+  publishersHandler.getCache
+);
+themesRoutes.registerThemesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+gameModesRoutes.registerGameModesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
+seriesRoutes.registerSeriesRoutes(app, requireToken, allGames, METADATA_PATH);
+franchisesRoutes.registerFranchisesRoutes(app, requireToken, allGames, METADATA_PATH);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {
@@ -358,7 +409,7 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
   res.sendFile(backgroundPath);
 });
 
-// Endpoint: launcher — launches a whitelisted command for a game
+// Endpoint: launcher — launches an executable for a game
 app.get("/launcher", requireToken, (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
@@ -366,32 +417,55 @@ app.get("/launcher", requireToken, (req, res) => {
   const entry = allGames[Number(gameId)];
   if (!entry) return res.status(404).json({ error: "Game not found" });
 
-  // 'command' field contains only the extension without dot (e.g., "sh" or "bat")
-  // We need to construct the full path automatically
-  const commandExtension = entry.command;
+  // 'executables' field contains array of names (without extension)
+  // We need to construct the full path automatically using the first executable
+  const executables = entry.executables;
 
-  // Validate command extension exists
-  if (!commandExtension || typeof commandExtension !== 'string' || commandExtension.trim() === '') {
+  // Validate executables exists and has at least one item
+  if (!executables || !Array.isArray(executables) || executables.length === 0) {
     return res.status(400).json({
       error: "Launch failed",
-      detail: "Command is missing or invalid. Please check the game configuration."
+      detail: "No executables configured. Please check the game configuration."
     });
   }
 
-  // Normalize extension (remove dot if present, then add it back for file path)
-  const normalizedExt = commandExtension.startsWith('.') ? commandExtension.substring(1) : commandExtension;
-  if (normalizedExt !== 'sh' && normalizedExt !== 'bat') {
+  // Get executable name from query parameter or use first one
+  const requestedExecutableName = req.query.executableName;
+  let executableName;
+  if (requestedExecutableName && typeof requestedExecutableName === 'string' && requestedExecutableName.trim()) {
+    // Verify the requested executable exists in the list
+    if (executables.includes(requestedExecutableName.trim())) {
+      executableName = requestedExecutableName.trim();
+    } else {
+      return res.status(400).json({
+        error: "Launch failed",
+        detail: `Executable "${requestedExecutableName}" not found in game configuration.`
+      });
+    }
+  } else {
+    // Use first executable if no specific one requested
+    executableName = executables[0];
+  }
+  if (!executableName || typeof executableName !== 'string' || executableName.trim() === '') {
     return res.status(400).json({
       error: "Launch failed",
-      detail: "Invalid command extension. Only 'sh' and 'bat' are allowed."
+      detail: "Invalid executable name. Please check the game configuration."
     });
   }
   
-  // Construct the full path: {METADATA_PATH}/content/games/{gameId}/script.{extension}
-  const extension = `.${normalizedExt}`; // Add dot for file path
-  const scriptName = `script${extension}`;
+  // Construct the full path: {METADATA_PATH}/content/games/{gameId}/{name}.sh or {name}.bat
+  // Sanitize executable name for filesystem (files are saved with sanitized names)
+  const sanitizeExecutableName = (name) => {
+    if (!name || typeof name !== 'string') return '';
+    return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  };
+  const sanitizedExecutableName = sanitizeExecutableName(executableName);
   const gameContentDir = path.join(METADATA_PATH, "content", "games", String(gameId));
-  const fullCommandPath = path.join(gameContentDir, scriptName);
+  // Try .sh first, then .bat
+  let fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.sh`);
+  if (!fs.existsSync(fullCommandPath)) {
+    fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.bat`);
+  }
 
   // Validate that the script file exists
   if (!fs.existsSync(fullCommandPath)) {
@@ -417,13 +491,13 @@ app.get("/launcher", requireToken, (req, res) => {
       stdio: "ignore",
     });
 
-    // Handle spawn errors (e.g., command not found) - this happens synchronously
+    // Handle spawn errors (e.g., executable not found) - this happens synchronously
     child.on("error", (err) => {
       if (!responseSent) {
         responseSent = true;
         const errorMessage =
           err.code === "ENOENT"
-            ? `Command not found: ${fullCommandPath}. Please check if the executable exists.`
+            ? `Executable not found: ${fullCommandPath}. Please check if the executable exists.`
             : err.message;
         return res.status(500).json({
           error: "Launch failed",
@@ -458,15 +532,29 @@ app.post("/reload-games", requireToken, (req, res) => {
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
   // Recommended games are now just IDs pointing to games already in allGames
   const collectionsCache = collectionsHandler.reload();
+  developersHandler.reload();
+  publishersHandler.reload();
   const recommendedSections = recommendedRoutes.loadRecommendedSections(METADATA_PATH);
   const categories = categoriesRoutes.loadCategories(METADATA_PATH);
+  const themes = themesRoutes.loadThemes(METADATA_PATH);
+  const platforms = platformsRoutes.loadPlatforms(METADATA_PATH);
+  const gameEngines = gameEnginesRoutes.loadGameEngines(METADATA_PATH);
+  const gameModes = gameModesRoutes.loadGameModes(METADATA_PATH);
+  const playerPerspectives = playerPerspectivesRoutes.loadPlayerPerspectives(METADATA_PATH);
   const totalCount = Object.keys(allGames).length;
   res.json({ 
     status: "reloaded", 
     count: totalCount, 
     collections: collectionsCache.length,
+    developers: developersHandler.getCache().length,
+    publishers: publishersHandler.getCache().length,
     recommended: recommendedSections.length,
-    categories: categories.length
+    categories: categories.length,
+    themes: themes.length,
+    platforms: platforms.length,
+    gameEngines: gameEngines.length,
+    gameModes: gameModes.length,
+    playerPerspectives: playerPerspectives.length
   });
 });
 
@@ -474,6 +562,7 @@ app.post("/reload-games", requireToken, (req, res) => {
 function readSettings() {
   const defaultSettings = {
     language: "en",
+    visibleLibraries: ["recommended", "library", "collections", "categories"],
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object
@@ -516,6 +605,32 @@ app.put("/settings", requireToken, (req, res) => {
   } else {
     res.status(500).json({ error: "Failed to save settings" });
   }
+});
+
+// Endpoint: redirect to frontend URL (default redirect endpoint)
+// This endpoint allows the browser to accept the server certificate during redirect
+app.get("/", (req, res) => {
+  // Get frontend URL from environment or derive from API_BASE
+  let frontendUrl = process.env.FRONTEND_URL;
+  
+  if (!frontendUrl && API_BASE) {
+    // Try to derive frontend URL from API_BASE (remove port and path)
+    try {
+      const apiUrl = new URL(API_BASE);
+      // Default frontend ports: 5173 (Vite dev), 3000, or same as API port
+      const frontendPort = process.env.FRONTEND_PORT || '5173';
+      frontendUrl = `${apiUrl.protocol}//${apiUrl.hostname}:${frontendPort}`;
+    } catch (e) {
+      // Fallback if URL parsing fails
+      frontendUrl = 'http://localhost:5173';
+    }
+  }
+  
+  if (!frontendUrl) {
+    frontendUrl = 'http://localhost:5173';
+  }
+  
+  res.redirect(frontendUrl);
 });
 
 // Validate required environment variables

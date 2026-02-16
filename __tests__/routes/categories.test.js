@@ -33,7 +33,7 @@ describe('GET /categories', () => {
     expect(Array.isArray(response.body.categories)).toBe(true);
   });
 
-  test('should return categories as array of strings', async () => {
+  test('should return categories as array of objects with id and title', async () => {
     const response = await request(app)
       .get('/categories')
       .set('X-Auth-Token', 'test-token')
@@ -43,9 +43,13 @@ describe('GET /categories', () => {
     expect(Array.isArray(response.body.categories)).toBe(true);
     
     if (response.body.categories.length > 0) {
-      // All categories should be strings
+      // All categories should be objects with id and title
       response.body.categories.forEach(category => {
-        expect(typeof category).toBe('string');
+        expect(typeof category).toBe('object');
+        expect(category).toHaveProperty('id');
+        expect(category).toHaveProperty('title');
+        expect(typeof category.id).toBe('number');
+        expect(typeof category.title).toBe('string');
       });
     }
   });
@@ -77,7 +81,8 @@ describe('POST /categories', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(listResponse.body.categories).toContain('testcategory');
+    const categoryExists = listResponse.body.categories.some(cat => cat.title === 'testcategory');
+    expect(categoryExists).toBe(true);
   });
 
   test('should return category title as string', async () => {
@@ -206,6 +211,142 @@ describe('POST /categories', () => {
     
     expect(response.headers['content-type']).toContain('image/webp');
   });
+});
+
+describe('GET /categories/:categoryId/cover.webp', () => {
+  test('should serve local cover if exists', async () => {
+    const categoryTitle = `CoverTest-${Date.now()}`;
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Create cover file
+    const categoryContentDir = path.join(testMetadataPath, 'content', 'categories', String(categoryId));
+    fs.mkdirSync(categoryContentDir, { recursive: true });
+    fs.writeFileSync(path.join(categoryContentDir, 'cover.webp'), 'fake webp data');
+    
+    // Request cover by ID
+    const response = await request(app)
+      .get(`/categories/${categoryId}/cover.webp`)
+      .expect(200);
+    
+    expect(response.headers['content-type']).toContain('image/webp');
+    expect(response.body.toString()).toBe('fake webp data');
+  });
+
+  test('should redirect to remote URL if local cover does not exist and FRONTEND_URL is set', async () => {
+    const categoryTitle = `RemoteCoverTest-${Date.now()}`;
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Set FRONTEND_URL environment variable
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://example.com/app';
+    
+    try {
+      // Request cover by ID (should redirect)
+      const response = await request(app)
+        .get(`/categories/${categoryId}/cover.webp`)
+        .expect(302); // Redirect
+      
+      // Verify redirect URL (should remove /app suffix)
+      expect(response.headers.location).toBe(`https://example.com/categories/${categoryId}/cover.webp`);
+    } finally {
+      // Restore original FRONTEND_URL
+      if (originalFrontendUrl) {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      } else {
+        delete process.env.FRONTEND_URL;
+      }
+    }
+  });
+
+  test('should return 404 if local cover does not exist and FRONTEND_URL is not set', async () => {
+    const categoryTitle = `NoCoverTest-${Date.now()}`;
+    
+    // Create category
+    await request(app)
+      .post('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: categoryTitle })
+      .expect(200);
+    
+    // Get category ID
+    function getCategoryId(categoryTitle) {
+      let hash = 0;
+      const str = String(categoryTitle).toLowerCase().trim();
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash);
+    }
+    const categoryId = getCategoryId(categoryTitle);
+    
+    // Ensure FRONTEND_URL is not set
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+    delete process.env.FRONTEND_URL;
+    
+    try {
+      // Request cover by ID (should return 404)
+      const response = await request(app)
+        .get(`/categories/${categoryId}/cover.webp`)
+        .expect(404);
+      
+      expect(response.headers['content-type']).toContain('image/webp');
+    } finally {
+      // Restore original FRONTEND_URL
+      if (originalFrontendUrl) {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      }
+    }
+  });
+
+  test('should return 400 for invalid category ID', async () => {
+    const response = await request(app)
+      .get('/categories/invalid-id/cover.webp')
+      .expect(400);
+    
+    expect(response.text).toContain('Invalid category ID');
+  });
 
   test('should require authentication', async () => {
     const response = await request(app)
@@ -217,32 +358,39 @@ describe('POST /categories', () => {
   });
 });
 
-describe('DELETE /categories/:categoryTitle', () => {
+describe('DELETE /categories/:id', () => {
   test('should delete unused category', async () => {
     // First create a category
-    const createResponse = await request(app)
+    await request(app)
       .post('/categories')
       .set('X-Auth-Token', 'test-token')
       .send({ title: 'unusedcategory' })
       .expect(200);
-    
-    const categoryTitle = createResponse.body.category;
-    
-    // Delete the category
-    const deleteResponse = await request(app)
-      .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    expect(deleteResponse.body).toHaveProperty('status', 'success');
-    
-    // Verify category was removed from the list
+
     const listResponse = await request(app)
       .get('/categories')
       .set('X-Auth-Token', 'test-token')
       .expect(200);
-    
-    expect(listResponse.body.categories).not.toContain(categoryTitle);
+    const category = listResponse.body.categories.find(cat => cat.title === 'unusedcategory');
+    expect(category).toBeDefined();
+    const categoryId = category.id;
+
+    // Delete the category by id
+    const deleteResponse = await request(app)
+      .delete(`/categories/${categoryId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    expect(deleteResponse.body).toHaveProperty('status', 'success');
+
+    // Verify category was removed from the list
+    const listAfter = await request(app)
+      .get('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    const categoryExists = listAfter.body.categories.some(cat => cat.id === categoryId);
+    expect(categoryExists).toBe(false);
   });
 
   test('should return 409 if category is still in use', async () => {
@@ -262,23 +410,25 @@ describe('DELETE /categories/:categoryTitle', () => {
         .expect(200);
       
       if (categoriesResponse.body.categories.length > 0) {
-        const categoryTitle = categoriesResponse.body.categories[0];
-        
+        const category = categoriesResponse.body.categories[0];
+        const categoryId = category.id;
+        const categoryTitle = category.title;
+
         // Assign category to a game
         await request(app)
           .put(`/games/${gameId}`)
           .set('X-Auth-Token', 'test-token')
-          .send({ genre: [categoryTitle] })
+          .send({ genre: [{ id: categoryId, title: categoryTitle }] })
           .expect(200);
-        
+
         // Try to delete the category (should fail)
         const deleteResponse = await request(app)
-          .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+          .delete(`/categories/${categoryId}`)
           .set('X-Auth-Token', 'test-token')
           .expect(409);
-        
+
         expect(deleteResponse.body).toHaveProperty('error', 'Category is still in use by one or more games');
-        
+
         // Cleanup: remove genre from game
         await request(app)
           .put(`/games/${gameId}`)
@@ -291,68 +441,70 @@ describe('DELETE /categories/:categoryTitle', () => {
 
   test('should return 404 if category does not exist', async () => {
     const response = await request(app)
-      .delete('/categories/nonexistent_category')
+      .delete('/categories/999999999')
       .set('X-Auth-Token', 'test-token')
       .expect(404);
-    
+
     expect(response.body).toHaveProperty('error', 'Category not found');
   });
 
   test('should require authentication', async () => {
     const response = await request(app)
-      .delete('/categories/some_category')
+      .delete('/categories/12345')
       .expect(401);
-    
+
     expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 
-  test('should delete category content directory', async () => {
+  test('should delete only metadata.json and remove directory only if empty', async () => {
     // First create a category
-    const createResponse = await request(app)
+    await request(app)
       .post('/categories')
       .set('X-Auth-Token', 'test-token')
       .send({ title: 'testcategoryfordeletion' })
       .expect(200);
-    
-    const categoryTitle = createResponse.body.category;
+
+    const listResponse = await request(app)
+      .get('/categories')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    const category = listResponse.body.categories.find(cat => cat.title === 'testcategoryfordeletion');
+    expect(category).toBeDefined();
+    const categoryId = category.id;
+
     const { testMetadataPath } = require('../setup');
     const fs = require('fs');
     const path = require('path');
-    
-    // Create a test content directory for the category (using numeric ID)
-    function getCategoryId(categoryTitle) {
-      let hash = 0;
-      const str = String(categoryTitle).toLowerCase().trim();
-      for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash;
-      }
-      return Math.abs(hash);
-    }
-    const categoryId = getCategoryId(categoryTitle);
     const categoryContentDir = path.join(testMetadataPath, 'content', 'categories', String(categoryId));
+    const metadataFile = path.join(categoryContentDir, 'metadata.json');
     if (!fs.existsSync(categoryContentDir)) {
       fs.mkdirSync(categoryContentDir, { recursive: true });
     }
-    
-    // Create a test file in the directory
-    const testFile = path.join(categoryContentDir, 'test.txt');
-    fs.writeFileSync(testFile, 'test content');
-    
-    // Verify the directory exists before deletion
-    expect(fs.existsSync(categoryContentDir)).toBe(true);
-    
-    // Delete the category
+
+    // Verify metadata.json exists before deletion
+    expect(fs.existsSync(metadataFile)).toBe(true);
+
+    // Delete the category by id
     const response = await request(app)
-      .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+      .delete(`/categories/${categoryId}`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
-    
+
     expect(response.body).toHaveProperty('status', 'success');
+
+    // Verify metadata.json was deleted
+    expect(fs.existsSync(metadataFile)).toBe(false);
     
-    // Verify the directory was deleted
-    expect(fs.existsSync(categoryContentDir)).toBe(false);
+    // If directory is empty, it should be removed
+    // If directory has other files, it should remain
+    if (fs.existsSync(categoryContentDir)) {
+      const remainingFiles = fs.readdirSync(categoryContentDir);
+      // Directory still exists because it has other files (not empty)
+      expect(remainingFiles.length).toBeGreaterThan(0);
+    } else {
+      // Directory was removed because it was empty after metadata.json deletion
+      expect(true).toBe(true);
+    }
   });
 });
 
@@ -385,7 +537,9 @@ describe('Game update with category creation and deletion', () => {
       
       expect(updateResponse.body.game).toHaveProperty('genre');
       expect(Array.isArray(updateResponse.body.game.genre)).toBe(true);
-      expect(updateResponse.body.game.genre).toContain(newCategoryTitle);
+      // API returns genre as id-only array
+      expect(updateResponse.body.game.genre.length).toBe(1);
+      expect(updateResponse.body.game.genre.every((g) => typeof g === 'number')).toBe(true);
       
       // Verify category still exists
       const categoriesResponse = await request(app)
@@ -393,19 +547,16 @@ describe('Game update with category creation and deletion', () => {
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      expect(categoriesResponse.body.categories).toContain(newCategoryTitle);
+      const categoryExists = categoriesResponse.body.categories.some(cat => cat.title === newCategoryTitle);
+      expect(categoryExists).toBe(true);
       
-      // Cleanup: remove genre from game and delete category
+      // Cleanup: remove genre from game (server auto-deletes orphaned category)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ genre: [] })
         .expect(200);
-      
-      await request(app)
-        .delete(`/categories/${encodeURIComponent(newCategoryTitle)}`)
-        .set('X-Auth-Token', 'test-token')
-        .expect(200);
+      // Category was already deleted by server when it became orphaned; no need to DELETE
     }
   });
 
@@ -427,45 +578,44 @@ describe('Game update with category creation and deletion', () => {
         .expect(200);
       
       const categoryTitle = createCategoryResponse.body.category;
-      
-      // Assign category to game
+      const listRes = await request(app)
+        .get('/categories')
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      const cat = listRes.body.categories.find(c => c.title === categoryTitle);
+      expect(cat).toBeDefined();
+      const categoryId = cat.id;
+
+      // Assign category to game (send title; server resolves to id)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ genre: [categoryTitle] })
         .expect(200);
-      
+
       // Verify category cannot be deleted while in use
       const deleteWhileInUseResponse = await request(app)
-        .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+        .delete(`/categories/${categoryId}`)
         .set('X-Auth-Token', 'test-token')
         .expect(409);
-      
+
       expect(deleteWhileInUseResponse.body).toHaveProperty('error', 'Category is still in use by one or more games');
-      
-      // Remove category from game
+
+      // Remove category from game (server auto-deletes orphaned category)
       await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ genre: [] })
         .expect(200);
-      
-      // Now category should be deletable
-      const deleteResponse = await request(app)
-        .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
-        .set('X-Auth-Token', 'test-token')
-        .expect(200);
-      
-      expect(deleteResponse.body).toHaveProperty('status', 'success');
-      
-      // Verify category was removed
-      const categoriesResponse = await request(app)
+
+      // Verify category was auto-removed when it became orphaned
+      const categoriesAfter = await request(app)
         .get('/categories')
         .set('X-Auth-Token', 'test-token')
         .expect(200);
-      
-      const categoryExists = categoriesResponse.body.categories.some(
-        c => c.title === categoryTitle
+
+      const categoryExists = categoriesAfter.body.categories.some(
+        c => c.id === categoryId
       );
       expect(categoryExists).toBe(false);
     }
@@ -500,11 +650,12 @@ describe('ensureCategoryExists helper function', () => {
     
     expect(categoriesAfter.body.categories.length).toBe(initialCount + 1);
     
-    expect(categoriesAfter.body.categories).toContain('Helper Test Genre');
-    
-    // Cleanup: delete the category
+    const categoryExists = categoriesAfter.body.categories.some(cat => cat.title === 'Helper Test Genre');
+    expect(categoryExists).toBe(true);
+
+    const catToDelete = categoriesAfter.body.categories.find(cat => cat.title === 'Helper Test Genre');
     await request(app)
-      .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+      .delete(`/categories/${catToDelete.id}`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
   });
@@ -552,11 +703,12 @@ describe('ensureCategoryExists helper function', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(categoriesBeforeDelete.body.categories).toContain(categoryTitle);
-    
-    // Cleanup: delete the category
+    const categoryExists = categoriesBeforeDelete.body.categories.some(cat => cat.title === categoryTitle);
+    expect(categoryExists).toBe(true);
+
+    const catToDelete = categoriesBeforeDelete.body.categories.find(cat => cat.title === categoryTitle);
     await request(app)
-      .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+      .delete(`/categories/${catToDelete.id}`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
   });
@@ -578,11 +730,12 @@ describe('ensureCategoryExists helper function', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
     
-    expect(categoriesResponse.body.categories).toContain('UPPERCASE HELPER GENRE');
-    
-    // Cleanup: delete the category
+    const categoryExists = categoriesResponse.body.categories.some(cat => cat.title === 'UPPERCASE HELPER GENRE');
+    expect(categoryExists).toBe(true);
+
+    const catToDelete = categoriesResponse.body.categories.find(cat => cat.title === 'UPPERCASE HELPER GENRE');
     await request(app)
-      .delete(`/categories/${encodeURIComponent(categoryTitle)}`)
+      .delete(`/categories/${catToDelete.id}`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
   });

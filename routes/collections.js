@@ -2,91 +2,183 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { getCoverUrl, getBackgroundUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
-const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { ensureDirectoryExists } = require("../utils/fileUtils");
+const {
+  loadItems,
+  saveItem,
+  deleteItem,
+  findById,
+  findIndexById,
+  normalizeId,
+  removeGameFromAll,
+  addGameToItem,
+  getResourceToGameIdsMap,
+} = require("../utils/collectionsShared");
+
+const CONTENT_FOLDER = "collections";
 
 /**
  * Collections routes module
  * Handles collections endpoints
+ * Uses collectionsShared for load/save/delete (same as developers, publishers)
  */
 
-// Helper function to get collection metadata file path
-function getCollectionMetadataPath(metadataPath, collectionId) {
-  return path.join(metadataPath, "content", "collections", String(collectionId), "metadata.json");
-}
-
-// Helper function to save a single collection
-function saveCollection(metadataPath, collection) {
-  const collectionDir = path.join(metadataPath, "content", "collections", String(collection.id));
-  ensureDirectoryExists(collectionDir);
-  const filePath = getCollectionMetadataPath(metadataPath, collection.id);
-  // Remove id from saved data (it's in the folder name)
-  const collectionToSave = { ...collection };
-  delete collectionToSave.id;
-  writeJsonFile(filePath, collectionToSave);
-}
-
-// Helper function to load a single collection
-function loadCollection(metadataPath, collectionId) {
-  const filePath = getCollectionMetadataPath(metadataPath, collectionId);
-  return readJsonFile(filePath, null);
-}
-
-// Helper function to delete a collection
-function deleteCollection(metadataPath, collectionId) {
-  const collectionDir = path.join(metadataPath, "content", "collections", String(collectionId));
-  if (fs.existsSync(collectionDir)) {
-    // Delete all files in the directory first
-    try {
-      const files = fs.readdirSync(collectionDir);
-      files.forEach((file) => {
-        const filePath = path.join(collectionDir, file);
-        try {
-          if (fs.statSync(filePath).isFile()) {
-            fs.unlinkSync(filePath);
-          } else if (fs.statSync(filePath).isDirectory()) {
-            fs.rmSync(filePath, { recursive: true, force: true });
-          }
-        } catch (e) {
-          // Ignore errors deleting individual files
-        }
-      });
-    } catch (e) {
-      // If we can't read the directory, try to remove it anyway
-    }
-    // Remove directory only if it's empty
-    removeDirectoryIfEmpty(collectionDir);
+// Generate numeric collection ID from title hash (deterministic, same title = same ID)
+function getCollectionIdFromTitle(title) {
+  let hash = 0;
+  const str = String(title).toLowerCase().trim();
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
   }
+  return Math.abs(hash);
 }
 
 function loadCollections(metadataPath) {
-  const collectionsDir = path.join(metadataPath, "content", "collections");
-  const collections = [];
-  
-  if (!fs.existsSync(collectionsDir)) {
-    return collections;
-  }
-  
-  // Read all subdirectories (each collection has its own folder)
-  const collectionFolders = fs.readdirSync(collectionsDir, { withFileTypes: true })
-    .filter(dirent => dirent.isDirectory())
-    .map(dirent => dirent.name);
-  
-  // Load each collection's metadata.json
-  collectionFolders.forEach((normalizedId) => {
-    const collectionMetadataPath = path.join(collectionsDir, normalizedId, "metadata.json");
-    if (fs.existsSync(collectionMetadataPath)) {
-      const collection = readJsonFile(collectionMetadataPath, null);
-      if (collection) {
-        // Use folder name as ID (the folder name is the normalized collection ID)
-        // Convert to number if it's numeric, otherwise keep as string
-        collection.id = /^\d+$/.test(normalizedId) ? Number(normalizedId) : normalizedId;
-        collections.push(collection);
+  return loadItems(metadataPath, CONTENT_FOLDER);
+}
+
+/** Add game to a collection's games array (for migration / linking). Collections are stored only in blocks. */
+function addGameToCollection(metadataPath, collectionId, gameId) {
+  return addGameToItem(metadataPath, CONTENT_FOLDER, collectionId, gameId);
+}
+
+/** Map(collectionId -> gameIds[]) for building game.collection from blocks. */
+function getCollectionToGameIdsMap(metadataPath) {
+  return getResourceToGameIdsMap(metadataPath, CONTENT_FOLDER);
+}
+
+// Helper function to remove a game from all collections
+// collectionsCache: optional in-memory array; when provided, use it instead of loading from disk
+function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null, collectionsCache = null) {
+  const callback = updateCacheCallback
+    ? (item) => updateCacheCallback([item])
+    : null;
+  return removeGameFromAll(metadataPath, CONTENT_FOLDER, gameId, callback, collectionsCache);
+}
+
+/** Delete collection if it has no games left and no local cover (orphan, no custom cover). */
+function deleteCollectionIfUnused(metadataPath, collectionId) {
+  const list = loadItems(metadataPath, CONTENT_FOLDER);
+  const entry = findById(list, collectionId);
+  if (!entry) return;
+  const games = entry.games || [];
+  if (games.length > 0) return;
+  const coverPath = path.join(metadataPath, "content", CONTENT_FOLDER, String(collectionId), "cover.webp");
+  if (fs.existsSync(coverPath)) return;
+  deleteItem(metadataPath, CONTENT_FOLDER, collectionId);
+}
+
+// Helper function to create cache updater
+function createCacheUpdater(collectionsCache) {
+  return (updatedCollections) => {
+    for (const updatedCollection of updatedCollections) {
+      const cacheIndex = findIndexById(collectionsCache, updatedCollection.id);
+      if (cacheIndex !== -1) {
+        collectionsCache[cacheIndex] = updatedCollection;
       }
     }
-  });
-  
-  return collections;
+  };
 }
+
+// Helper function to compare two games by a specific field
+function compareGamesByField(gameA, gameB, field = 'releaseDate', ascending = true) {
+  let compareResult = 0;
+
+  switch (field) {
+    case 'releaseDate':
+      // Games not found or without release date go to the end
+      if (!gameA || (!gameA.year && !gameA.month && !gameA.day)) return 1;
+      if (!gameB || (!gameB.year && !gameB.month && !gameB.day)) return -1;
+
+      // Compare by year
+      if (gameA.year !== gameB.year) {
+        compareResult = (gameA.year || 0) - (gameB.year || 0);
+      } else if (gameA.month !== gameB.month) {
+        // If years are equal, compare by month
+        compareResult = (gameA.month || 0) - (gameB.month || 0);
+      } else {
+        // If months are equal, compare by day
+        compareResult = (gameA.day || 0) - (gameB.day || 0);
+      }
+      break;
+    case 'year':
+      const yearA = gameA?.year ?? 0;
+      const yearB = gameB?.year ?? 0;
+      if (yearA === 0 && yearB === 0) compareResult = 0;
+      else if (yearA === 0) compareResult = 1;
+      else if (yearB === 0) compareResult = -1;
+      else compareResult = yearA - yearB;
+      break;
+    case 'title':
+      const titleA = (gameA?.title || '').toLowerCase();
+      const titleB = (gameB?.title || '').toLowerCase();
+      compareResult = titleA.localeCompare(titleB);
+      break;
+    case 'stars':
+      const starsA = gameA?.stars ?? 0;
+      const starsB = gameB?.stars ?? 0;
+      compareResult = starsA - starsB;
+      break;
+    case 'criticRating':
+      const criticA = gameA?.criticratings ?? 0;
+      const criticB = gameB?.criticratings ?? 0;
+      compareResult = criticA - criticB;
+      break;
+    case 'userRating':
+      const userA = gameA?.userratings ?? 0;
+      const userB = gameB?.userratings ?? 0;
+      compareResult = userA - userB;
+      break;
+    default:
+      compareResult = 0;
+  }
+
+  return ascending ? compareResult : -compareResult;
+}
+
+// Helper function to sort game IDs by a specific field
+function sortGameIdsByField(gameIds, allGames, field = 'releaseDate', ascending = true) {
+  return [...gameIds].sort((idA, idB) => {
+    const gameA = allGames[idA];
+    const gameB = allGames[idB];
+    return compareGamesByField(gameA, gameB, field, ascending);
+  });
+}
+
+// Helper function to insert a game ID into an array at the correct position based on release date
+// Finds the first element with release date greater than the new game and inserts before it
+function insertGameIdInSortedPosition(gameIds, newGameId, allGames) {
+  // Check if game already exists
+  const normalizedNewId = normalizeId(newGameId);
+  const exists = gameIds.some(id => normalizeId(id) === normalizedNewId);
+  
+  if (exists) {
+    return gameIds; // Game already exists, return original array
+  }
+
+  const newGame = allGames[newGameId];
+  if (!newGame) {
+    // Game not found in allGames, append to end
+    return [...gameIds, newGameId];
+  }
+
+  // Find the first element with release date greater than the new game
+  for (let i = 0; i < gameIds.length; i++) {
+    const existingGame = allGames[gameIds[i]];
+    if (existingGame && compareGamesByField(newGame, existingGame, 'releaseDate', true) < 0) {
+      // Insert before this element
+      const result = [...gameIds];
+      result.splice(i, 0, newGameId);
+      return result;
+    }
+  }
+
+  // No element found with greater release date, append to end
+  return [...gameIds, newGameId];
+}
+
 
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
@@ -100,12 +192,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       collections: collectionsCache.map((c) => {
         // Ensure ID is converted to string for URL encoding
         const collectionId = String(c.id);
+        // Calculate gameCount by counting only games that exist in allGames
+        const gameIds = c.games || [];
+        const actualGameCount = gameIds.filter((gameId) => allGames[gameId]).length;
         const collectionData = {
           id: c.id,
           title: c.title,
           summary: c.summary || "",
-          cover: `/collection-covers/${encodeURIComponent(collectionId)}`,
-          gameCount: (c.games || []).length,
+          showTitle: c.showTitle,
+          gameCount: actualGameCount,
         };
         // Check if cover exists locally
         const localCover = getLocalMediaPath({
@@ -157,20 +252,25 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       });
     }
 
-    // Generate numeric collection ID (timestamp-based for uniqueness)
-    const collectionId = Date.now();
+    // Generate numeric collection ID from title hash (deterministic, same title = same ID)
+    // On rare hash collision, increment until we get an ID not already used
+    let collectionId = getCollectionIdFromTitle(trimmedTitle);
+    while (collectionsCache.some((c) => c.id === collectionId)) {
+      collectionId++;
+    }
     
     // Create new collection
     const newCollection = {
       id: collectionId,
       title: trimmedTitle,
       summary: (summary && typeof summary === "string") ? summary.trim() : "",
+      showTitle: true,
       games: [],
     };
 
     // Save collection to its own folder
     try {
-      saveCollection(metadataPath, newCollection);
+      saveItem(metadataPath, CONTENT_FOLDER, newCollection);
       // Add to cache
       collectionsCache.push(newCollection);
       
@@ -183,6 +283,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: newCollection.id,
         title: newCollection.title,
         summary: newCollection.summary || "",
+        showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
       };
@@ -207,16 +308,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   // Endpoint: get single collection by ID
   app.get("/collections/:id", requireToken, (req, res) => {
     const collectionId = req.params.id;
-    // Normalize ID for comparison (convert both to string or number)
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    const collection = collectionsCache.find((c) => {
-      // Compare as numbers if both are numeric, otherwise as strings
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
-    
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -225,9 +317,19 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       id: collection.id,
       title: collection.title,
       summary: collection.summary || "",
-      cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
+      showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
     };
+    const localCover = getLocalMediaPath({
+      metadataPath,
+      resourceId: collection.id,
+      resourceType: 'collections',
+      mediaType: 'cover',
+      urlPrefix: '/collection-covers'
+    });
+    if (localCover) {
+      collectionData.cover = localCover;
+    }
     const background = getLocalMediaPath({
       metadataPath,
       resourceId: collection.id,
@@ -245,15 +347,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   // Endpoint: get games for a collection (returns games by their IDs)
   app.get("/collections/:id/games", requireToken, (req, res) => {
     const collectionId = req.params.id;
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    const collection = collectionsCache.find((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
-    
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -276,7 +370,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           month: game.month || null,
           year: game.year || null,
           stars: game.stars || null,
-          command: game.command || null,
+          executables: game.executables || null,
           themes: game.themes || null,
           platforms: game.platforms || null,
           gameModes: game.gameModes || null,
@@ -313,26 +407,60 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "gameIds must be an array" });
     }
 
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    const collectionIndex = collectionsCache.findIndex((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
-    
+    const collectionIndex = findIndexById(collectionsCache, collectionId);
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
     }
 
-    // Update the games array with the new order
+    // Remove duplicate game IDs while preserving order (first occurrence kept)
+    const seen = new Set();
+    const uniqueGameIds = [];
+    for (const gameId of gameIds) {
+      const n = normalizeId(gameId);
+      if (!seen.has(n)) {
+        seen.add(n);
+        uniqueGameIds.push(n);
+      }
+    }
+    
+    // Log if duplicates were removed
+    if (uniqueGameIds.length !== gameIds.length) {
+      const duplicateCount = gameIds.length - uniqueGameIds.length;
+      console.log(`Removed ${duplicateCount} duplicate game ID(s) from collection ${collectionId}`);
+    }
+
+    // Get the current games in the collection (before update)
     const collection = collectionsCache[collectionIndex];
-    collection.games = gameIds;
+    const currentGameIds = collection.games || [];
+    
+    // Check if this is likely an addition (one new game added) vs a reorder
+    const isAddition = uniqueGameIds.length === currentGameIds.length + 1;
+    
+    let finalGameIds;
+    if (isAddition) {
+      // Find the new game and insert it in the correct position
+      const newGameId = uniqueGameIds.find(id =>
+        !currentGameIds.some(currentId => normalizeId(currentId) === normalizeId(id))
+      );
+      
+      if (newGameId) {
+        // Insert the new game in the correct position
+        finalGameIds = insertGameIdInSortedPosition(currentGameIds, newGameId, allGames);
+      } else {
+        // Fallback: full sort if we can't identify the new game
+        finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
+      }
+    } else {
+      // Full reorder: sort all games by release date
+      finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
+    }
+
+    // Update the games array
+    collection.games = finalGameIds;
 
     // Save updated collection
     try {
-      saveCollection(metadataPath, collection);
+      saveItem(metadataPath, CONTENT_FOLDER, collection);
       res.json({ status: "success" });
     } catch (e) {
       console.error(`Failed to save collection order:`, e.message);
@@ -345,21 +473,13 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionId = req.params.id;
     const updates = req.body;
     
-    // Validate collection exists
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    const collectionIndex = collectionsCache.findIndex((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
+    const collectionIndex = findIndexById(collectionsCache, collectionId);
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary'];
+    const allowedFields = ['title', 'summary', 'showTitle'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -379,21 +499,32 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     
     // Save updated collection
     try {
-      saveCollection(metadataPath, collection);
+      saveItem(metadataPath, CONTENT_FOLDER, collection);
       const collectionData = {
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
-        cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
+        showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
       };
+      // Only include cover/background if they exist (like GET and developers)
+      const localCover = getLocalMediaPath({
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'cover',
+        urlPrefix: '/collection-covers'
+      });
+      if (localCover) {
+        collectionData.cover = localCover;
+      }
       const background = getLocalMediaPath({
-      metadataPath,
-      resourceId: collection.id,
-      resourceType: 'collections',
-      mediaType: 'background',
-      urlPrefix: '/collection-backgrounds'
-    });
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'background',
+        urlPrefix: '/collection-backgrounds'
+      });
       if (background) {
         collectionData.background = background;
       }
@@ -409,22 +540,13 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.delete("/collections/:id", requireToken, (req, res) => {
     const collectionId = req.params.id;
     
-    // Find collection index
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    const collectionIndex = collectionsCache.findIndex((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
-    
+    const collectionIndex = findIndexById(collectionsCache, collectionId);
     if (collectionIndex === -1) {
       return res.status(404).json({ error: "Collection not found" });
     }
 
     // Delete collection folder and its metadata.json
-    deleteCollection(metadataPath, collectionId);
+    deleteItem(metadataPath, CONTENT_FOLDER, collectionId);
     
     // Remove collection from cache
     collectionsCache.splice(collectionIndex, 1);
@@ -469,15 +591,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "File must be an image" });
     }
     
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    // Validate collection exists
-    const collection = collectionsCache.find((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -496,6 +610,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
       };
@@ -534,15 +649,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       return res.status(400).json({ error: "File must be an image" });
     }
     
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    // Validate collection exists
-    const collection = collectionsCache.find((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -561,6 +668,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
       };
@@ -589,15 +697,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.delete("/collections/:id/delete-cover", requireToken, (req, res) => {
     const collectionId = req.params.id;
     
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    // Validate collection exists
-    const collection = collectionsCache.find((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -616,6 +716,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
           resourceId: collection.id,
@@ -650,15 +751,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   app.delete("/collections/:id/delete-background", requireToken, (req, res) => {
     const collectionId = req.params.id;
     
-    // Normalize ID for comparison
-    const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-    // Validate collection exists
-    const collection = collectionsCache.find((c) => {
-      if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-        return c.id === normalizedId;
-      }
-      return String(c.id) === String(normalizedId);
-    });
+    const collection = findById(collectionsCache, collectionId);
     if (!collection) {
       return res.status(404).json({ error: "Collection not found" });
     }
@@ -677,6 +770,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
           resourceId: collection.id,
@@ -715,15 +809,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       // Reload collections to refresh metadata
       collectionsCache = loadCollections(metadataPath);
       
-      // Normalize ID for comparison
-      const normalizedId = /^\d+$/.test(collectionId) ? Number(collectionId) : collectionId;
-      // Find the collection
-      const collection = collectionsCache.find((c) => {
-        if (typeof normalizedId === 'number' && typeof c.id === 'number') {
-          return c.id === normalizedId;
-        }
-        return String(c.id) === String(normalizedId);
-      });
+      const collection = findById(collectionsCache, collectionId);
       if (!collection) {
         return res.status(404).json({ error: "Collection not found" });
       }
@@ -733,6 +819,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         id: collection.id,
         title: collection.title,
         summary: collection.summary || "",
+        showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
         gameCount: (collection.games || []).length,
       };
@@ -778,6 +865,11 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
 
 module.exports = {
   loadCollections,
+  addGameToCollection,
+  getCollectionToGameIdsMap,
   registerCollectionsRoutes,
+  removeGameFromAllCollections,
+  createCacheUpdater,
+  deleteCollectionIfUnused,
 };
 

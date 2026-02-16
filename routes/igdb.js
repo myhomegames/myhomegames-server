@@ -67,6 +67,59 @@ async function getIGDBAccessToken(clientId, clientSecret) {
 }
 
 /**
+ * Run one IGDB search and return raw games array.
+ * @param {string} searchQuery - Exact string to send to IGDB search (e.g. "aero fighters assault" or "aerofightersassault")
+ * @param {string} accessToken - IGDB access token
+ * @param {string} clientId - Twitch Client ID
+ * @param {number|null} yearToFilter - Optional year to filter first_release_date
+ * @returns {Promise<Array>} Raw game objects from IGDB
+ */
+function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
+  let postData = `search "${searchQuery}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name;`;
+  if (yearToFilter !== null && yearToFilter !== undefined) {
+    const yearStart = Math.floor(new Date(yearToFilter, 0, 1).getTime() / 1000);
+    const yearEnd = Math.floor(new Date(yearToFilter, 11, 31, 23, 59, 59).getTime() / 1000);
+    postData += ` where first_release_date >= ${yearStart} & first_release_date <= ${yearEnd};`;
+  }
+  postData += ` limit 20;`;
+
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const games = JSON.parse(data);
+          resolve(Array.isArray(games) ? games : []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+/**
  * Register IGDB routes
  * @param {express.App} app - Express app instance
  * @param {Function} requireToken - Authentication middleware
@@ -74,10 +127,28 @@ async function getIGDBAccessToken(clientId, clientSecret) {
 function registerIGDBRoutes(app, requireToken) {
   // Endpoint: search games on IGDB
   app.get("/igdb/search", requireToken, async (req, res) => {
-    const query = req.query.q;
-    if (!query || query.trim() === "") {
+    const rawQuery = req.query.q;
+    if (!rawQuery || typeof rawQuery !== "string") {
       res.setHeader('Content-Type', 'application/json');
       return res.status(400).json({ error: "Missing search query" });
+    }
+    const query = rawQuery.trim().replace(/\s+/g, " ");
+    if (query === "") {
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(400).json({ error: "Missing search query" });
+    }
+
+    // Get optional year filter (legacy) or full release date for filtering/sorting by closest
+    const year = req.query.year ? parseInt(req.query.year, 10) : null;
+    let releaseDateTimestamp = null;
+    const releaseDateParam = req.query.releaseDate;
+    if (releaseDateParam !== undefined && releaseDateParam !== null && releaseDateParam !== "") {
+      const parsed = Number(releaseDateParam);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        releaseDateTimestamp = parsed < 10000000000 ? parsed : Math.floor(parsed / 1000);
+      } else if (typeof releaseDateParam === "string" && /^\d{4}-\d{2}-\d{2}$/.test(releaseDateParam.trim())) {
+        releaseDateTimestamp = Math.floor(new Date(releaseDateParam.trim()).getTime() / 1000);
+      }
     }
 
     // Get Twitch credentials from headers or query params
@@ -91,64 +162,85 @@ function registerIGDBRoutes(app, requireToken) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      // Filter by year only when explicitly requested (query param year). When releaseDate is passed,
+      // do not filter by year so we get all name matches and then sort by closest date.
+      const yearToFilter = year !== null && !isNaN(year) ? year : null;
 
-      const postData = `search "${query}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating; limit 20;`;
+      const words = query.split(/\s+/).filter(Boolean);
+      const seenIds = new Set();
 
-      const options = {
-        hostname: "api.igdb.com",
-        path: "/v4/games",
-        method: "POST",
-        headers: {
-          "Client-ID": clientId,
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "text/plain",
-          "Content-Length": Buffer.byteLength(postData),
-        },
+      const mergeResults = (games) => {
+        for (const g of games) {
+          if (!seenIds.has(g.id)) {
+            seenIds.add(g.id);
+            rawGames.push(g);
+          }
+        }
       };
 
-      const igdbReq = https.request(options, (igdbRes) => {
-        let data = "";
-        igdbRes.on("data", (chunk) => {
-          data += chunk;
-        });
-        igdbRes.on("end", () => {
-          try {
-            const games = JSON.parse(data);
-            const { formatIGDBReleaseDate } = require("../utils/dateUtils");
-            const formattedGames = games.map((game) => {
-              const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
-              return {
-                id: game.id,
-                name: game.name,
-                summary: game.summary || "",
-                cover: game.cover
-                  ? `https:${game.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
-                  : null,
-                releaseDate,
-                releaseDateFull,
-                genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
-                criticRating: game.aggregated_rating ? Math.round(game.aggregated_rating / 10) : null,
-                userRating: game.rating ? Math.round(game.rating / 10) : null,
-              };
-            });
-            res.setHeader('Content-Type', 'application/json');
-            res.json({ games: formattedGames });
-          } catch (e) {
-            console.error("Error parsing IGDB response:", e);
-            res.setHeader('Content-Type', 'application/json');
-            res.status(500).json({ error: "Failed to parse IGDB response" });
-          }
-        });
+      let rawGames = await runIGDBSearch(query, accessToken, clientId, yearToFilter);
+      rawGames.forEach((g) => seenIds.add(g.id));
+
+      const extraQueries = [];
+      if (words.length >= 2) {
+        const firstTwoMerged = words[0] + words[1] + (words.length > 2 ? " " + words.slice(2).join(" ") : "");
+        if (firstTwoMerged !== query) extraQueries.push(firstTwoMerged);
+      }
+      const queryNoSpaces = query.replace(/\s/g, "");
+      if (queryNoSpaces.length > 0 && queryNoSpaces !== query) extraQueries.push(queryNoSpaces);
+
+      for (const q of extraQueries) {
+        try {
+          const more = await runIGDBSearch(q, accessToken, clientId, yearToFilter);
+          mergeResults(more);
+        } catch (_) {
+          /* ignore: use only first search result */
+        }
+      }
+
+      const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+      const formattedGames = rawGames.map((game) => {
+        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
+        return {
+          id: game.id,
+          name: game.name,
+          summary: game.summary || "",
+          cover: game.cover
+            ? `https:${game.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
+            : null,
+          releaseDate,
+          releaseDateFull,
+          genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
+          criticRating: game.aggregated_rating ? Math.round(game.aggregated_rating / 10) : null,
+          userRating: game.rating ? Math.round(game.rating / 10) : null,
+          series: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
+          franchise: (game.franchises || []).map((f) => ({ id: f.id, name: f.name || "" })).filter((f) => f.name),
+        };
       });
 
-      igdbReq.on("error", (err) => {
-        console.error("IGDB request error:", err);
-        res.setHeader('Content-Type', 'application/json');
-        res.status(500).json({ error: "Failed to search IGDB", detail: err.message });
-      });
+      if (releaseDateTimestamp !== null) {
+        formattedGames.sort((a, b) => {
+          const aTs = a.releaseDateFull?.timestamp;
+          const bTs = b.releaseDateFull?.timestamp;
+          const aDist = aTs != null ? Math.abs(aTs - releaseDateTimestamp) : Infinity;
+          const bDist = bTs != null ? Math.abs(bTs - releaseDateTimestamp) : Infinity;
+          if (aDist !== bDist) return aDist - bDist;
+          if (aTs != null && bTs != null) return aTs - bTs;
+          return (aTs != null ? 0 : 1) - (bTs != null ? 0 : 1);
+        });
+      } else {
+        formattedGames.sort((a, b) => {
+          const aHasDate = a.releaseDateFull && a.releaseDateFull.timestamp != null;
+          const bHasDate = b.releaseDateFull && b.releaseDateFull.timestamp != null;
+          if (aHasDate && bHasDate) return a.releaseDateFull.timestamp - b.releaseDateFull.timestamp;
+          if (aHasDate && !bHasDate) return -1;
+          if (!aHasDate && bHasDate) return 1;
+          return 0;
+        });
+      }
 
-      igdbReq.write(postData);
-      igdbReq.end();
+      res.setHeader('Content-Type', 'application/json');
+      res.json({ games: formattedGames });
     } catch (err) {
       console.error("IGDB search error:", err);
       res.setHeader('Content-Type', 'application/json');
@@ -177,7 +269,7 @@ function registerIGDBRoutes(app, requireToken) {
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
 
-      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.name,involved_companies.developer,involved_companies.publisher,franchise.name,collection.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name; where id = ${igdbId};`;
+      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name; where id = ${igdbId};`;
 
       const options = {
         hostname: "api.igdb.com",
@@ -281,12 +373,26 @@ function registerIGDBRoutes(app, requireToken) {
               }
             }
 
-            // Process involved companies
+            // Process involved companies — return { id, name, logo?, description? } so add-from-igdb can create/update developer/publisher blocks
             const developers = game.involved_companies
-              ? game.involved_companies.filter((ic) => ic.developer).map((ic) => ic.company?.name || '').filter(Boolean)
+              ? game.involved_companies
+                  .filter((ic) => ic.developer && ic.company)
+                  .map((ic) => {
+                    const c = ic.company;
+                    if (!c || !c.id || !c.name) return null;
+                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
+                  })
+                  .filter(Boolean)
               : [];
             const publishers = game.involved_companies
-              ? game.involved_companies.filter((ic) => ic.publisher).map((ic) => ic.company?.name || '').filter(Boolean)
+              ? game.involved_companies
+                  .filter((ic) => ic.publisher && ic.company)
+                  .map((ic) => {
+                    const c = ic.company;
+                    if (!c || !c.id || !c.name) return null;
+                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
+                  })
+                  .filter(Boolean)
               : [];
 
             // Process screenshots
@@ -321,10 +427,11 @@ function registerIGDBRoutes(app, requireToken) {
               playerPerspectives: game.player_perspectives ? game.player_perspectives.map((p) => p.name || p).filter(Boolean) : [],
               websites: game.websites ? game.websites.map((w) => ({ url: w.url, category: w.category })).filter((w) => w.url) : [],
               ageRatings: ageRatings.length > 0 ? ageRatings : undefined,
-              developers: developers.length > 0 ? developers : undefined,
-              publishers: publishers.length > 0 ? publishers : undefined,
-              franchise: game.franchise?.name || undefined,
-              collection: game.collection?.name || undefined,
+              developers: developers.length > 0 ? developers.map((d) => ({ id: d.id, name: d.name, logo: d.logo, description: d.description })) : undefined,
+              publishers: publishers.length > 0 ? publishers.map((p) => ({ id: p.id, name: p.name, logo: p.logo, description: p.description })) : undefined,
+              franchise: (game.franchises || []).map((f) => ({ id: f.id, name: f.name || "" })).filter((f) => f.name),
+              collection: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
+              series: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
               screenshots: screenshots.length > 0 ? screenshots : undefined,
               videos: videos.length > 0 ? videos : undefined,
               gameEngines: game.game_engines ? game.game_engines.map((e) => e.name || e).filter(Boolean) : undefined,

@@ -1,0 +1,646 @@
+const fs = require("fs");
+const path = require("path");
+const multer = require("multer");
+const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { deleteMediaFile } = require("../utils/gameMediaUtils");
+
+function normalizeRouteBase(routeBase) {
+  if (!routeBase.startsWith("/")) {
+    return `/${routeBase}`;
+  }
+  return routeBase;
+}
+
+function getTagId(tagTitle) {
+  let hash = 0;
+  const str = String(tagTitle).toLowerCase().trim();
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
+function createTagRoutes(config) {
+  const {
+    routeBase,
+    contentFolder,
+    coverPrefix,
+    responseKey,
+    listResponseKey,
+    humanName,
+    gameField,
+    resourceType = contentFolder,
+  } = config;
+
+  const normalizedRouteBase = normalizeRouteBase(routeBase);
+
+  function getTagDir(metadataPath, tagId) {
+    return path.join(metadataPath, "content", contentFolder, String(tagId));
+  }
+
+  function getTagMetadataPath(metadataPath, tagId) {
+    const tagDir = getTagDir(metadataPath, tagId);
+    return path.join(tagDir, "metadata.json");
+  }
+
+  function loadTags(metadataPath) {
+    const tagsDir = path.join(metadataPath, "content", contentFolder);
+    const tags = [];
+
+    if (!fs.existsSync(tagsDir)) {
+      return tags;
+    }
+
+    const tagFolders = fs
+      .readdirSync(tagsDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
+
+    tagFolders.forEach((folderName) => {
+      const tagId = Number(folderName);
+      if (isNaN(tagId)) {
+        return;
+      }
+      const metadataFilePath = path.join(tagsDir, folderName, "metadata.json");
+      const metadata = readJsonFile(metadataFilePath, null);
+      if (metadata && metadata.title) {
+        const tagData = {
+          id: tagId,
+          title: metadata.title,
+          showTitle: metadata.showTitle,
+        };
+        // Same pattern as library (games): local file or fallback. Library fallback = IGDB; tags fallback = this URL (redirects to FRONTEND_URL)
+        const coverPath = path.join(tagsDir, folderName, "cover.webp");
+        if (fs.existsSync(coverPath)) {
+          tagData.cover = `/${coverPrefix}/${encodeURIComponent(metadata.title)}`;
+        } else {
+          tagData.cover = `${normalizedRouteBase}/${tagId}/cover.webp`;
+        }
+        tags.push(tagData);
+      }
+    });
+
+    tags.sort((a, b) => a.title.localeCompare(b.title));
+
+    return tags;
+  }
+
+  function findTagIdByTitle(metadataPath, tagTitle) {
+    const tags = loadTags(metadataPath);
+    const trimmedTitle = String(tagTitle).trim();
+    const existingTag = tags.find(
+      (tag) => tag.title.toLowerCase() === trimmedTitle.toLowerCase()
+    );
+    if (existingTag) {
+      return existingTag.id;
+    }
+    return null;
+  }
+
+  /** Get tag title by id; returns null if not found. */
+  function findTagTitleById(metadataPath, tagId) {
+    const id = Number(tagId);
+    if (isNaN(id)) return null;
+    const metadataFilePath = getTagMetadataPath(metadataPath, id);
+    const metadata = readJsonFile(metadataFilePath, null);
+    return metadata && metadata.title ? metadata.title : null;
+  }
+
+  /** Get full tag object by id; returns null if not found. */
+  function findTagById(metadataPath, tagId) {
+    const tags = loadTags(metadataPath);
+    const id = Number(tagId);
+    if (Number.isNaN(id)) return null;
+    return tags.find((t) => t.id === id) || null;
+  }
+
+  /**
+   * Resolve an array of tag ids (or legacy titles) to [{ id, title }, ...].
+   * Skips invalid ids and unknown titles.
+   */
+  function resolveTagIdsToObjects(metadataPath, tagIdsOrTitles) {
+    if (!tagIdsOrTitles || !Array.isArray(tagIdsOrTitles) || tagIdsOrTitles.length === 0) {
+      return [];
+    }
+    const tags = loadTags(metadataPath);
+    const byId = new Map(tags.map((t) => [t.id, t]));
+    const byTitleLower = new Map(tags.map((t) => [t.title.toLowerCase(), t]));
+    const seen = new Set();
+    const result = [];
+    for (const raw of tagIdsOrTitles) {
+      if (raw === null || raw === undefined) continue;
+      let idOrTitle = raw;
+      if (typeof raw === "object" && raw !== null && "id" in raw) idOrTitle = raw.id;
+      const asNum = Number(idOrTitle);
+      const tag = !Number.isNaN(asNum)
+        ? byId.get(asNum)
+        : byTitleLower.get(String(idOrTitle).toLowerCase().trim());
+      if (tag && !seen.has(tag.id)) {
+        seen.add(tag.id);
+        result.push({ id: tag.id, title: tag.title });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Normalize tag field from request: string[] (titles) or number[] (ids) -> number[] (ids).
+   * Ensures tags exist when titles are sent; returns null if invalid.
+   */
+  function normalizeTagFieldToIds(metadataPath, value) {
+    if (value == null) return null;
+    const arr = Array.isArray(value) ? value : [value];
+    if (arr.length === 0) return null;
+    const tags = loadTags(metadataPath);
+    const byId = new Map(tags.map((t) => [t.id, t]));
+    const byTitleLower = new Map(tags.map((t) => [t.title.toLowerCase(), t]));
+    const ids = [];
+    const titlesToCreate = [];
+    for (const raw of arr) {
+      if (raw === null || raw === undefined) continue;
+      if (typeof raw === "object" && raw !== null && "id" in raw) {
+        const id = Number(raw.id);
+        if (!Number.isNaN(id) && byId.has(id)) ids.push(id);
+        continue;
+      }
+      const asNum = Number(raw);
+      if (!Number.isNaN(asNum) && byId.has(asNum)) {
+        ids.push(asNum);
+        continue;
+      }
+      if (typeof raw === "string" && raw.trim()) {
+        const t = byTitleLower.get(raw.trim().toLowerCase());
+        if (t) {
+          ids.push(t.id);
+        } else {
+          titlesToCreate.push(raw.trim());
+        }
+      }
+    }
+    if (titlesToCreate.length > 0) {
+      ensureTagsExist(metadataPath, titlesToCreate);
+      const tagsAfter = loadTags(metadataPath);
+      const byTitleLowerAfter = new Map(tagsAfter.map((t) => [t.title.toLowerCase(), t]));
+      for (const title of titlesToCreate) {
+        const tag = byTitleLowerAfter.get(title.toLowerCase());
+        if (tag) ids.push(tag.id);
+      }
+    }
+    return ids.length > 0 ? ids : null;
+  }
+
+  function saveTag(metadataPath, tagTitle) {
+    const tagId = getTagId(tagTitle);
+    const tagDir = getTagDir(metadataPath, tagId);
+    ensureDirectoryExists(tagDir);
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = { title: tagTitle, showTitle: true, gameIds: [] };
+    writeJsonFile(metadataFilePath, metadata);
+  }
+
+  /** Load raw tag metadata including gameIds (for reverse index / unused check). */
+  function loadTagMetadataRaw(metadataPath, tagId) {
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = readJsonFile(metadataFilePath, null);
+    if (!metadata || !metadata.title) return null;
+    return {
+      title: metadata.title,
+      showTitle: metadata.showTitle,
+      gameIds: Array.isArray(metadata.gameIds) ? metadata.gameIds : [],
+    };
+  }
+
+  /** Returns Map(tagId -> gameIds[]) for building game->tags reverse index. */
+  function getTagToGameIdsMap(metadataPath) {
+    const tagsDir = path.join(metadataPath, "content", contentFolder);
+    const map = new Map();
+    if (!fs.existsSync(tagsDir)) return map;
+    const folders = fs.readdirSync(tagsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+    for (const d of folders) {
+      const tagId = Number(d.name);
+      if (Number.isNaN(tagId)) continue;
+      const raw = loadTagMetadataRaw(metadataPath, tagId);
+      if (raw && raw.gameIds.length > 0) map.set(tagId, raw.gameIds);
+    }
+    return map;
+  }
+
+  function addGameToTag(metadataPath, tagId, gameId) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const gameIds = raw.gameIds.includes(gameId) ? raw.gameIds : [...raw.gameIds, gameId];
+    updateTagMetadata(metadataPath, tagId, { gameIds });
+  }
+
+  function removeGameFromTag(metadataPath, tagId, gameId) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const gameIds = raw.gameIds.filter((id) => id !== gameId);
+    updateTagMetadata(metadataPath, tagId, { gameIds });
+  }
+
+  function setTagGameIds(metadataPath, tagId, gameIds) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const list = Array.isArray(gameIds) ? gameIds : [];
+    updateTagMetadata(metadataPath, tagId, { gameIds: list });
+  }
+
+  function loadTag(metadataPath, tagTitle) {
+    const tagId = findTagIdByTitle(metadataPath, tagTitle);
+    if (!tagId) {
+      return null;
+    }
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = readJsonFile(metadataFilePath, null);
+    return metadata && metadata.title ? metadata.title : null;
+  }
+
+  function updateTagMetadata(metadataPath, tagId, updates) {
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = readJsonFile(metadataFilePath, null);
+    if (!metadata || !metadata.title) {
+      return null;
+    }
+    const updated = { ...metadata, ...updates };
+    writeJsonFile(metadataFilePath, updated);
+    return updated;
+  }
+
+  function deleteTag(metadataPath, tagTitle) {
+    const tagId = findTagIdByTitle(metadataPath, tagTitle);
+    if (!tagId) {
+      return;
+    }
+    const tagDir = getTagDir(metadataPath, tagId);
+    const metadataFile = getTagMetadataPath(metadataPath, tagId);
+
+    if (fs.existsSync(metadataFile)) {
+      try {
+        fs.unlinkSync(metadataFile);
+      } catch (err) {
+        console.error(`Failed to delete metadata.json for ${humanName} ${tagTitle}:`, err.message);
+        throw err;
+      }
+    }
+
+    if (fs.existsSync(tagDir)) {
+      removeDirectoryIfEmpty(tagDir);
+    }
+  }
+
+  function ensureTagExists(metadataPath, tagTitle) {
+    if (!tagTitle || typeof tagTitle !== "string" || !tagTitle.trim()) {
+      return null;
+    }
+
+    const trimmedTitle = tagTitle.trim();
+    const tags = loadTags(metadataPath);
+    const existingTag = tags.find(
+      (tag) => tag.title.toLowerCase() === trimmedTitle.toLowerCase()
+    );
+    if (existingTag) {
+      return existingTag.title;
+    }
+
+    try {
+      saveTag(metadataPath, trimmedTitle);
+      return trimmedTitle;
+    } catch (e) {
+      console.error(`Failed to save ${humanName} ${trimmedTitle}:`, e.message);
+      return null;
+    }
+  }
+
+  /** Ensure multiple tags exist with a single load; only writes new tags. */
+  function ensureTagsExist(metadataPath, tagTitles) {
+    if (!tagTitles || !Array.isArray(tagTitles) || tagTitles.length === 0) {
+      return;
+    }
+    const tags = loadTags(metadataPath);
+    const existingLower = new Set(tags.map((t) => (t.title || "").toLowerCase()));
+    for (const raw of tagTitles) {
+      if (!raw || typeof raw !== "string" || !raw.trim()) continue;
+      const trimmed = raw.trim();
+      if (existingLower.has(trimmed.toLowerCase())) continue;
+      try {
+        saveTag(metadataPath, trimmed);
+        existingLower.add(trimmed.toLowerCase());
+      } catch (e) {
+        console.error(`Failed to save ${humanName} ${trimmed}:`, e.message);
+      }
+    }
+  }
+
+  function registerTagRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
+    const upload = multer({ storage: multer.memoryStorage() });
+
+    app.get(`/${coverPrefix}/:tagTitle`, (req, res) => {
+      const tagTitle = decodeURIComponent(req.params.tagTitle);
+      const tagId = findTagIdByTitle(metadataPath, tagTitle);
+      if (!tagId) {
+        return res.status(404).send(`${humanName} not found`);
+      }
+      const coverPath = path.join(metadataPath, "content", contentFolder, String(tagId), "cover.webp");
+
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET");
+
+      if (!fs.existsSync(coverPath)) {
+        res.setHeader("Content-Type", "image/webp");
+        return res.status(404).end();
+      }
+
+      res.type("image/webp");
+      res.sendFile(coverPath);
+    });
+
+    app.get(`${normalizedRouteBase}/:tagId/cover.webp`, (req, res) => {
+      const tagId = Number(req.params.tagId);
+      if (isNaN(tagId)) {
+        return res.status(400).send(`Invalid ${humanName.toLowerCase()} ID`);
+      }
+
+      const coverPath = path.join(metadataPath, "content", contentFolder, String(tagId), "cover.webp");
+
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET");
+
+      if (fs.existsSync(coverPath)) {
+        res.type("image/webp");
+        return res.sendFile(coverPath);
+      }
+
+      const frontendUrl = process.env.FRONTEND_URL;
+      if (frontendUrl) {
+        const baseUrl = frontendUrl.replace(/\/app\/?$/, "");
+        const remoteUrl = `${baseUrl}${normalizedRouteBase}/${tagId}/cover.webp`;
+        return res.redirect(remoteUrl);
+      }
+
+      res.setHeader("Content-Type", "image/webp");
+      return res.status(404).end();
+    });
+
+    app.get(normalizedRouteBase, requireToken, (req, res) => {
+      const tags = loadTags(metadataPath);
+      res.json({
+        [listResponseKey]: tags.map((tag) => {
+          const tagData = {
+            id: tag.id,
+            title: tag.title,
+          };
+          if (tag.cover) {
+            tagData.cover = tag.cover;
+          }
+          if (tag.showTitle !== undefined) {
+            tagData.showTitle = tag.showTitle;
+          }
+          return tagData;
+        }),
+      });
+    });
+
+    app.post(normalizedRouteBase, requireToken, (req, res) => {
+      const { title } = req.body;
+
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+
+      const tags = loadTags(metadataPath);
+      const trimmedTitle = title.trim();
+
+      const existingTag = tags.find(
+        (tag) => tag.title.toLowerCase() === trimmedTitle.toLowerCase()
+      );
+      if (existingTag) {
+        return res.status(409).json({
+          error: `${humanName} already exists`,
+          [responseKey]: existingTag.title,
+        });
+      }
+
+      const tagTitle = ensureTagExists(metadataPath, title);
+
+      if (!tagTitle) {
+        return res.status(500).json({ error: `Failed to create ${humanName.toLowerCase()}` });
+      }
+
+      res.json({
+        [responseKey]: tagTitle,
+      });
+    });
+
+    app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
+
+      if (!tag) {
+        return res.status(404).json({ error: `${humanName} not found` });
+      }
+
+      const updates = {};
+      if (typeof req.body.showTitle === "boolean") {
+        updates.showTitle = req.body.showTitle;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No valid fields to update" });
+      }
+
+      try {
+        const metadata = updateTagMetadata(metadataPath, tag.id, updates);
+        if (!metadata) {
+          return res.status(404).json({ error: `${humanName} not found` });
+        }
+
+        const updatedTag = loadTags(metadataPath).find((t) => t.id === tag.id);
+        const tagData = {
+          id: tag.id,
+          title: metadata.title,
+        };
+        if (metadata.showTitle !== undefined) {
+          tagData.showTitle = metadata.showTitle;
+        }
+        if (updatedTag && updatedTag.cover) {
+          tagData.cover = updatedTag.cover;
+        }
+
+        res.json({
+          status: "success",
+          [responseKey]: tagData,
+        });
+      } catch (err) {
+        console.error(`Failed to update ${humanName.toLowerCase()} ${tag.title}:`, err.message);
+        res.status(500).json({ error: `Failed to update ${humanName.toLowerCase()}` });
+      }
+    });
+
+    app.delete(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
+      if (!tag) {
+        return res.status(404).json({ error: `${humanName} not found` });
+      }
+
+      const tagTitleLower = tag.title.toLowerCase();
+      const isUsed = Object.values(allGames).some((game) => {
+        const values = game[gameField];
+        if (!values) return false;
+        const list = Array.isArray(values) ? values : [values];
+        return list.some((value) => {
+          const v = value != null && typeof value === "object" && "id" in value ? value.id : value;
+          if (typeof v === "number" && !Number.isNaN(v)) return v === tag.id;
+          if (typeof v === "string") return v.trim().toLowerCase() === tagTitleLower;
+          return false;
+        });
+      });
+
+      if (isUsed) {
+        return res.status(409).json({
+          error: `${humanName} is still in use by one or more games`,
+          [responseKey]: tag.title,
+        });
+      }
+
+      try {
+        deleteTag(metadataPath, tag.title);
+        res.json({ status: "success" });
+      } catch (err) {
+        console.error(`Failed to delete ${humanName.toLowerCase()} ${tag.title}:`, err.message);
+        res.status(500).json({ error: `Failed to delete ${humanName.toLowerCase()}` });
+      }
+    });
+
+    app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
+
+      if (!tag) {
+        return res.status(404).json({ error: `${humanName} not found` });
+      }
+
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ error: "No file provided" });
+      }
+
+      const mimeType = file.mimetype;
+      if (!mimeType.startsWith("image/")) {
+        return res.status(400).json({ error: "File must be an image" });
+      }
+
+      try {
+        const tagDir = getTagDir(metadataPath, tag.id);
+        ensureDirectoryExists(tagDir);
+        const coverPath = path.join(tagDir, "cover.webp");
+        fs.writeFileSync(coverPath, file.buffer);
+
+        res.json({
+          status: "success",
+          [responseKey]: {
+            id: tag.id,
+            title: tag.title,
+            cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
+          },
+        });
+      } catch (error) {
+        console.error(`Failed to save cover for ${humanName.toLowerCase()} ${tag.title}:`, error);
+        res.status(500).json({ error: "Failed to save cover image" });
+      }
+    });
+
+    app.delete(`${normalizedRouteBase}/:id/delete-cover`, requireToken, (req, res) => {
+      const tag = findTagById(metadataPath, req.params.id);
+      if (!tag) {
+        return res.status(404).json({ error: `${humanName} not found` });
+      }
+
+      try {
+        deleteMediaFile({
+          metadataPath,
+          resourceId: tag.id,
+          resourceType,
+          mediaType: "cover",
+        });
+
+        const tagData = {
+          id: tag.id,
+          title: tag.title,
+        };
+        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
+        if (fs.existsSync(coverPath)) {
+          tagData.cover = `${normalizedRouteBase}/${tag.id}/cover.webp`;
+        }
+
+        res.json({
+          status: "success",
+          [responseKey]: tagData,
+        });
+      } catch (error) {
+        console.error(`Failed to delete cover for ${humanName.toLowerCase()} ${tag.title}:`, error);
+        res.status(500).json({ error: "Failed to delete cover image" });
+      }
+    });
+  }
+
+  /**
+   * Delete tag if no game references it.
+   * @param {string} metadataPath
+   * @param {string} metadataGamesDir
+   * @param {number|string} tagIdOrTitle - tag id (number) or title (string)
+   * @param {Object} allGamesFromFile - map of game id -> game
+   * @returns {boolean}
+   */
+  function deleteTagIfUnused(metadataPath, metadataGamesDir, tagIdOrTitle, allGamesFromFile) {
+    const tags = loadTags(metadataPath);
+    const tag =
+      typeof tagIdOrTitle === "number" || /^\d+$/.test(String(tagIdOrTitle))
+        ? tags.find((t) => t.id === Number(tagIdOrTitle))
+        : tags.find((t) => t.title.toLowerCase() === String(tagIdOrTitle).toLowerCase());
+    if (!tag) {
+      return false;
+    }
+
+    const tagId = tag.id;
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    const gameIds = raw ? raw.gameIds : [];
+    const isUsed = gameIds.some((id) => !!allGamesFromFile[id]);
+
+    if (isUsed) {
+      return false;
+    }
+
+    // Only delete if the tag has no cover (user may want to keep tags that have a custom cover)
+    const tagDir = getTagDir(metadataPath, tagId);
+    const coverPath = path.join(tagDir, "cover.webp");
+    if (fs.existsSync(coverPath)) {
+      return false;
+    }
+
+    deleteTag(metadataPath, tag.title);
+
+    return true;
+  }
+
+  return {
+    loadTags,
+    loadTag,
+    findTagIdByTitle,
+    findTagTitleById,
+    resolveTagIdsToObjects,
+    normalizeTagFieldToIds,
+    ensureTagExists,
+    ensureTagsExist,
+    deleteTagIfUnused,
+    registerTagRoutes,
+    getTagToGameIdsMap,
+    addGameToTag,
+    removeGameFromTag,
+    setTagGameIds,
+  };
+}
+
+module.exports = {
+  createTagRoutes,
+};

@@ -16,16 +16,33 @@ function getLocalMediaPath({ metadataPath, resourceId, resourceType, mediaType, 
   let normalizedId;
   let contentDir;
   
-  if (resourceType === 'games') {
+  const tagResourceTypes = new Set([
+    "categories",
+    "themes",
+    "platforms",
+    "game-engines",
+    "game-modes",
+    "player-perspectives",
+  ]);
+
+  if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
-  } else if (resourceType === 'collections') {
+  } else if (["collections", "developers", "publishers"].includes(resourceType)) {
     normalizedId = String(resourceId);
-    contentDir = path.join(metadataPath, "content", "collections", normalizedId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
+  } else if (tagResourceTypes.has(resourceType)) {
+    normalizedId = String(resourceId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else {
     return null;
   }
-  
+
+  // developers/publishers only have cover (no background)
+  if ((resourceType === "developers" || resourceType === "publishers") && mediaType === "background") {
+    return null;
+  }
+
   const fileName = `${mediaType}.webp`;
   const filePath = path.join(contentDir, fileName);
   
@@ -142,16 +159,28 @@ function deleteMediaFile({ metadataPath, resourceId, resourceType, mediaType }) 
   let normalizedId;
   let contentDir;
   
-  if (resourceType === 'games') {
+  const tagResourceTypes = new Set([
+    "categories",
+    "themes",
+    "platforms",
+    "game-engines",
+    "game-modes",
+    "player-perspectives",
+  ]);
+
+  if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
-  } else if (resourceType === 'collections') {
+  } else if (["collections", "developers", "publishers"].includes(resourceType)) {
     normalizedId = String(resourceId);
-    contentDir = path.join(metadataPath, "content", "collections", normalizedId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
+  } else if (tagResourceTypes.has(resourceType)) {
+    normalizedId = String(resourceId);
+    contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else {
     throw new Error(`Invalid resourceType: ${resourceType}`);
   }
-  
+
   const fileName = `${mediaType}.webp`;
   const filePath = path.join(contentDir, fileName);
   

@@ -21,6 +21,11 @@ describe('Directory Structure Initialization', () => {
     delete require.cache[require.resolve('../routes/library.js')];
     delete require.cache[require.resolve('../routes/recommended.js')];
     delete require.cache[require.resolve('../routes/categories.js')];
+    delete require.cache[require.resolve('../routes/themes.js')];
+    delete require.cache[require.resolve('../routes/platforms.js')];
+    delete require.cache[require.resolve('../routes/gameengines.js')];
+    delete require.cache[require.resolve('../routes/gamemodes.js')];
+    delete require.cache[require.resolve('../routes/playerperspectives.js')];
     delete require.cache[require.resolve('../routes/collections.js')];
     delete require.cache[require.resolve('../routes/auth.js')];
   });
@@ -47,6 +52,11 @@ describe('Directory Structure Initialization', () => {
     delete require.cache[require.resolve('../routes/library.js')];
     delete require.cache[require.resolve('../routes/recommended.js')];
     delete require.cache[require.resolve('../routes/categories.js')];
+    delete require.cache[require.resolve('../routes/themes.js')];
+    delete require.cache[require.resolve('../routes/platforms.js')];
+    delete require.cache[require.resolve('../routes/gameengines.js')];
+    delete require.cache[require.resolve('../routes/gamemodes.js')];
+    delete require.cache[require.resolve('../routes/playerperspectives.js')];
     delete require.cache[require.resolve('../routes/collections.js')];
     delete require.cache[require.resolve('../routes/auth.js')];
   });
@@ -75,6 +85,11 @@ describe('Directory Structure Initialization', () => {
       path.join(tempMetadataPath, 'content', 'games'),
       path.join(tempMetadataPath, 'content', 'collections'),
       path.join(tempMetadataPath, 'content', 'categories'),
+      path.join(tempMetadataPath, 'content', 'themes'),
+      path.join(tempMetadataPath, 'content', 'platforms'),
+      path.join(tempMetadataPath, 'content', 'game-engines'),
+      path.join(tempMetadataPath, 'content', 'game-modes'),
+      path.join(tempMetadataPath, 'content', 'player-perspectives'),
       path.join(tempMetadataPath, 'content', 'recommended'),
     ];
     
