@@ -7,8 +7,8 @@ const fs = require("fs");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
-/** Ensure metadata dir + metadata.json exist. Items: number[] (ids only) or [{ id, name }] for IGDB import (names used only for initial metadata title). */
-function ensureFranchiseSeriesExistBatch(metadataPath, items, folder) {
+/** Ensure metadata dir + metadata.json exist. Items: number[] (ids only) or [{ id, name }] for IGDB import. Optional gameId: add to gameIds when creating or when entry exists. */
+function ensureFranchiseSeriesExistBatch(metadataPath, items, folder, gameId) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
   for (const raw of items) {
     let id = null;
@@ -25,9 +25,19 @@ function ensureFranchiseSeriesExistBatch(metadataPath, items, folder) {
     const dir = getItemDir(metadataPath, folder, id);
     const metaPath = getMetadataPath(metadataPath, folder, id);
     const existing = readJsonFile(metaPath, null);
-    if (existing && existing.title != null) continue;
+    if (existing && existing.title != null) {
+      if (gameId != null && typeof gameId === "number") {
+        const gameIds = Array.isArray(existing.gameIds) ? existing.gameIds : [];
+        if (!gameIds.includes(gameId)) {
+          gameIds.push(gameId);
+          writeJsonFile(metaPath, { ...existing, gameIds });
+        }
+      }
+      continue;
+    }
     ensureDirectoryExists(dir);
-    writeJsonFile(metaPath, { title, showTitle: true });
+    const gameIds = gameId != null && typeof gameId === "number" ? [gameId] : [];
+    writeJsonFile(metaPath, { title, showTitle: true, gameIds });
   }
 }
 
@@ -70,6 +80,87 @@ function getMetadataPath(metadataPath, folder, id) {
 function loadStoredMetadata(metadataPath, folder, id) {
   const filePath = getMetadataPath(metadataPath, folder, id);
   return readJsonFile(filePath, null);
+}
+
+/** Add gameId to a franchise's gameIds. */
+function addGameToFranchise(metadataPath, franchiseId, gameId) {
+  const metaPath = getMetadataPath(metadataPath, "franchises", franchiseId);
+  const meta = readJsonFile(metaPath, null) || { title: String(franchiseId), showTitle: true, gameIds: [] };
+  const gameIds = Array.isArray(meta.gameIds) ? meta.gameIds : [];
+  if (gameIds.includes(gameId)) return false;
+  meta.gameIds = [...gameIds, gameId];
+  ensureDirectoryExists(getItemDir(metadataPath, "franchises", franchiseId));
+  writeJsonFile(metaPath, meta);
+  return true;
+}
+
+/** Add gameId to a series' gameIds. */
+function addGameToSeries(metadataPath, seriesId, gameId) {
+  const metaPath = getMetadataPath(metadataPath, "series", seriesId);
+  const meta = readJsonFile(metaPath, null) || { title: String(seriesId), showTitle: true, gameIds: [] };
+  const gameIds = Array.isArray(meta.gameIds) ? meta.gameIds : [];
+  if (gameIds.includes(gameId)) return false;
+  meta.gameIds = [...gameIds, gameId];
+  ensureDirectoryExists(getItemDir(metadataPath, "series", seriesId));
+  writeJsonFile(metaPath, meta);
+  return true;
+}
+
+/** Remove gameId from a franchise's gameIds. */
+function removeGameFromFranchise(metadataPath, franchiseId, gameId) {
+  const metaPath = getMetadataPath(metadataPath, "franchises", franchiseId);
+  const meta = readJsonFile(metaPath, null);
+  if (!meta) return false;
+  const gameIds = Array.isArray(meta.gameIds) ? meta.gameIds : [];
+  const next = gameIds.filter((g) => Number(g) !== Number(gameId));
+  if (next.length === gameIds.length) return false;
+  writeJsonFile(metaPath, { ...meta, gameIds: next });
+  return true;
+}
+
+/** Remove gameId from a series' gameIds. */
+function removeGameFromSeries(metadataPath, seriesId, gameId) {
+  const metaPath = getMetadataPath(metadataPath, "series", seriesId);
+  const meta = readJsonFile(metaPath, null);
+  if (!meta) return false;
+  const gameIds = Array.isArray(meta.gameIds) ? meta.gameIds : [];
+  const next = gameIds.filter((g) => Number(g) !== Number(gameId));
+  if (next.length === gameIds.length) return false;
+  writeJsonFile(metaPath, { ...meta, gameIds: next });
+  return true;
+}
+
+/** Load all franchise/series dirs and return Map(id -> gameIds[]). */
+function getFolderToGameIdsMap(metadataPath, folder) {
+  const dir = path.join(metadataPath, "content", folder);
+  const map = new Map();
+  if (!fs.existsSync(dir)) return map;
+  const folders = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  for (const name of folders) {
+    const id = /^\d+$/.test(name) ? Number(name) : name;
+    const meta = readJsonFile(getMetadataPath(metadataPath, folder, id), null);
+    const gameIds = meta && Array.isArray(meta.gameIds) ? meta.gameIds : [];
+    if (gameIds.length > 0) map.set(id, gameIds);
+  }
+  return map;
+}
+
+function getFranchiseToGameIdsMap(metadataPath) {
+  return getFolderToGameIdsMap(metadataPath, "franchises");
+}
+
+function getSeriesToGameIdsMap(metadataPath) {
+  return getFolderToGameIdsMap(metadataPath, "series");
+}
+
+/** Remove gameId from all franchise and series blocks. */
+function removeGameFromAllFranchiseAndSeriesBlocks(metadataPath, gameId) {
+  for (const [franchiseId, gameIds] of getFranchiseToGameIdsMap(metadataPath)) {
+    if (gameIds.includes(gameId)) removeGameFromFranchise(metadataPath, franchiseId, gameId);
+  }
+  for (const [seriesId, gameIds] of getSeriesToGameIdsMap(metadataPath)) {
+    if (gameIds.includes(gameId)) removeGameFromSeries(metadataPath, seriesId, gameId);
+  }
 }
 
 function mergeWithStored(metadataPath, folder, items, coverRouteBase) {
@@ -123,23 +214,17 @@ function resolveSeriesIdsToObjects(metadataPath, idsOrObjects) {
 
 /**
  * Delete franchise or series from server if no game uses it and it has no cover.
+ * Uses gameIds in block metadata (no longer scans allGames).
  * @param {string} metadataPath
  * @param {"franchises"|"series"} folder - "franchises" or "series"
  * @param {number} id - franchise/series id
- * @param {Object} allGames - map of game id -> game (remaining games, without the one being updated/deleted)
+ * @param {Object} allGames - optional; unused, kept for API compatibility
  * @returns {boolean} true if deleted
  */
 function deleteFranchiseOrSeriesIfUnused(metadataPath, folder, id, allGames) {
-  const gameField = folder === "franchises" ? "franchise" : "collection";
-  const isUsed = Object.values(allGames).some((game) => {
-    const raw = game[gameField];
-    const arr = toArray(raw);
-    return arr.some((item) => {
-      const normalized = normalizeItem(item);
-      return normalized && normalized.id === id;
-    });
-  });
-  if (isUsed) return false;
+  const meta = readJsonFile(getMetadataPath(metadataPath, folder, id), null);
+  const gameIds = meta && Array.isArray(meta.gameIds) ? meta.gameIds : [];
+  if (gameIds.length > 0) return false;
 
   const dir = getItemDir(metadataPath, folder, id);
   const coverPath = path.join(dir, "cover.webp");
@@ -194,8 +279,9 @@ function registerSeriesAndFranchisesRoutes(app, requireToken, allGames, metadata
         : aggregateFromGames(allGames, "franchise");
       const item = baseList.find((x) => x.id === id);
       if (!item) return res.status(404).json({ error: "Not found" });
-      const meta = loadStoredMetadata(metadataPath, folder, id) || { title: item.title, showTitle: true };
+      const meta = loadStoredMetadata(metadataPath, folder, id) || { title: item.title, showTitle: true, gameIds: [] };
       if (typeof req.body.showTitle === "boolean") meta.showTitle = req.body.showTitle;
+      if (!Array.isArray(meta.gameIds)) meta.gameIds = [];
       const dir = getItemDir(metadataPath, folder, id);
       ensureDirectoryExists(dir);
       writeJsonFile(getMetadataPath(metadataPath, folder, id), meta);
@@ -221,7 +307,8 @@ function registerSeriesAndFranchisesRoutes(app, requireToken, allGames, metadata
       try {
         const dir = getItemDir(metadataPath, folder, id);
         ensureDirectoryExists(dir);
-        const meta = loadStoredMetadata(metadataPath, folder, id) || { title: item.title, showTitle: true };
+        const meta = loadStoredMetadata(metadataPath, folder, id) || { title: item.title, showTitle: true, gameIds: [] };
+        if (!Array.isArray(meta.gameIds)) meta.gameIds = [];
         writeJsonFile(getMetadataPath(metadataPath, folder, id), meta);
         const coverPath = path.join(dir, "cover.webp");
         fs.writeFileSync(coverPath, file.buffer);
@@ -278,6 +365,13 @@ function registerSeriesAndFranchisesRoutes(app, requireToken, allGames, metadata
 module.exports = {
   registerSeriesAndFranchisesRoutes,
   ensureFranchiseSeriesExistBatch,
+  addGameToFranchise,
+  addGameToSeries,
+  removeGameFromFranchise,
+  removeGameFromSeries,
+  removeGameFromAllFranchiseAndSeriesBlocks,
+  getFranchiseToGameIdsMap,
+  getSeriesToGameIdsMap,
   deleteFranchiseOrSeriesIfUnused,
   resolveFranchiseIdsToObjects,
   resolveSeriesIdsToObjects,

@@ -52,7 +52,7 @@ function createCollectionLikeRoutes(config) {
 
     for (const item of items) {
       const id = typeof item === "object" && item && item.id != null ? item.id : item;
-      const name = typeof item === "object" && item && item.name ? item.name : String(item);
+      const name = typeof item === "object" && item && (item.name ?? item.title) ? (item.name ?? item.title) : String(item);
       if (!id || !name) continue;
       const numId = Number(id);
       if (isNaN(numId) || numId < 0) continue;
@@ -94,6 +94,18 @@ function createCollectionLikeRoutes(config) {
 
   function removeGameFromAllFunc(metadataPath, gameId, updateCacheCallback, cache) {
     return removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallback, cache);
+  }
+
+  /** Delete item if it has no games left and no local cover (so orphaned and no custom cover). */
+  function deleteItemIfUnused(metadataPath, itemId) {
+    const list = loadItems(metadataPath, contentFolder);
+    const entry = findById(list, itemId);
+    if (!entry) return;
+    const games = entry.games || [];
+    if (games.length > 0) return;
+    const coverPath = path.join(metadataPath, "content", contentFolder, String(itemId), "cover.webp");
+    if (fs.existsSync(coverPath)) return;
+    deleteItem(metadataPath, contentFolder, itemId);
   }
 
   function registerRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames, removeFromAllGamesFn) {
@@ -467,6 +479,7 @@ function createCollectionLikeRoutes(config) {
     ensureBatch,
     removeGameFrom,
     removeGameFromAll: removeGameFromAllFunc,
+    deleteItemIfUnused,
     registerRoutes,
   };
 }

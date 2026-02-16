@@ -5,47 +5,83 @@ const {
   ensureCategoriesExistBatch,
   deleteCategoryIfUnused,
   normalizeCategoryFieldToIds,
+  getTagToGameIdsMap: getCategoryToGameIdsMap,
+  addGameToTag: addGameToCategory,
+  removeGameFromTag: removeGameFromCategory,
 } = require("./categories");
 const {
   ensureThemesExistBatch,
   deleteThemeIfUnused,
   normalizeThemeFieldToIds,
+  getTagToGameIdsMap: getThemeToGameIdsMap,
+  addGameToTag: addGameToTheme,
+  removeGameFromTag: removeGameFromTheme,
 } = require("./themes");
 const {
   ensurePlatformsExistBatch,
   deletePlatformIfUnused,
   normalizePlatformFieldToIds,
+  getTagToGameIdsMap: getPlatformToGameIdsMap,
+  addGameToTag: addGameToPlatform,
+  removeGameFromTag: removeGameFromPlatform,
 } = require("./platforms");
 const {
   ensureGameEnginesExistBatch,
   deleteGameEngineIfUnused,
   normalizeGameEngineFieldToIds,
+  getTagToGameIdsMap: getGameEngineToGameIdsMap,
+  addGameToTag: addGameToGameEngine,
+  removeGameFromTag: removeGameFromGameEngine,
 } = require("./gameengines");
 const {
   ensureGameModesExistBatch,
   deleteGameModeIfUnused,
   normalizeGameModeFieldToIds,
+  getTagToGameIdsMap: getGameModeToGameIdsMap,
+  addGameToTag: addGameToGameMode,
+  removeGameFromTag: removeGameFromGameMode,
 } = require("./gamemodes");
 const {
   ensurePlayerPerspectivesExistBatch,
   deletePlayerPerspectiveIfUnused,
   normalizePlayerPerspectiveFieldToIds,
+  getTagToGameIdsMap: getPlayerPerspectiveToGameIdsMap,
+  addGameToTag: addGameToPlayerPerspective,
+  removeGameFromTag: removeGameFromPlayerPerspective,
 } = require("./playerperspectives");
 const { removeGameFromRecommended } = require("./recommended");
-const { removeGameFromAllCollections } = require("./collections");
+const {
+  removeGameFromAllCollections,
+  addGameToCollection,
+  getCollectionToGameIdsMap,
+  deleteCollectionIfUnused,
+} = require("./collections");
 const {
   ensureDevelopersExistBatch,
   removeGameFromAllDevelopers,
+  deleteDeveloperIfUnused,
   removeGameFromDeveloper,
+  addGameToDeveloper,
+  getDeveloperToGameIdsMap,
 } = require("./developers");
 const {
   ensurePublishersExistBatch,
   removeGameFromAllPublishers,
+  deletePublisherIfUnused,
   removeGameFromPublisher,
+  addGameToPublisher,
+  getPublisherToGameIdsMap,
 } = require("./publishers");
 const {
   ensureFranchiseSeriesExistBatch,
   deleteFranchiseOrSeriesIfUnused,
+  addGameToFranchise,
+  addGameToSeries,
+  removeGameFromFranchise,
+  removeGameFromSeries,
+  removeGameFromAllFranchiseAndSeriesBlocks,
+  getFranchiseToGameIdsMap,
+  getSeriesToGameIdsMap,
 } = require("./seriesAndFranchises");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
@@ -77,7 +113,7 @@ function toIdsOnlyArray(val) {
   return result;
 }
 
-// Helper function to save a single game (tag fields stored as id arrays only)
+// Helper function to save a single game. Tag fields (genre, themes, platforms, etc.) are stored only in tag blocks, not in game metadata.
 function saveGame(metadataPath, game) {
   const gameId = game.id;
   const gameDir = path.join(metadataPath, "content", "games", String(gameId));
@@ -85,23 +121,112 @@ function saveGame(metadataPath, game) {
   const filePath = getGameMetadataPath(metadataPath, gameId);
   const gameToSave = { ...game };
   delete gameToSave.id;
-  gameToSave.genre = toIdsOnlyArray(game.genre);
-  gameToSave.themes = toIdsOnlyArray(game.themes);
-  gameToSave.platforms = toIdsOnlyArray(game.platforms);
-  gameToSave.gameEngines = toIdsOnlyArray(game.gameEngines);
-  gameToSave.gameModes = toIdsOnlyArray(game.gameModes);
-  gameToSave.playerPerspectives = toIdsOnlyArray(game.playerPerspectives);
-  gameToSave.franchise = toIdsOnlyArray(game.franchise);
-  gameToSave.collection = toIdsOnlyArray(game.collection);
-  gameToSave.developers = toIdsOnlyArray(game.developers);
-  gameToSave.publishers = toIdsOnlyArray(game.publishers);
+  // Do not write tag/relation fields to game file; they live in their blocks (gameIds)
+  delete gameToSave.genre;
+  delete gameToSave.themes;
+  delete gameToSave.platforms;
+  delete gameToSave.gameEngines;
+  delete gameToSave.gameModes;
+  delete gameToSave.playerPerspectives;
+  delete gameToSave.developers;
+  delete gameToSave.publishers;
+  delete gameToSave.franchise;
+  delete gameToSave.collection;
   writeJsonFile(filePath, gameToSave);
 }
 
-// Helper function to load a single game (metadata.json has tag fields as id arrays only)
+// Helper function to load a single game (metadata.json no longer has genre/themes/platforms/etc.; those come from tag blocks)
 function loadGame(metadataPath, gameId) {
   const filePath = getGameMetadataPath(metadataPath, gameId);
   return readJsonFile(filePath, null);
+}
+
+/** Get tag/relation ids for a single game from blocks (genre, themes, platforms, …, developers, publishers, franchise, collection). */
+function getGameTagIdsFromBlocks(metadataPath, gameId) {
+  const result = {
+    genre: [],
+    themes: [],
+    platforms: [],
+    gameModes: [],
+    playerPerspectives: [],
+    gameEngines: [],
+    developers: [],
+    publishers: [],
+    franchise: [],
+    collection: [],
+  };
+  const pairs = [
+    [getCategoryToGameIdsMap(metadataPath), "genre"],
+    [getThemeToGameIdsMap(metadataPath), "themes"],
+    [getPlatformToGameIdsMap(metadataPath), "platforms"],
+    [getGameModeToGameIdsMap(metadataPath), "gameModes"],
+    [getPlayerPerspectiveToGameIdsMap(metadataPath), "playerPerspectives"],
+    [getGameEngineToGameIdsMap(metadataPath), "gameEngines"],
+    [getDeveloperToGameIdsMap(metadataPath), "developers"],
+    [getPublisherToGameIdsMap(metadataPath), "publishers"],
+    [getFranchiseToGameIdsMap(metadataPath), "franchise"],
+    [getSeriesToGameIdsMap(metadataPath), "collection"],
+  ];
+  for (const [map, key] of pairs) {
+    for (const [tagId, gameIds] of map) {
+      if (gameIds.includes(gameId)) result[key].push(tagId);
+    }
+  }
+  return result;
+}
+
+/** Build reverse map gameId -> { genre, themes, ..., developers, publishers, franchise, collection } from blocks and apply to allGames. */
+function applyTagReverseMapToGames(metadataPath, allGames) {
+  const pairs = [
+    [getCategoryToGameIdsMap(metadataPath), "genre"],
+    [getThemeToGameIdsMap(metadataPath), "themes"],
+    [getPlatformToGameIdsMap(metadataPath), "platforms"],
+    [getGameModeToGameIdsMap(metadataPath), "gameModes"],
+    [getPlayerPerspectiveToGameIdsMap(metadataPath), "playerPerspectives"],
+    [getGameEngineToGameIdsMap(metadataPath), "gameEngines"],
+    [getDeveloperToGameIdsMap(metadataPath), "developers"],
+    [getPublisherToGameIdsMap(metadataPath), "publishers"],
+    [getFranchiseToGameIdsMap(metadataPath), "franchise"],
+    [getSeriesToGameIdsMap(metadataPath), "collection"],
+  ];
+  for (const [map, key] of pairs) {
+    for (const [tagId, gameIds] of map) {
+      for (const gid of gameIds) {
+        if (!allGames[gid]) continue;
+        if (!allGames[gid][key]) allGames[gid][key] = [];
+        if (!allGames[gid][key].includes(tagId)) allGames[gid][key].push(tagId);
+      }
+    }
+  }
+  for (const game of Object.values(allGames)) {
+    if (!game.genre) game.genre = [];
+    if (!game.themes) game.themes = [];
+    if (!game.platforms) game.platforms = [];
+    if (!game.gameModes) game.gameModes = [];
+    if (!game.playerPerspectives) game.playerPerspectives = [];
+    if (!game.gameEngines) game.gameEngines = [];
+    if (!game.developers) game.developers = [];
+    if (!game.publishers) game.publishers = [];
+    if (!game.franchise) game.franchise = [];
+    if (!game.collection) game.collection = [];
+  }
+}
+
+/** Remove a game from all tag blocks (genre, themes, platforms, gameModes, playerPerspectives, gameEngines). */
+function removeGameFromAllTagBlocks(metadataPath, gameId) {
+  const pairs = [
+    [getCategoryToGameIdsMap(metadataPath), removeGameFromCategory],
+    [getThemeToGameIdsMap(metadataPath), removeGameFromTheme],
+    [getPlatformToGameIdsMap(metadataPath), removeGameFromPlatform],
+    [getGameModeToGameIdsMap(metadataPath), removeGameFromGameMode],
+    [getPlayerPerspectiveToGameIdsMap(metadataPath), removeGameFromPlayerPerspective],
+    [getGameEngineToGameIdsMap(metadataPath), removeGameFromGameEngine],
+  ];
+  for (const [map, removeFn] of pairs) {
+    for (const [tagId, gameIds] of map) {
+      if (gameIds.includes(gameId)) removeFn(metadataPath, tagId, gameId);
+    }
+  }
 }
 
 // Normalize franchise/collection/series to array for API responses (supports legacy single value)
@@ -127,9 +252,25 @@ function resolveDevPubIdsToObjects(list, ids) {
   return result;
 }
 
-/** Build game response: tag fields are id arrays only; frontend resolves id→name from its own data. */
-function buildGameResponse(metadataPath, game) {
+/** Resolve developer/publisher ids to [{ id, name }] when list is provided. */
+function resolveDeveloperPublisherNames(ids, list) {
+  if (!list || !Array.isArray(list) || !ids || ids.length === 0) return null;
+  const byId = new Map(list.map((x) => [Number(x.id), x]));
+  return ids.map((id) => {
+    const numId = Number(typeof id === "object" && id != null && id.id != null ? id.id : id);
+    const entry = byId.get(numId);
+    const name = entry && (entry.title || entry.name) ? String(entry.title || entry.name).trim() : String(numId);
+    return { id: numId, name };
+  });
+}
+
+/** Build game response: tag fields are id arrays; developers/publishers can be enriched to [{ id, name }] if lists passed. */
+function buildGameResponse(metadataPath, game, developersList = null, publishersList = null) {
   const executables = getExecutablesWithOrder(metadataPath, game.id, game);
+  const devIds = game.developers && Array.isArray(game.developers) ? game.developers : [];
+  const pubIds = game.publishers && Array.isArray(game.publishers) ? game.publishers : [];
+  const developersResolved = resolveDeveloperPublisherNames(devIds, developersList);
+  const publishersResolved = resolveDeveloperPublisherNames(pubIds, publishersList);
   const gameData = {
     id: game.id,
     title: game.title,
@@ -149,8 +290,8 @@ function buildGameResponse(metadataPath, game) {
     playerPerspectives: game.playerPerspectives && game.playerPerspectives.length ? game.playerPerspectives : null,
     websites: game.websites || null,
     ageRatings: game.ageRatings || null,
-    developers: game.developers && game.developers.length ? game.developers : null,
-    publishers: game.publishers && game.publishers.length ? game.publishers : null,
+    developers: developersResolved && developersResolved.length > 0 ? developersResolved : (devIds.length > 0 ? devIds : null),
+    publishers: publishersResolved && publishersResolved.length > 0 ? publishersResolved : (pubIds.length > 0 ? pubIds : null),
     franchise: toFranchiseSeriesArray(game.franchise),
     collection: toFranchiseSeriesArray(game.collection),
     series: toFranchiseSeriesArray(game.collection),
@@ -285,49 +426,19 @@ function deleteGame(metadataPath, gameId) {
 function loadLibraryGames(metadataPath, allGames) {
   const gamesDir = path.join(metadataPath, "content", "games");
   const games = [];
-  
+
   if (!fs.existsSync(gamesDir)) {
     return games;
   }
-  
-  // Read all subdirectories (each game has its own folder)
+
   const gameFolders = fs.readdirSync(gamesDir, { withFileTypes: true })
-    .filter(dirent => dirent.isDirectory())
-    .map(dirent => dirent.name);
-  
-  // Load each game's metadata.json
+    .filter((dirent) => dirent.isDirectory())
+    .map((dirent) => dirent.name);
+
   gameFolders.forEach((gameId) => {
     const game = loadGame(metadataPath, gameId);
     if (game) {
       game.id = Number(gameId) || gameId;
-      // Migrate tag fields from titles (string[]) to ids (number[]) if needed
-      let migrated = false;
-      const normalizeIfStrings = (arr) => Array.isArray(arr) && arr.length > 0 && typeof arr[0] === "string";
-      if (normalizeIfStrings(game.themes)) {
-        game.themes = normalizeThemeFieldToIds(metadataPath, game.themes);
-        migrated = true;
-      }
-      if (normalizeIfStrings(game.platforms)) {
-        game.platforms = normalizePlatformFieldToIds(metadataPath, game.platforms);
-        migrated = true;
-      }
-      if (normalizeIfStrings(game.gameModes)) {
-        game.gameModes = normalizeGameModeFieldToIds(metadataPath, game.gameModes);
-        migrated = true;
-      }
-      if (normalizeIfStrings(game.playerPerspectives)) {
-        game.playerPerspectives = normalizePlayerPerspectiveFieldToIds(metadataPath, game.playerPerspectives);
-        migrated = true;
-      }
-      if (normalizeIfStrings(game.gameEngines)) {
-        game.gameEngines = normalizeGameEngineFieldToIds(metadataPath, game.gameEngines);
-        migrated = true;
-      }
-      if (normalizeIfStrings(game.genre)) {
-        game.genre = normalizeCategoryFieldToIds(metadataPath, game.genre);
-        migrated = true;
-      }
-      if (migrated) saveGame(metadataPath, game);
       const executableNames = getExecutablesWithOrder(metadataPath, gameId, game);
       if (executableNames.length > 0) {
         game.executables = executableNames;
@@ -338,7 +449,8 @@ function loadLibraryGames(metadataPath, allGames) {
       allGames[game.id] = game;
     }
   });
-  
+
+  applyTagReverseMapToGames(metadataPath, allGames);
   return games;
 }
 
@@ -427,8 +539,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         }
       });
 
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
       const responsePayload = {
-        games: sorted.map((g) => buildGameResponse(metadataPath, g)),
+        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs)),
       };
 
       if (fromCache) {
@@ -444,7 +558,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     if (!game) {
       return res.status(404).json({ error: "Game not found" });
     }
-    res.json(buildGameResponse(metadataPath, game));
+    const devs = getDevelopersCache ? getDevelopersCache() : null;
+    const pubs = getPublishersCache ? getPublishersCache() : null;
+    res.json(buildGameResponse(metadataPath, game, devs, pubs));
   });
 
   // Endpoint: update game fields
@@ -463,19 +579,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       game = loadGame(metadataPath, gameId);
       if (game) {
         game.id = gameId;
+        Object.assign(game, getGameTagIdsFromBlocks(metadataPath, gameId));
         allGames[gameId] = game;
         invalidateLibraryGamesResponseCache();
       } else {
-        // If metadata.json exists but can't be loaded, it might be corrupted
-        // Still return 404 to be safe
         return res.status(404).json({ error: "Game not found" });
       }
     }
     
-    // Double-check: ensure game still exists in file system
     const gameMetadataPath = getGameMetadataPath(metadataPath, gameId);
     if (!fs.existsSync(gameMetadataPath)) {
-      // Game was deleted between cache check and now
       delete allGames[gameId];
       invalidateLibraryGamesResponseCache();
       return res.status(404).json({ error: "Game not found" });
@@ -530,50 +643,68 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     if ("playerPerspectives" in filteredUpdates) {
       filteredUpdates.playerPerspectives = normalizePlayerPerspectiveFieldToIds(metadataPath, filteredUpdates.playerPerspectives);
     }
-    // Developers and publishers: only array of numeric ids
-    const validateIdArray = (arr) => {
-      if (!arr || !Array.isArray(arr)) return null;
-      const out = [];
+    // Developers and publishers: accept number[] or [{ id, name? }]; normalize to ids + items with names for blocks
+    const normalizeDeveloperPublisher = (arr, getCache) => {
+      if (!arr || !Array.isArray(arr) || arr.length === 0) return { ids: [], items: [] };
+      const cache = getCache && typeof getCache === "function" ? getCache() : null;
+      const list = Array.isArray(cache) ? cache : [];
+      const byId = new Map(list.map((x) => [Number(x.id), x]));
       const seen = new Set();
+      const ids = [];
+      const items = [];
       for (const x of arr) {
-        if (x == null || typeof x !== "number" || Number.isNaN(x)) continue;
-        if (seen.has(x)) continue;
-        seen.add(x);
-        out.push(x);
+        const id = x == null ? null : typeof x === "object" && x && x.id != null ? Number(x.id) : Number(x);
+        if (id == null || Number.isNaN(id)) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+        const name =
+          typeof x === "object" && x && (x.name != null || x.title != null)
+            ? String(x.name ?? x.title).trim()
+            : (byId.get(id) && (byId.get(id).title || byId.get(id).name)) || String(id);
+        items.push({ id, name });
       }
-      return out.length > 0 ? out : null;
+      return { ids, items };
     };
     if ("developers" in filteredUpdates) {
-      const newDevs = validateIdArray(filteredUpdates.developers) || [];
+      const { ids: newDevIds, items: newDevItems } = normalizeDeveloperPublisher(
+        filteredUpdates.developers,
+        () => (typeof getDevelopersCache === "function" ? getDevelopersCache() : null)
+      );
       const oldDevs = Array.isArray(game.developers) ? game.developers : [];
-      const oldIds = new Set(oldDevs.map((d) => Number(d)));
-      const newIds = new Set(newDevs);
+      const oldIds = new Set(oldDevs.map((d) => Number(typeof d === "object" && d && d.id != null ? d.id : d)));
+      const newIds = new Set(newDevIds);
       for (const oldId of oldIds) {
         if (!newIds.has(oldId)) removeGameFromDeveloper(metadataPath, oldId, gameId);
       }
-      if (newDevs.length > 0) ensureDevelopersExistBatch(metadataPath, newDevs, gameId);
+      if (newDevItems.length > 0) ensureDevelopersExistBatch(metadataPath, newDevItems, gameId);
+      filteredUpdates.developers = newDevIds.length > 0 ? newDevIds : null;
     }
     if ("publishers" in filteredUpdates) {
-      const newPubs = validateIdArray(filteredUpdates.publishers) || [];
+      const { ids: newPubIds, items: newPubItems } = normalizeDeveloperPublisher(
+        filteredUpdates.publishers,
+        () => (typeof getPublishersCache === "function" ? getPublishersCache() : null)
+      );
       const oldPubs = Array.isArray(game.publishers) ? game.publishers : [];
-      const oldIds = new Set(oldPubs.map((p) => Number(p)));
-      const newIds = new Set(newPubs);
+      const oldIds = new Set(oldPubs.map((p) => Number(typeof p === "object" && p && p.id != null ? p.id : p)));
+      const newIds = new Set(newPubIds);
       for (const oldId of oldIds) {
         if (!newIds.has(oldId)) removeGameFromPublisher(metadataPath, oldId, gameId);
       }
-      if (newPubs.length > 0) ensurePublishersExistBatch(metadataPath, newPubs, gameId);
+      if (newPubItems.length > 0) ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
+      filteredUpdates.publishers = newPubIds.length > 0 ? newPubIds : null;
     }
-    // Franchise and collection (series): only array of numeric ids
+    // Franchise and collection (series): only array of numeric ids; ensure blocks exist and link game
     if ("franchise" in filteredUpdates) {
       filteredUpdates.franchise = validateIdArray(filteredUpdates.franchise) || null;
       if (filteredUpdates.franchise && filteredUpdates.franchise.length > 0) {
-        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.franchise, "franchises");
+        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.franchise, "franchises", gameId);
       }
     }
     if ("collection" in filteredUpdates) {
       filteredUpdates.collection = validateIdArray(filteredUpdates.collection) || null;
       if (filteredUpdates.collection && filteredUpdates.collection.length > 0) {
-        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.collection, "series");
+        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.collection, "series", gameId);
       }
     }
 
@@ -587,43 +718,51 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     if ("genre" in filteredUpdates) {
       const oldIds = toTagIdArray(game.genre);
       const newIds = toTagIdArray(filteredUpdates.genre);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "genre", id, deleteFn: deleteCategoryIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromCategory(metadataPath, id, gameId); tagCleanup.push({ type: "genre", id, deleteFn: deleteCategoryIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToCategory(metadataPath, id, gameId));
     }
     if ("themes" in filteredUpdates) {
       const oldIds = toTagIdArray(game.themes);
       const newIds = toTagIdArray(filteredUpdates.themes);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "themes", id, deleteFn: deleteThemeIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromTheme(metadataPath, id, gameId); tagCleanup.push({ type: "themes", id, deleteFn: deleteThemeIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToTheme(metadataPath, id, gameId));
     }
     if ("platforms" in filteredUpdates) {
       const oldIds = toTagIdArray(game.platforms);
       const newIds = toTagIdArray(filteredUpdates.platforms);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "platforms", id, deleteFn: deletePlatformIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromPlatform(metadataPath, id, gameId); tagCleanup.push({ type: "platforms", id, deleteFn: deletePlatformIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToPlatform(metadataPath, id, gameId));
     }
     if ("gameEngines" in filteredUpdates) {
       const oldIds = toTagIdArray(game.gameEngines);
       const newIds = toTagIdArray(filteredUpdates.gameEngines);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "gameEngines", id, deleteFn: deleteGameEngineIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromGameEngine(metadataPath, id, gameId); tagCleanup.push({ type: "gameEngines", id, deleteFn: deleteGameEngineIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToGameEngine(metadataPath, id, gameId));
     }
     if ("gameModes" in filteredUpdates) {
       const oldIds = toTagIdArray(game.gameModes);
       const newIds = toTagIdArray(filteredUpdates.gameModes);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "gameModes", id, deleteFn: deleteGameModeIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromGameMode(metadataPath, id, gameId); tagCleanup.push({ type: "gameModes", id, deleteFn: deleteGameModeIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToGameMode(metadataPath, id, gameId));
     }
     if ("playerPerspectives" in filteredUpdates) {
       const oldIds = toTagIdArray(game.playerPerspectives);
       const newIds = toTagIdArray(filteredUpdates.playerPerspectives);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => tagCleanup.push({ type: "playerPerspectives", id, deleteFn: deletePlayerPerspectiveIfUnused }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromPlayerPerspective(metadataPath, id, gameId); tagCleanup.push({ type: "playerPerspectives", id, deleteFn: deletePlayerPerspectiveIfUnused }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToPlayerPerspective(metadataPath, id, gameId));
     }
     const franchiseSeriesCleanup = [];
     if ("franchise" in filteredUpdates) {
       const oldIds = toTagIdArray(game.franchise);
       const newIds = toTagIdArray(filteredUpdates.franchise);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => franchiseSeriesCleanup.push({ folder: "franchises", id }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromFranchise(metadataPath, id, gameId); franchiseSeriesCleanup.push({ folder: "franchises", id }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToFranchise(metadataPath, id, gameId));
     }
     if ("collection" in filteredUpdates) {
       const oldIds = toTagIdArray(game.collection);
       const newIds = toTagIdArray(filteredUpdates.collection);
-      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => franchiseSeriesCleanup.push({ folder: "series", id }));
+      oldIds.filter((id) => !newIds.includes(id)).forEach((id) => { removeGameFromSeries(metadataPath, id, gameId); franchiseSeriesCleanup.push({ folder: "series", id }); });
+      newIds.filter((id) => !oldIds.includes(id)).forEach((id) => addGameToSeries(metadataPath, id, gameId));
     }
 
     // Track if we need to delete executables (when executables is null)
@@ -664,14 +803,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     
     // Save to file - each game has its own folder
     try {
-      // Load current game
       const currentGame = loadGame(metadataPath, gameId);
       if (!currentGame) {
         return res.status(404).json({ error: "Game not found" });
       }
-      
-      // Add id field (it's derived from folder name, not stored in metadata.json)
       currentGame.id = gameId;
+      Object.assign(currentGame, getGameTagIdsFromBlocks(metadataPath, gameId));
       
       // Update game with new values
       if (Object.keys(filteredUpdates).length > 0) {
@@ -795,7 +932,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       invalidateLibraryGamesResponseCache();
 
       const updatedGame = currentGame;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame) });
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs) });
     } catch (e) {
       console.error(`Failed to save ${fileName}:`, e.message);
       res.status(500).json({ error: "Failed to save game updates" });
@@ -816,7 +955,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return res.status(404).json({ error: "Game not found" });
       }
       
-      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game) });
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs) });
     } catch (e) {
       console.error(`Failed to reload game ${gameId}:`, e.message);
       res.status(500).json({ error: "Failed to reload game metadata" });
@@ -920,26 +1061,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       game = loadGame(metadataPath, gameId);
       if (game) {
         game.id = gameId;
+        Object.assign(game, getGameTagIdsFromBlocks(metadataPath, gameId));
         allGames[gameId] = game;
         invalidateLibraryGamesResponseCache();
       } else {
-        // If metadata.json exists but can't be loaded, it might be corrupted
-        // Still return 404 to be safe
         return res.status(404).json({ error: "Game not found" });
       }
     }
     
-    // Double-check: ensure game still exists in file system
     const gameMetadataPath = getGameMetadataPath(metadataPath, gameId);
     if (!fs.existsSync(gameMetadataPath)) {
-      // Game was deleted between cache check and now
       delete allGames[gameId];
       invalidateLibraryGamesResponseCache();
       return res.status(404).json({ error: "Game not found" });
     }
     
     try {
-      // Delete the cover file
       deleteMediaFile({
         metadataPath,
         resourceId: gameId,
@@ -974,26 +1111,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       game = loadGame(metadataPath, gameId);
       if (game) {
         game.id = gameId;
+        Object.assign(game, getGameTagIdsFromBlocks(metadataPath, gameId));
         allGames[gameId] = game;
         invalidateLibraryGamesResponseCache();
       } else {
-        // If metadata.json exists but can't be loaded, it might be corrupted
-        // Still return 404 to be safe
         return res.status(404).json({ error: "Game not found" });
       }
     }
     
-    // Double-check: ensure game still exists in file system
     const gameMetadataPath = getGameMetadataPath(metadataPath, gameId);
     if (!fs.existsSync(gameMetadataPath)) {
-      // Game was deleted between cache check and now
       delete allGames[gameId];
       invalidateLibraryGamesResponseCache();
       return res.status(404).json({ error: "Game not found" });
     }
     
     try {
-      // Delete the background file
       deleteMediaFile({
         metadataPath,
         resourceId: gameId,
@@ -1286,8 +1419,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
       if (rawPublishers && rawPublishers.length > 0) ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
-      if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, franchiseForEnsure, "franchises");
-      if (collectionForEnsure && collectionForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, collectionForEnsure, "series");
+      if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, franchiseForEnsure, "franchises", gameId);
+      if (collectionForEnsure && collectionForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, collectionForEnsure, "series", gameId);
+
+      // Sync tag ids to tag blocks (genre, themes, platforms, gameModes, playerPerspectives, gameEngines)
+      if (genreIds && genreIds.length) genreIds.forEach((id) => addGameToCategory(metadataPath, id, gameId));
+      if (themeIds && themeIds.length) themeIds.forEach((id) => addGameToTheme(metadataPath, id, gameId));
+      if (platformIds && platformIds.length) platformIds.forEach((id) => addGameToPlatform(metadataPath, id, gameId));
+      if (gameModeIds && gameModeIds.length) gameModeIds.forEach((id) => addGameToGameMode(metadataPath, id, gameId));
+      if (playerPerspectiveIds && playerPerspectiveIds.length) playerPerspectiveIds.forEach((id) => addGameToPlayerPerspective(metadataPath, id, gameId));
+      if (gameEngineIds && gameEngineIds.length) gameEngineIds.forEach((id) => addGameToGameEngine(metadataPath, id, gameId));
 
       // Save game to its own folder
       saveGame(metadataPath, newGame);
@@ -1301,7 +1442,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         updateRecommendedSections(metadataPath, allGames);
       }
 
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame), gameId: newGame.id });
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs), gameId: newGame.id });
     } catch (error) {
       console.error(`Failed to add game from IGDB:`, error);
       res.status(500).json({ error: "Failed to add game to library", detail: error.message });
@@ -1330,6 +1473,18 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         : [];
       const gameFranchiseIds = Array.isArray(game.franchise) ? game.franchise : game.franchise != null ? [game.franchise] : [];
       const gameCollectionIds = Array.isArray(game.collection) ? game.collection : game.collection != null ? [game.collection] : [];
+      const gameDeveloperIds = (game.developers && Array.isArray(game.developers)
+        ? game.developers
+        : game.developers != null ? [game.developers] : []
+      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
+      const gamePublisherIds = (game.publishers && Array.isArray(game.publishers)
+        ? game.publishers
+        : game.publishers != null ? [game.publishers] : []
+      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
+
+      // Remove game from all tag blocks (genre, themes, platforms, etc.) and franchise/series blocks before deleting
+      removeGameFromAllTagBlocks(metadataPath, gameId);
+      removeGameFromAllFranchiseAndSeriesBlocks(metadataPath, gameId);
 
       // Delete game folder and its metadata.json
       deleteGame(metadataPath, gameId);
@@ -1339,13 +1494,28 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       // Remove game from all collections (use in-memory cache when available)
       const collectionsCache = getCollectionsCache && typeof getCollectionsCache === "function" ? getCollectionsCache() : null;
+      const collectionToGames = getCollectionToGameIdsMap(metadataPath);
+      const collectionIdsContainingGame = [];
+      for (const [collectionId, gameIds] of collectionToGames) {
+        if (gameIds.some((g) => Number(g) === Number(gameId))) collectionIdsContainingGame.push(collectionId);
+      }
       removeGameFromAllCollections(metadataPath, gameId, updateCollectionsCache, collectionsCache);
+      for (const id of collectionIdsContainingGame) {
+        if (id != null) deleteCollectionIfUnused(metadataPath, id);
+      }
       // Remove game from all developers and publishers
       const developersCache = getDevelopersCache && typeof getDevelopersCache === "function" ? getDevelopersCache() : null;
       const publishersCache = getPublishersCache && typeof getPublishersCache === "function" ? getPublishersCache() : null;
       removeGameFromAllDevelopers(metadataPath, gameId, null, developersCache);
       removeGameFromAllPublishers(metadataPath, gameId, null, publishersCache);
-      
+
+      for (const id of gameDeveloperIds) {
+        if (id != null) deleteDeveloperIfUnused(metadataPath, id);
+      }
+      for (const id of gamePublisherIds) {
+        if (id != null) deletePublisherIfUnused(metadataPath, id);
+      }
+
       // Remove from in-memory cache
       delete allGames[gameId];
       invalidateLibraryGamesResponseCache();

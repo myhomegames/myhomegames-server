@@ -11,6 +11,8 @@ const {
   findIndexById,
   normalizeId,
   removeGameFromAll,
+  addGameToItem,
+  getResourceToGameIdsMap,
 } = require("../utils/collectionsShared");
 
 const CONTENT_FOLDER = "collections";
@@ -37,6 +39,16 @@ function loadCollections(metadataPath) {
   return loadItems(metadataPath, CONTENT_FOLDER);
 }
 
+/** Add game to a collection's games array (for migration / linking). Collections are stored only in blocks. */
+function addGameToCollection(metadataPath, collectionId, gameId) {
+  return addGameToItem(metadataPath, CONTENT_FOLDER, collectionId, gameId);
+}
+
+/** Map(collectionId -> gameIds[]) for building game.collection from blocks. */
+function getCollectionToGameIdsMap(metadataPath) {
+  return getResourceToGameIdsMap(metadataPath, CONTENT_FOLDER);
+}
+
 // Helper function to remove a game from all collections
 // collectionsCache: optional in-memory array; when provided, use it instead of loading from disk
 function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null, collectionsCache = null) {
@@ -44,6 +56,18 @@ function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback 
     ? (item) => updateCacheCallback([item])
     : null;
   return removeGameFromAll(metadataPath, CONTENT_FOLDER, gameId, callback, collectionsCache);
+}
+
+/** Delete collection if it has no games left and no local cover (orphan, no custom cover). */
+function deleteCollectionIfUnused(metadataPath, collectionId) {
+  const list = loadItems(metadataPath, CONTENT_FOLDER);
+  const entry = findById(list, collectionId);
+  if (!entry) return;
+  const games = entry.games || [];
+  if (games.length > 0) return;
+  const coverPath = path.join(metadataPath, "content", CONTENT_FOLDER, String(collectionId), "cover.webp");
+  if (fs.existsSync(coverPath)) return;
+  deleteItem(metadataPath, CONTENT_FOLDER, collectionId);
 }
 
 // Helper function to create cache updater
@@ -841,8 +865,11 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
 
 module.exports = {
   loadCollections,
+  addGameToCollection,
+  getCollectionToGameIdsMap,
   registerCollectionsRoutes,
   removeGameFromAllCollections,
   createCacheUpdater,
+  deleteCollectionIfUnused,
 };
 

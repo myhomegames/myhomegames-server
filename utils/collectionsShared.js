@@ -133,6 +133,33 @@ function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallb
   return count;
 }
 
+/**
+ * Add a game to a single item's games array (for migration / linking).
+ */
+function addGameToItem(metadataPath, contentFolder, itemId, gameId) {
+  const items = loadItems(metadataPath, contentFolder);
+  const entry = findById(items, itemId);
+  if (!entry) return false;
+  const games = entry.games || [];
+  if (games.some((g) => Number(g) === Number(gameId))) return false;
+  entry.games = [...games, gameId];
+  saveItem(metadataPath, contentFolder, entry);
+  return true;
+}
+
+/**
+ * Returns Map(itemId -> gameIds[]) for building game->items reverse index.
+ */
+function getResourceToGameIdsMap(metadataPath, contentFolder) {
+  const items = loadItems(metadataPath, contentFolder);
+  const map = new Map();
+  for (const item of items) {
+    const gameIds = Array.isArray(item.games) ? item.games : [];
+    if (gameIds.length > 0) map.set(item.id, gameIds);
+  }
+  return map;
+}
+
 module.exports = {
   getMetadataPath,
   loadItems,
@@ -142,4 +169,6 @@ module.exports = {
   findById,
   findIndexById,
   removeGameFromAll,
+  addGameToItem,
+  getResourceToGameIdsMap,
 };

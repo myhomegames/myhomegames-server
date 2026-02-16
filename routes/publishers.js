@@ -3,9 +3,8 @@
  * Created automatically when games are added; no POST create.
  */
 
-const path = require("path");
 const { createCollectionLikeRoutes } = require("./collectionLike");
-const { readJsonFile, writeJsonFile } = require("../utils/fileUtils");
+const { addGameToItem, getResourceToGameIdsMap } = require("../utils/collectionsShared");
 
 const routes = createCollectionLikeRoutes({
   contentFolder: "publishers",
@@ -17,6 +16,17 @@ const routes = createCollectionLikeRoutes({
   gameField: "publishers",
 });
 
+/** Add game to a publisher's games array (for migration / linking). Publishers are stored only in blocks. */
+function addGameToPublisher(metadataPath, publisherId, gameId) {
+  return addGameToItem(metadataPath, "publishers", publisherId, gameId);
+}
+
+/** Map(publisherId -> gameIds[]) for building game.publishers from blocks. */
+function getPublisherToGameIdsMap(metadataPath) {
+  return getResourceToGameIdsMap(metadataPath, "publishers");
+}
+
+/** Update in-memory allGames only; publisher links are stored in publisher blocks, not in game metadata. */
 function removePublisherFromAllGames(metadataPath, metadataGamesDir, publisherId, allGames) {
   for (const game of Object.values(allGames)) {
     const pubs = game.publishers;
@@ -26,12 +36,6 @@ function removePublisherFromAllGames(metadataPath, metadataGamesDir, publisherId
       return Number(id) !== Number(publisherId);
     });
     if (filtered.length !== pubs.length) {
-      const gamePath = path.join(metadataPath, "content", "games", String(game.id), "metadata.json");
-      const meta = readJsonFile(gamePath, null);
-      if (meta) {
-        meta.publishers = filtered.length > 0 ? filtered : null;
-        writeJsonFile(gamePath, meta);
-      }
       game.publishers = filtered.length > 0 ? filtered : null;
     }
   }
@@ -41,11 +45,18 @@ function registerPublishersRoutes(app, requireToken, metadataPath, metadataGames
   return routes.registerRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames, removePublisherFromAllGames);
 }
 
+function deletePublisherIfUnused(metadataPath, publisherId) {
+  return routes.deleteItemIfUnused(metadataPath, publisherId);
+}
+
 module.exports = {
   loadPublishers: routes.loadItems,
   ensurePublishersExistBatch: routes.ensureBatch,
   removeGameFromPublisher: routes.removeGameFrom,
   removeGameFromAllPublishers: routes.removeGameFromAll,
+  deletePublisherIfUnused,
+  addGameToPublisher,
+  getPublisherToGameIdsMap,
   removePublisherFromAllGames,
   registerPublishersRoutes,
 };

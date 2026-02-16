@@ -18,4 +18,8 @@ module.exports = {
   registerCategoriesRoutes: routes.registerTagRoutes,
   resolveCategoryIdsToObjects: routes.resolveTagIdsToObjects,
   normalizeCategoryFieldToIds: routes.normalizeTagFieldToIds,
+  getTagToGameIdsMap: routes.getTagToGameIdsMap,
+  addGameToTag: routes.addGameToTag,
+  removeGameFromTag: routes.removeGameFromTag,
+  setTagGameIds: routes.setTagGameIds,
 };

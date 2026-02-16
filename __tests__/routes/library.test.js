@@ -1245,6 +1245,46 @@ describe('DELETE /games/:gameId', () => {
     }
   });
 
+  test('should delete orphan collection (no games, no cover) when deleting last game', async () => {
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length === 0) return;
+
+    const gameId = libraryResponse.body.games[0].id;
+
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Collection Orphan After Delete' })
+      .expect(200);
+
+    const collectionId = createResponse.body.collection.id;
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [gameId] })
+      .expect(200);
+
+    const collectionDir = path.join(testMetadataPath, 'content', 'collections', String(collectionId));
+    const collectionMetadataPath = path.join(collectionDir, 'metadata.json');
+    expect(fs.existsSync(collectionMetadataPath)).toBe(true);
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    expect(fs.existsSync(collectionMetadataPath)).toBe(false);
+    expect(fs.existsSync(collectionDir)).toBe(false);
+  });
+
   test('should handle game not found in library file gracefully', async () => {
     // This test verifies that if a game exists in memory but not in the file,
     // the deletion should still work (it will fail when trying to find it in the file)

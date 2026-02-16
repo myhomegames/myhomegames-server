@@ -19,4 +19,8 @@ module.exports = {
   registerGameEnginesRoutes: routes.registerTagRoutes,
   resolveGameEngineIdsToObjects: routes.resolveTagIdsToObjects,
   normalizeGameEngineFieldToIds: routes.normalizeTagFieldToIds,
+  getTagToGameIdsMap: routes.getTagToGameIdsMap,
+  addGameToTag: routes.addGameToTag,
+  removeGameFromTag: routes.removeGameFromTag,
+  setTagGameIds: routes.setTagGameIds,
 };

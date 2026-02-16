@@ -19,4 +19,8 @@ module.exports = {
   registerPlayerPerspectivesRoutes: routes.registerTagRoutes,
   resolvePlayerPerspectiveIdsToObjects: routes.resolveTagIdsToObjects,
   normalizePlayerPerspectiveFieldToIds: routes.normalizeTagFieldToIds,
+  getTagToGameIdsMap: routes.getTagToGameIdsMap,
+  addGameToTag: routes.addGameToTag,
+  removeGameFromTag: routes.removeGameFromTag,
+  setTagGameIds: routes.setTagGameIds,
 };

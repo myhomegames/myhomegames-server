@@ -1576,3 +1576,89 @@ describe('removeGameFromAllCollections and createCacheUpdater', () => {
     expect(updatedMetadata.games).not.toContain(testGameId);
   });
 });
+
+describe('deleteCollectionIfUnused', () => {
+  test('should delete collection when it has no games and no local cover', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Orphan Collection To Delete' })
+      .expect(200);
+
+    const collectionId = createResponse.body.collection.id;
+    const collectionDir = path.join(testMetadataPath, 'content', 'collections', String(collectionId));
+    const metadataPath = path.join(collectionDir, 'metadata.json');
+
+    expect(fs.existsSync(metadataPath)).toBe(true);
+
+    collectionsRoutes.deleteCollectionIfUnused(testMetadataPath, collectionId);
+
+    expect(fs.existsSync(metadataPath)).toBe(false);
+    expect(fs.existsSync(collectionDir)).toBe(false);
+  });
+
+  test('should not delete collection when it has games', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+
+    const gamesResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    if (gamesResponse.body.games.length === 0) return;
+
+    const testGameId = gamesResponse.body.games[0].id;
+
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Collection With Game To Keep' })
+      .expect(200);
+
+    const collectionId = createResponse.body.collection.id;
+    await request(app)
+      .put(`/collections/${collectionId}/games/order`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ gameIds: [testGameId] })
+      .expect(200);
+
+    const metadataPath = path.join(testMetadataPath, 'content', 'collections', String(collectionId), 'metadata.json');
+    expect(fs.existsSync(metadataPath)).toBe(true);
+
+    collectionsRoutes.deleteCollectionIfUnused(testMetadataPath, collectionId);
+
+    expect(fs.existsSync(metadataPath)).toBe(true);
+  });
+
+  test('should not delete collection when it has local cover', async () => {
+    const collectionsRoutes = require('../../routes/collections');
+    const { testMetadataPath } = require('../setup');
+    const fs = require('fs');
+    const path = require('path');
+
+    const createResponse = await request(app)
+      .post('/collections')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Collection With Cover To Keep' })
+      .expect(200);
+
+    const collectionId = createResponse.body.collection.id;
+    const collectionDir = path.join(testMetadataPath, 'content', 'collections', String(collectionId));
+    const coverPath = path.join(collectionDir, 'cover.webp');
+    fs.writeFileSync(coverPath, 'fake cover');
+
+    const metadataPath = path.join(collectionDir, 'metadata.json');
+    expect(fs.existsSync(metadataPath)).toBe(true);
+
+    collectionsRoutes.deleteCollectionIfUnused(testMetadataPath, collectionId);
+
+    expect(fs.existsSync(metadataPath)).toBe(true);
+  });
+});

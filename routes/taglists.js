@@ -196,8 +196,56 @@ function createTagRoutes(config) {
     const tagDir = getTagDir(metadataPath, tagId);
     ensureDirectoryExists(tagDir);
     const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
-    const metadata = { title: tagTitle, showTitle: true };
+    const metadata = { title: tagTitle, showTitle: true, gameIds: [] };
     writeJsonFile(metadataFilePath, metadata);
+  }
+
+  /** Load raw tag metadata including gameIds (for reverse index / unused check). */
+  function loadTagMetadataRaw(metadataPath, tagId) {
+    const metadataFilePath = getTagMetadataPath(metadataPath, tagId);
+    const metadata = readJsonFile(metadataFilePath, null);
+    if (!metadata || !metadata.title) return null;
+    return {
+      title: metadata.title,
+      showTitle: metadata.showTitle,
+      gameIds: Array.isArray(metadata.gameIds) ? metadata.gameIds : [],
+    };
+  }
+
+  /** Returns Map(tagId -> gameIds[]) for building game->tags reverse index. */
+  function getTagToGameIdsMap(metadataPath) {
+    const tagsDir = path.join(metadataPath, "content", contentFolder);
+    const map = new Map();
+    if (!fs.existsSync(tagsDir)) return map;
+    const folders = fs.readdirSync(tagsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+    for (const d of folders) {
+      const tagId = Number(d.name);
+      if (Number.isNaN(tagId)) continue;
+      const raw = loadTagMetadataRaw(metadataPath, tagId);
+      if (raw && raw.gameIds.length > 0) map.set(tagId, raw.gameIds);
+    }
+    return map;
+  }
+
+  function addGameToTag(metadataPath, tagId, gameId) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const gameIds = raw.gameIds.includes(gameId) ? raw.gameIds : [...raw.gameIds, gameId];
+    updateTagMetadata(metadataPath, tagId, { gameIds });
+  }
+
+  function removeGameFromTag(metadataPath, tagId, gameId) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const gameIds = raw.gameIds.filter((id) => id !== gameId);
+    updateTagMetadata(metadataPath, tagId, { gameIds });
+  }
+
+  function setTagGameIds(metadataPath, tagId, gameIds) {
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    if (!raw) return;
+    const list = Array.isArray(gameIds) ? gameIds : [];
+    updateTagMetadata(metadataPath, tagId, { gameIds: list });
   }
 
   function loadTag(metadataPath, tagTitle) {
@@ -555,18 +603,9 @@ function createTagRoutes(config) {
     }
 
     const tagId = tag.id;
-    const tagTitleLower = tag.title.toLowerCase();
-    const isUsed = Object.values(allGamesFromFile).some((game) => {
-      const values = game[gameField];
-      if (!values) return false;
-      const list = Array.isArray(values) ? values : [values];
-      return list.some((value) => {
-        const v = value != null && typeof value === "object" && "id" in value ? value.id : value;
-        if (typeof v === "number" && !Number.isNaN(v)) return v === tagId;
-        if (typeof v === "string") return v.trim().toLowerCase() === tagTitleLower;
-        return false;
-      });
-    });
+    const raw = loadTagMetadataRaw(metadataPath, tagId);
+    const gameIds = raw ? raw.gameIds : [];
+    const isUsed = gameIds.some((id) => !!allGamesFromFile[id]);
 
     if (isUsed) {
       return false;
@@ -595,6 +634,10 @@ function createTagRoutes(config) {
     ensureTagsExist,
     deleteTagIfUnused,
     registerTagRoutes,
+    getTagToGameIdsMap,
+    addGameToTag,
+    removeGameFromTag,
+    setTagGameIds,
   };
 }
 

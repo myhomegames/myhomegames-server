@@ -3,9 +3,8 @@
  * Created automatically when games are added; no POST create.
  */
 
-const path = require("path");
 const { createCollectionLikeRoutes } = require("./collectionLike");
-const { readJsonFile, writeJsonFile } = require("../utils/fileUtils");
+const { addGameToItem, getResourceToGameIdsMap } = require("../utils/collectionsShared");
 
 const routes = createCollectionLikeRoutes({
   contentFolder: "developers",
@@ -17,6 +16,17 @@ const routes = createCollectionLikeRoutes({
   gameField: "developers",
 });
 
+/** Add game to a developer's games array (for migration / linking). Developers are stored only in blocks. */
+function addGameToDeveloper(metadataPath, developerId, gameId) {
+  return addGameToItem(metadataPath, "developers", developerId, gameId);
+}
+
+/** Map(developerId -> gameIds[]) for building game.developers from blocks. */
+function getDeveloperToGameIdsMap(metadataPath) {
+  return getResourceToGameIdsMap(metadataPath, "developers");
+}
+
+/** Update in-memory allGames only; developer links are stored in developer blocks, not in game metadata. */
 function removeDeveloperFromAllGames(metadataPath, metadataGamesDir, developerId, allGames) {
   for (const game of Object.values(allGames)) {
     const devs = game.developers;
@@ -26,12 +36,6 @@ function removeDeveloperFromAllGames(metadataPath, metadataGamesDir, developerId
       return Number(id) !== Number(developerId);
     });
     if (filtered.length !== devs.length) {
-      const gamePath = path.join(metadataPath, "content", "games", String(game.id), "metadata.json");
-      const meta = readJsonFile(gamePath, null);
-      if (meta) {
-        meta.developers = filtered.length > 0 ? filtered : null;
-        writeJsonFile(gamePath, meta);
-      }
       game.developers = filtered.length > 0 ? filtered : null;
     }
   }
@@ -41,11 +45,18 @@ function registerDevelopersRoutes(app, requireToken, metadataPath, metadataGames
   return routes.registerRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames, removeDeveloperFromAllGames);
 }
 
+function deleteDeveloperIfUnused(metadataPath, developerId) {
+  return routes.deleteItemIfUnused(metadataPath, developerId);
+}
+
 module.exports = {
   loadDevelopers: routes.loadItems,
   ensureDevelopersExistBatch: routes.ensureBatch,
   removeGameFromDeveloper: routes.removeGameFrom,
   removeGameFromAllDevelopers: routes.removeGameFromAll,
+  deleteDeveloperIfUnused,
+  addGameToDeveloper,
+  getDeveloperToGameIdsMap,
   removeDeveloperFromAllGames,
   registerDevelopersRoutes,
 };

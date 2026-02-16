@@ -19,4 +19,8 @@ module.exports = {
   registerGameModesRoutes: routes.registerTagRoutes,
   resolveGameModeIdsToObjects: routes.resolveTagIdsToObjects,
   normalizeGameModeFieldToIds: routes.normalizeTagFieldToIds,
+  getTagToGameIdsMap: routes.getTagToGameIdsMap,
+  addGameToTag: routes.addGameToTag,
+  removeGameFromTag: routes.removeGameFromTag,
+  setTagGameIds: routes.setTagGameIds,
 };
