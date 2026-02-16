@@ -119,7 +119,8 @@ const platformsRoutes = require("./routes/platforms");
 const gameEnginesRoutes = require("./routes/gameengines");
 const gameModesRoutes = require("./routes/gamemodes");
 const playerPerspectivesRoutes = require("./routes/playerperspectives");
-const seriesAndFranchisesRoutes = require("./routes/seriesAndFranchises");
+const seriesRoutes = require("./routes/series");
+const franchisesRoutes = require("./routes/franchises");
 const collectionsRoutes = require("./routes/collections");
 const developersRoutes = require("./routes/developers");
 const publishersRoutes = require("./routes/publishers");
@@ -342,7 +343,8 @@ platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADA
 gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 gameModesRoutes.registerGameModesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
 playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-seriesAndFranchisesRoutes.registerSeriesAndFranchisesRoutes(app, requireToken, allGames, METADATA_PATH);
+seriesRoutes.registerSeriesRoutes(app, requireToken, allGames, METADATA_PATH);
+franchisesRoutes.registerFranchisesRoutes(app, requireToken, allGames, METADATA_PATH);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {

@@ -73,16 +73,19 @@ const {
   getPublisherToGameIdsMap,
 } = require("./publishers");
 const {
-  ensureFranchiseSeriesExistBatch,
-  deleteFranchiseOrSeriesIfUnused,
+  ensureFranchiseExistBatch,
+  deleteFranchiseIfUnused,
   addGameToFranchise,
-  addGameToSeries,
   removeGameFromFranchise,
-  removeGameFromSeries,
-  removeGameFromAllFranchiseAndSeriesBlocks,
   getFranchiseToGameIdsMap,
+} = require("./franchises");
+const {
+  ensureSeriesExistBatch,
+  deleteSeriesIfUnused,
+  addGameToSeries,
+  removeGameFromSeries,
   getSeriesToGameIdsMap,
-} = require("./seriesAndFranchises");
+} = require("./series");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 
@@ -698,13 +701,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     if ("franchise" in filteredUpdates) {
       filteredUpdates.franchise = validateIdArray(filteredUpdates.franchise) || null;
       if (filteredUpdates.franchise && filteredUpdates.franchise.length > 0) {
-        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.franchise, "franchises", gameId);
+        ensureFranchiseExistBatch(metadataPath, filteredUpdates.franchise, gameId);
       }
     }
     if ("collection" in filteredUpdates) {
       filteredUpdates.collection = validateIdArray(filteredUpdates.collection) || null;
       if (filteredUpdates.collection && filteredUpdates.collection.length > 0) {
-        ensureFranchiseSeriesExistBatch(metadataPath, filteredUpdates.collection, "series", gameId);
+        ensureSeriesExistBatch(metadataPath, filteredUpdates.collection, gameId);
       }
     }
 
@@ -918,7 +921,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         deleteFn(metadataPath, metadataPath, id, allGames);
       }
       for (const { folder, id } of franchiseSeriesCleanup) {
-        deleteFranchiseOrSeriesIfUnused(metadataPath, folder, id, allGames);
+        if (folder === "franchises") {
+          deleteFranchiseIfUnused(metadataPath, id, allGames);
+        } else if (folder === "series") {
+          deleteSeriesIfUnused(metadataPath, id, allGames);
+        }
       }
       // Sync executables in cache with metadata (respecting order)
       if (shouldDeleteExecutables || 'executables' in filteredUpdates) {
@@ -1359,7 +1366,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       let validAlternativeNames = validateStringArray(alternativeNames);
       let validSimilarGames = validateObjectArray(similarGames);
 
-      // Normalize franchise/collection from IGDB to [{ id, name }] for ensureFranchiseSeriesExistBatch (names used only for initial metadata)
+      // Normalize franchise/collection from IGDB to [{ id, name }] for ensureFranchiseExistBatch/ensureSeriesExistBatch (names used only for initial metadata)
       const normalizeOne = (v) => {
         if (v == null) return null;
         if (typeof v === "object" && v !== null && typeof v.name === "string" && v.name.trim()) {
@@ -1419,8 +1426,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
       if (rawPublishers && rawPublishers.length > 0) ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
-      if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, franchiseForEnsure, "franchises", gameId);
-      if (collectionForEnsure && collectionForEnsure.length > 0) ensureFranchiseSeriesExistBatch(metadataPath, collectionForEnsure, "series", gameId);
+      if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseExistBatch(metadataPath, franchiseForEnsure, gameId);
+      if (collectionForEnsure && collectionForEnsure.length > 0) ensureSeriesExistBatch(metadataPath, collectionForEnsure, gameId);
 
       // Sync tag ids to tag blocks (genre, themes, platforms, gameModes, playerPerspectives, gameEngines)
       if (genreIds && genreIds.length) genreIds.forEach((id) => addGameToCategory(metadataPath, id, gameId));
@@ -1484,7 +1491,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       // Remove game from all tag blocks (genre, themes, platforms, etc.) and franchise/series blocks before deleting
       removeGameFromAllTagBlocks(metadataPath, gameId);
-      removeGameFromAllFranchiseAndSeriesBlocks(metadataPath, gameId);
+      // Remove game from all franchises
+      for (const [franchiseId, gameIds] of getFranchiseToGameIdsMap(metadataPath)) {
+        if (gameIds.includes(gameId)) removeGameFromFranchise(metadataPath, franchiseId, gameId);
+      }
+      // Remove game from all series
+      for (const [seriesId, gameIds] of getSeriesToGameIdsMap(metadataPath)) {
+        if (gameIds.includes(gameId)) removeGameFromSeries(metadataPath, seriesId, gameId);
+      }
 
       // Delete game folder and its metadata.json
       deleteGame(metadataPath, gameId);
@@ -1543,10 +1557,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
 
       for (const id of gameFranchiseIds) {
-        deleteFranchiseOrSeriesIfUnused(metadataPath, "franchises", id, remainingGamesMap);
+        deleteFranchiseIfUnused(metadataPath, id, remainingGamesMap);
       }
       for (const id of gameCollectionIds) {
-        deleteFranchiseOrSeriesIfUnused(metadataPath, "series", id, remainingGamesMap);
+        deleteSeriesIfUnused(metadataPath, id, remainingGamesMap);
       }
       
       res.json({ status: "success" });
