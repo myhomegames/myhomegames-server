@@ -65,6 +65,8 @@ cp .env.production.example .env
 
 Then edit `.env` and configure all required variables (Twitch OAuth credentials, API_BASE, etc.).
 
+MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset.
+
 **Important**: Do not use `API_TOKEN` in production. Use Twitch OAuth instead.
 
 ### Environment Variables
