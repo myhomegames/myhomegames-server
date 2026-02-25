@@ -71,13 +71,14 @@ function createTagRoutes(config) {
           title: metadata.title,
           showTitle: metadata.showTitle,
         };
-        // Same pattern as library (games): local file or fallback. Library fallback = IGDB; tags fallback = this URL (redirects to FRONTEND_URL)
         const coverPath = path.join(tagsDir, folderName, "cover.webp");
-        if (fs.existsSync(coverPath)) {
+        const hasCover = fs.existsSync(coverPath); // true only when cover.webp exists on disk
+        if (hasCover) {
           tagData.cover = `/${coverPrefix}/${encodeURIComponent(metadata.title)}`;
         } else {
           tagData.cover = `${normalizedRouteBase}/${tagId}/cover.webp`;
         }
+        tagData.hasCover = hasCover;
         tags.push(tagData);
       }
     });
@@ -395,6 +396,9 @@ function createTagRoutes(config) {
           if (tag.cover) {
             tagData.cover = tag.cover;
           }
+          if (tag.hasCover !== undefined) {
+            tagData.hasCover = tag.hasCover;
+          }
           if (tag.showTitle !== undefined) {
             tagData.showTitle = tag.showTitle;
           }
@@ -467,7 +471,9 @@ function createTagRoutes(config) {
         if (updatedTag && updatedTag.cover) {
           tagData.cover = updatedTag.cover;
         }
-
+        if (updatedTag && updatedTag.hasCover !== undefined) {
+          tagData.hasCover = updatedTag.hasCover;
+        }
         res.json({
           status: "success",
           [responseKey]: tagData,
@@ -542,6 +548,7 @@ function createTagRoutes(config) {
             id: tag.id,
             title: tag.title,
             cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
+            hasCover: true, // file was just written
           },
         });
       } catch (error) {
@@ -564,15 +571,13 @@ function createTagRoutes(config) {
           mediaType: "cover",
         });
 
+        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
         const tagData = {
           id: tag.id,
           title: tag.title,
+          cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
+          hasCover: fs.existsSync(coverPath),
         };
-        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
-        if (fs.existsSync(coverPath)) {
-          tagData.cover = `${normalizedRouteBase}/${tag.id}/cover.webp`;
-        }
-
         res.json({
           status: "success",
           [responseKey]: tagData,
