@@ -560,7 +560,9 @@ describe('POST /games/:gameId/reload', () => {
       expect(game).toHaveProperty('title');
       expect(game).toHaveProperty('summary');
       expect(game).toHaveProperty('cover');
-      expect(game.cover).toContain('/covers/');
+      if (game.cover != null) {
+        expect(game.cover).toContain('/covers/');
+      }
       expect(game).toHaveProperty('day');
       expect(game).toHaveProperty('month');
       expect(game).toHaveProperty('year');

@@ -116,6 +116,12 @@ function toIdsOnlyArray(val) {
   return result;
 }
 
+/** Return array of numeric ids or null for franchise/collection fields. */
+function validateIdArray(val) {
+  const arr = toIdsOnlyArray(val);
+  return arr.length > 0 ? arr : null;
+}
+
 // Helper function to save a single game. Tag fields (genre, themes, platforms, etc.) are stored only in tag blocks, not in game metadata.
 function saveGame(metadataPath, game) {
   const gameId = game.id;
