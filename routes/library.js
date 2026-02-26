@@ -621,6 +621,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "publishers",
       "franchise",
       "collection",
+      "keywords",
       "executables",
       "showTitle",
     ];
@@ -703,17 +704,54 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       if (newPubItems.length > 0) ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
       filteredUpdates.publishers = newPubIds.length > 0 ? newPubIds : null;
     }
-    // Franchise and collection (series): only array of numeric ids; ensure blocks exist and link game
+    // Franchise and collection (series): accept [{ id, name }] or number[]; ensure blocks exist and link game
+    const normalizeFranchiseSeriesFromClient = (val) => {
+      if (val == null) return { ids: [], items: [] };
+      const arr = Array.isArray(val) ? val : [val];
+      const seen = new Set();
+      const ids = [];
+      const items = [];
+      for (const raw of arr) {
+        if (raw == null) continue;
+        let id = null;
+        let name = null;
+        if (typeof raw === "number" && !Number.isNaN(raw)) {
+          id = raw;
+          name = String(raw);
+        } else if (typeof raw === "object" && raw && raw.id != null) {
+          id = Number(raw.id);
+          if (Number.isNaN(id)) continue;
+          name = raw.name != null ? String(raw.name).trim() : (raw.title != null ? String(raw.title).trim() : String(id));
+        }
+        if (id == null || seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+        items.push({ id, name: name || String(id) });
+      }
+      return { ids, items };
+    };
     if ("franchise" in filteredUpdates) {
-      filteredUpdates.franchise = validateIdArray(filteredUpdates.franchise) || null;
-      if (filteredUpdates.franchise && filteredUpdates.franchise.length > 0) {
-        ensureFranchiseExistBatch(metadataPath, filteredUpdates.franchise, gameId);
+      const { ids, items } = normalizeFranchiseSeriesFromClient(filteredUpdates.franchise);
+      filteredUpdates.franchise = ids.length > 0 ? ids : null;
+      if (items.length > 0) {
+        ensureFranchiseExistBatch(metadataPath, items, gameId);
       }
     }
     if ("collection" in filteredUpdates) {
-      filteredUpdates.collection = validateIdArray(filteredUpdates.collection) || null;
-      if (filteredUpdates.collection && filteredUpdates.collection.length > 0) {
-        ensureSeriesExistBatch(metadataPath, filteredUpdates.collection, gameId);
+      const { ids, items } = normalizeFranchiseSeriesFromClient(filteredUpdates.collection);
+      filteredUpdates.collection = ids.length > 0 ? ids : null;
+      if (items.length > 0) {
+        ensureSeriesExistBatch(metadataPath, items, gameId);
+      }
+    }
+    // Keywords: array of strings, stored in game metadata
+    if ("keywords" in filteredUpdates) {
+      const raw = filteredUpdates.keywords;
+      if (!raw || !Array.isArray(raw)) {
+        filteredUpdates.keywords = null;
+      } else {
+        const filtered = raw.filter((x) => typeof x === "string" && x.trim());
+        filteredUpdates.keywords = filtered.length > 0 ? filtered : null;
       }
     }
 
