@@ -17,6 +17,7 @@ const {
   findIndexById,
   normalizeId,
   removeGameFromAll,
+  computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 
@@ -294,6 +295,29 @@ function createCollectionLikeRoutes(config) {
           executables: g.executables || null,
         }));
       res.json({ games });
+    });
+
+    app.put(`${normalizedRouteBase}/:id/games/order`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const { gameIds } = req.body;
+      if (!Array.isArray(gameIds)) {
+        return res.status(400).json({ error: "gameIds must be an array" });
+      }
+      updateCache();
+      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const entry = findById(list, id);
+      if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const currentGameIds = entry.games || [];
+      const finalGameIds = computeFinalGameIdsForOrder(currentGameIds, gameIds, allGames);
+      entry.games = finalGameIds;
+      try {
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+        res.json({ status: "success" });
+      } catch (e) {
+        console.error(`Failed to save ${humanName} games order:`, e.message);
+        res.status(500).json({ error: "Failed to save games order" });
+      }
     });
 
     app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {

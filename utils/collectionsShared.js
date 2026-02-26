@@ -159,6 +159,100 @@ function getResourceToGameIdsMap(metadataPath, contentFolder) {
   return map;
 }
 
+/**
+ * Compare two games by a field (used for sorting).
+ */
+function compareGamesByField(gameA, gameB, field = "releaseDate", ascending = true) {
+  let compareResult = 0;
+  switch (field) {
+    case "releaseDate":
+      if (!gameA || (!gameA.year && !gameA.month && !gameA.day)) return 1;
+      if (!gameB || (!gameB.year && !gameB.month && !gameB.day)) return -1;
+      if (gameA.year !== gameB.year) compareResult = (gameA.year || 0) - (gameB.year || 0);
+      else if (gameA.month !== gameB.month) compareResult = (gameA.month || 0) - (gameB.month || 0);
+      else compareResult = (gameA.day || 0) - (gameB.day || 0);
+      break;
+    case "year":
+      const yearA = gameA?.year ?? 0;
+      const yearB = gameB?.year ?? 0;
+      if (yearA === 0 && yearB === 0) compareResult = 0;
+      else if (yearA === 0) compareResult = 1;
+      else if (yearB === 0) compareResult = -1;
+      else compareResult = yearA - yearB;
+      break;
+    case "title":
+      compareResult = (gameA?.title || "").toLowerCase().localeCompare((gameB?.title || "").toLowerCase());
+      break;
+    case "stars":
+      compareResult = (gameA?.stars ?? 0) - (gameB?.stars ?? 0);
+      break;
+    case "criticRating":
+      compareResult = (gameA?.criticratings ?? 0) - (gameB?.criticratings ?? 0);
+      break;
+    case "userRating":
+      compareResult = (gameA?.userratings ?? 0) - (gameB?.userratings ?? 0);
+      break;
+    default:
+      compareResult = 0;
+  }
+  return ascending ? compareResult : -compareResult;
+}
+
+/**
+ * Sort game IDs by a field using allGames lookup.
+ */
+function sortGameIdsByField(gameIds, allGames, field = "releaseDate", ascending = true) {
+  return [...gameIds].sort((idA, idB) => {
+    const gameA = allGames[idA];
+    const gameB = allGames[idB];
+    return compareGamesByField(gameA, gameB, field, ascending);
+  });
+}
+
+/**
+ * Insert one game ID into a sorted list by release date.
+ */
+function insertGameIdInSortedPosition(gameIds, newGameId, allGames) {
+  const normalizedNewId = normalizeId(newGameId);
+  if (gameIds.some((id) => normalizeId(id) === normalizedNewId)) return gameIds;
+  const newGame = allGames[newGameId];
+  if (!newGame) return [...gameIds, newGameId];
+  for (let i = 0; i < gameIds.length; i++) {
+    const existingGame = allGames[gameIds[i]];
+    if (existingGame && compareGamesByField(newGame, existingGame, "releaseDate", true) < 0) {
+      const result = [...gameIds];
+      result.splice(i, 0, newGameId);
+      return result;
+    }
+  }
+  return [...gameIds, newGameId];
+}
+
+/**
+ * Compute final game IDs for PUT games/order: preserve client order on reorder,
+ * insert by release date when exactly one new game is added.
+ */
+function computeFinalGameIdsForOrder(currentGameIds, requestedGameIds, allGames) {
+  const seen = new Set();
+  const uniqueGameIds = [];
+  for (const gameId of requestedGameIds) {
+    const n = normalizeId(gameId);
+    if (n != null && !seen.has(n)) {
+      seen.add(n);
+      uniqueGameIds.push(n);
+    }
+  }
+  const current = currentGameIds || [];
+  const isAddition = uniqueGameIds.length === current.length + 1;
+  if (isAddition) {
+    const newGameId = uniqueGameIds.find(
+      (id) => !current.some((cId) => normalizeId(cId) === normalizeId(id))
+    );
+    if (newGameId) return insertGameIdInSortedPosition(current, newGameId, allGames);
+  }
+  return uniqueGameIds;
+}
+
 module.exports = {
   getMetadataPath,
   loadItems,
@@ -170,4 +264,8 @@ module.exports = {
   removeGameFromAll,
   addGameToItem,
   getResourceToGameIdsMap,
+  compareGamesByField,
+  sortGameIdsByField,
+  insertGameIdInSortedPosition,
+  computeFinalGameIdsForOrder,
 };
