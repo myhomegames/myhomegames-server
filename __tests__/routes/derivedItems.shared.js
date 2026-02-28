@@ -50,9 +50,13 @@ function runDerivedItemTests(config) {
         const item = response.body[listKey][0];
         expect(item).toHaveProperty("id");
         expect(item).toHaveProperty("title");
-        // cover is optional - only present if file exists
+        expect(item).toHaveProperty("hasCover");
+        expect(typeof item.hasCover).toBe("boolean");
         if (item.cover) {
           expect(item.cover).toContain(`${normalizedRouteBase}/`);
+          expect(item.hasCover).toBe(true);
+        } else {
+          expect(item.hasCover).toBe(false);
         }
       }
     });
@@ -115,12 +119,11 @@ function runDerivedItemTests(config) {
     });
 
     test(`should include ${humanNameLower}s from games with ${gameField} field`, async () => {
-      // Create a test game with the field set
-      const testIgdbId = 99999;
-      const testFieldId = 12345;
+      const unique = Date.now() % 100000;
+      const testIgdbId = 90000 + unique;
+      const testFieldId = 10000 + unique;
       const testFieldName = `Test ${humanName} ${testFieldId}`;
 
-      // Add a game with the field (franchise/collection accepts { id, name } object or array)
       const addGameResponse = await request(app)
         .post(`/games/add-from-igdb`)
         .set("X-Auth-Token", "test-token")
@@ -128,8 +131,8 @@ function runDerivedItemTests(config) {
           igdbId: testIgdbId,
           name: `Test Game for ${humanName}`,
           summary: "Test summary",
-          releaseDate: 1609459200, // 2021-01-01
-          [gameField]: { id: testFieldId, name: testFieldName }, // object with id and name
+          releaseDate: 1609459200,
+          [gameField]: { id: testFieldId, name: testFieldName },
         })
         .expect(200);
 
@@ -245,6 +248,7 @@ function runDerivedItemTests(config) {
         expect(response.body[responseKey]).toHaveProperty("id", itemId);
         expect(response.body[responseKey]).toHaveProperty("cover");
         expect(response.body[responseKey].cover).toContain(`${normalizedRouteBase}/${itemId}/cover.webp`);
+        expect(response.body[responseKey]).toHaveProperty("hasCover", true);
       }
     });
 
@@ -313,7 +317,7 @@ function runDerivedItemTests(config) {
 
         expect(response.body).toHaveProperty(responseKey);
         expect(response.body[responseKey]).toHaveProperty("id", itemId);
-        // cover should not be present after deletion
+        expect(response.body[responseKey]).toHaveProperty("hasCover", false);
         expect(response.body[responseKey]).not.toHaveProperty("cover");
       }
     });
