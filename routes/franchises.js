@@ -88,7 +88,9 @@ function registerFranchisesRoutes(app, requireToken, allGames, metadataPath) {
     writeJsonFile(getMetadataPath(metadataPath, FOLDER, id), meta);
     const coverPath = path.join(dir, "cover.webp");
     const out = { id, title: item.title, showTitle: meta.showTitle };
-    if (fs.existsSync(coverPath)) out.cover = `${ROUTE_BASE}/${id}/cover.webp`;
+    const hasCover = fs.existsSync(coverPath);
+    out.hasCover = hasCover;
+    if (hasCover) out.cover = `${ROUTE_BASE}/${id}/cover.webp`;
     res.json({ [RESPONSE_KEY]: out });
   });
 
@@ -110,7 +112,7 @@ function registerFranchisesRoutes(app, requireToken, allGames, metadataPath) {
       writeJsonFile(getMetadataPath(metadataPath, FOLDER, id), meta);
       const coverPath = path.join(dir, "cover.webp");
       fs.writeFileSync(coverPath, file.buffer);
-      res.json({ [RESPONSE_KEY]: { id, title: item.title, cover: `${ROUTE_BASE}/${id}/cover.webp` } });
+      res.json({ [RESPONSE_KEY]: { id, title: item.title, cover: `${ROUTE_BASE}/${id}/cover.webp`, hasCover: true } });
     } catch (err) {
       console.error(`Failed to save cover for ${RESPONSE_KEY} ${id}:`, err.message);
       res.status(500).json({ error: "Failed to save cover" });
@@ -127,7 +129,7 @@ function registerFranchisesRoutes(app, requireToken, allGames, metadataPath) {
     try {
       const coverPath = path.join(getItemDir(metadataPath, FOLDER, id), "cover.webp");
       if (fs.existsSync(coverPath)) fs.unlinkSync(coverPath);
-      res.json({ [RESPONSE_KEY]: { id, title: item.title } });
+      res.json({ [RESPONSE_KEY]: { id, title: item.title, hasCover: false } });
     } catch (err) {
       console.error(`Failed to delete cover for ${RESPONSE_KEY} ${id}:`, err.message);
       res.status(500).json({ error: "Failed to delete cover" });

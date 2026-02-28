@@ -73,7 +73,9 @@ function mergeWithStored(metadataPath, folder, items, coverRouteBase) {
       if (typeof meta.showTitle === "boolean") result.showTitle = meta.showTitle;
       if (meta.title != null) result.title = String(meta.title).trim();
     }
-    if (fs.existsSync(coverPath)) result.cover = `${coverRouteBase}/${item.id}/cover.webp`;
+    const hasCover = fs.existsSync(coverPath);
+    result.hasCover = hasCover;
+    if (hasCover) result.cover = `${coverRouteBase}/${item.id}/cover.webp`;
     return result;
   });
 }
