@@ -1502,6 +1502,70 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
+  // Endpoint: create a new game from scratch (no IGDB). ID = creation timestamp.
+  app.post("/games/create", requireToken, async (req, res) => {
+    const { title } = req.body;
+    const name = typeof title === "string" ? title.trim() : "";
+    if (!name) {
+      return res.status(400).json({ error: "Missing required field: title" });
+    }
+
+    try {
+      let gameId = Date.now();
+      const gameDirBase = path.join(metadataPath, "content", "games");
+      while (allGames[gameId] || fs.existsSync(path.join(gameDirBase, String(gameId)))) {
+        gameId += 1;
+      }
+
+      const newGame = {
+        id: gameId,
+        title: name,
+        summary: "",
+        year: null,
+        month: null,
+        day: null,
+        genre: null,
+        criticratings: null,
+        userratings: null,
+        stars: null,
+        themes: null,
+        platforms: null,
+        gameModes: null,
+        playerPerspectives: null,
+        websites: null,
+        ageRatings: null,
+        developers: null,
+        publishers: null,
+        franchise: null,
+        collection: null,
+        screenshots: null,
+        videos: null,
+        gameEngines: null,
+        keywords: null,
+        alternativeNames: null,
+        similarGames: null,
+        igdbCover: null,
+        igdbBackground: null,
+        showTitle: true,
+      };
+
+      saveGame(metadataPath, newGame);
+      allGames[gameId] = newGame;
+      invalidateLibraryGamesResponseCache();
+
+      if (updateRecommendedSections && typeof updateRecommendedSections === "function") {
+        updateRecommendedSections(metadataPath, allGames);
+      }
+
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs), gameId: newGame.id });
+    } catch (error) {
+      console.error("Failed to create game:", error);
+      res.status(500).json({ error: "Failed to create game", detail: error.message });
+    }
+  });
+
   // Endpoint: delete game
   app.delete("/games/:gameId", requireToken, (req, res) => {
     const gameId = Number(req.params.gameId);

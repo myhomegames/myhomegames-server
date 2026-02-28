@@ -2006,6 +2006,73 @@ describe('POST /games/add-from-igdb', () => {
   });
 });
 
+describe('POST /games/create', () => {
+  test('should create game from scratch and return game with timestamp-based id', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Game From Scratch' })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body).toHaveProperty('game');
+    expect(response.body).toHaveProperty('gameId');
+    expect(typeof response.body.gameId).toBe('number');
+    expect(response.body.game).toHaveProperty('id', response.body.gameId);
+    expect(response.body.game).toHaveProperty('title', 'Test Game From Scratch');
+    expect(response.body.game).toHaveProperty('summary', '');
+    expect(response.body.game.genre).toBeNull();
+    expect(response.body.game.year).toBeNull();
+    expect(response.body.game.month).toBeNull();
+    expect(response.body.game.day).toBeNull();
+
+    const gameId = response.body.gameId;
+    const getResponse = await request(app)
+      .get(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(getResponse.body.title).toBe('Test Game From Scratch');
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
+  test('should return 400 if title is missing', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({})
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Missing required field: title');
+  });
+
+  test('should return 400 if title is empty or whitespace', async () => {
+    const res1 = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: '' })
+      .expect(400);
+    expect(res1.body).toHaveProperty('error', 'Missing required field: title');
+
+    const res2 = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: '   ' })
+      .expect(400);
+    expect(res2.body).toHaveProperty('error', 'Missing required field: title');
+  });
+
+  test('should require authentication', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .send({ title: 'Unauthorized Game' })
+      .expect(401);
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+});
+
 describe('DELETE /games/:gameId/delete-cover', () => {
   test('should delete cover image for a game', async () => {
     // First get a game ID from the library
