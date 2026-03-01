@@ -561,6 +561,26 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       res.json(responsePayload);
   });
 
+  // Serve game screenshot image (must be before GET /games/:gameId)
+  app.get("/games/:gameId/screenshots/:filename", (req, res) => {
+    const gameId = decodeURIComponent(req.params.gameId);
+    const filename = decodeURIComponent(req.params.filename);
+    if (!/^[a-zA-Z0-9_.-]+\.(webp|jpg|jpeg|png|gif)$/.test(filename)) {
+      return res.status(400).json({ error: "Invalid filename" });
+    }
+    const screenshotPath = path.join(metadataPath, "content", "games", gameId, "screenshots", filename);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET");
+    if (!fs.existsSync(screenshotPath)) {
+      res.setHeader("Content-Type", "image/webp");
+      return res.status(404).end();
+    }
+    const ext = path.extname(filename).toLowerCase();
+    const mime = { ".webp": "image/webp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif" }[ext] || "image/webp";
+    res.type(mime);
+    res.sendFile(screenshotPath);
+  });
+
   // Endpoint: get single game by ID
   app.get("/games/:gameId", requireToken, (req, res) => {
     const gameId = Number(req.params.gameId);
@@ -625,6 +645,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "keywords",
       "executables",
       "showTitle",
+      "screenshots",
+      "videos",
     ];
     
     // Filter updates to only include allowed fields
@@ -634,6 +656,30 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         obj[key] = updates[key];
         return obj;
       }, {});
+
+    // Screenshots and videos: must be null or array of non-empty strings (URLs)
+    if ("screenshots" in filteredUpdates) {
+      const v = filteredUpdates.screenshots;
+      if (v == null) {
+        filteredUpdates.screenshots = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "screenshots must be an array of URL strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.screenshots = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("videos" in filteredUpdates) {
+      const v = filteredUpdates.videos;
+      if (v == null) {
+        filteredUpdates.videos = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "videos must be an array of URL strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.videos = arr.length > 0 ? arr : null;
+      }
+    }
     
     // Normalize tag fields to ids (accept titles or ids from client; store ids)
     if ("genre" in filteredUpdates) {
@@ -857,6 +903,31 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
       currentGame.id = gameId;
       Object.assign(currentGame, getGameTagIdsFromBlocks(metadataPath, gameId));
+      
+      // Delete local screenshot files that were removed from the list
+      if ("screenshots" in filteredUpdates) {
+        const oldList = Array.isArray(currentGame.screenshots) ? currentGame.screenshots : [];
+        const newList = Array.isArray(filteredUpdates.screenshots) ? filteredUpdates.screenshots : [];
+        const newSet = new Set(newList);
+        const localScreenshotRe = /^\/games\/(\d+)\/screenshots\/([a-zA-Z0-9_.-]+\.(webp|jpg|jpeg|png|gif))$/;
+        const gameIdStr = String(gameId);
+        for (const url of oldList) {
+          if (typeof url !== "string" || newSet.has(url)) continue;
+          const m = (url.trim()).match(localScreenshotRe);
+          if (!m || m[1] !== gameIdStr) continue;
+          const filename = m[2];
+          const screenshotsDir = path.join(metadataPath, "content", "games", gameIdStr, "screenshots");
+          const filePath = path.join(screenshotsDir, filename);
+          try {
+            if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+              fs.unlinkSync(filePath);
+              removeDirectoryIfEmpty(screenshotsDir);
+            }
+          } catch (err) {
+            console.warn(`Failed to delete screenshot file ${filePath}:`, err.message);
+          }
+        }
+      }
       
       // Update game with new values
       if (Object.keys(filteredUpdates).length > 0) {
@@ -1090,6 +1161,37 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     } catch (error) {
       console.error(`Failed to save background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save background image" });
+    }
+  });
+
+  // Endpoint: upload screenshot image for a game
+  app.post("/games/:gameId/upload-screenshot", requireToken, upload.single("file"), (req, res) => {
+    const gameId = Number(req.params.gameId);
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    if (!file.mimetype.startsWith("image/")) {
+      return res.status(400).json({ error: "File must be an image" });
+    }
+    const game = allGames[gameId];
+    if (!game) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+    try {
+      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+      ensureDirectoryExists(gameContentDir);
+      const screenshotsDir = path.join(gameContentDir, "screenshots");
+      ensureDirectoryExists(screenshotsDir);
+      const ext = (file.mimetype === "image/webp" && "webp") || (file.mimetype === "image/png" && "png") || (file.mimetype === "image/gif" && "gif") || "jpg";
+      const baseName = `screenshot-${Date.now()}.${ext}`;
+      const screenshotPath = path.join(screenshotsDir, baseName);
+      fs.writeFileSync(screenshotPath, file.buffer);
+      const url = `/games/${gameId}/screenshots/${baseName}`;
+      return res.json({ status: "success", url });
+    } catch (error) {
+      console.error(`Failed to save screenshot for game ${gameId}:`, error);
+      return res.status(500).json({ error: "Failed to save screenshot" });
     }
   });
 

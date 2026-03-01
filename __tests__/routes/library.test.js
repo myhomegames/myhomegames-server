@@ -335,6 +335,40 @@ describe('PUT /games/:gameId', () => {
     }
   });
 
+  test('should update screenshots and videos', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const screenshots = [`/games/${gameId}/screenshots/one.png`, `/games/${gameId}/screenshots/two.jpg`];
+      const videos = ['https://www.youtube.com/embed/abc123', 'https://www.youtube-nocookie.com/embed/def456'];
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ screenshots, videos })
+        .expect(200);
+
+      expect(updateResponse.body).toHaveProperty('status', 'success');
+      expect(updateResponse.body.game).toHaveProperty('screenshots');
+      expect(updateResponse.body.game.screenshots).toEqual(screenshots);
+      expect(updateResponse.body.game).toHaveProperty('videos');
+      expect(updateResponse.body.game.videos).toEqual(videos);
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.screenshots).toEqual(screenshots);
+      expect(verifyResponse.body.videos).toEqual(videos);
+    }
+  });
+
   test('should return 400 when no valid fields provided', async () => {
     // First get a game ID from the library
     const libraryResponse = await request(app)
@@ -1127,6 +1161,99 @@ describe('POST /games/:gameId/upload-executable', () => {
       fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
       fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
       fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+    }
+  });
+});
+
+describe('POST /games/:gameId/upload-screenshot', () => {
+  const testImageBuffer = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64'
+  );
+
+  test('should upload screenshot and return url', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .attach('file', testImageBuffer, 'screenshot.png')
+        .expect(200);
+
+      expect(response.body).toHaveProperty('status', 'success');
+      expect(response.body).toHaveProperty('url');
+      expect(response.body.url).toMatch(new RegExp(`^/games/${gameId}/screenshots/screenshot-\\d+\\.(png|jpg|webp|gif)$`));
+    }
+  });
+
+  test('should return 400 when no file uploaded', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'No file uploaded');
+    }
+  });
+
+  test('should return 400 when file is not an image', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .attach('file', Buffer.from('not an image'), 'file.txt')
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'File must be an image');
+    }
+  });
+
+  test('should return 404 for non-existent game', async () => {
+    const response = await request(app)
+      .post('/games/99999/upload-screenshot')
+      .set('X-Auth-Token', 'test-token')
+      .attach('file', testImageBuffer, 'screenshot.png')
+      .expect(404);
+
+    expect(response.body).toHaveProperty('error', 'Game not found');
+  });
+
+  test('should return 401 without token', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .attach('file', testImageBuffer, 'screenshot.png')
+        .expect(401);
+
+      expect(response.body).toHaveProperty('error', 'Unauthorized');
     }
   });
 });
