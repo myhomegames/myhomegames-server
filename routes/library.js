@@ -88,6 +88,7 @@ const {
 } = require("./series");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
 
 
 /**
@@ -541,8 +542,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             return (a.userratings ?? 0) - (b.userratings ?? 0);
           case "title":
           default: {
-            const ta = (a.title || "").trim();
-            const tb = (b.title || "").trim();
+            const ta = getTitleForSort(a.title);
+            const tb = getTitleForSort(b.title);
             return ta.localeCompare(tb, undefined, { sensitivity: "base" });
           }
         }

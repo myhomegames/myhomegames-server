@@ -6,6 +6,7 @@
 const path = require("path");
 const fs = require("fs");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
+const { getTitleForSort } = require("./sortUtils");
 
 function toArray(val) {
   if (val == null) return [];
@@ -45,7 +46,9 @@ function aggregateFromGames(allGames, field) {
       }
     }
   }
-  return Array.from(byId.values()).sort((a, b) => a.title.localeCompare(b.title));
+  return Array.from(byId.values()).sort((a, b) =>
+    getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+  );
 }
 
 /** Load all folder dirs and return Map(id -> gameIds[]). */

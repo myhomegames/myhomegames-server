@@ -3,6 +3,7 @@ const path = require("path");
 const multer = require("multer");
 const { getCoverUrl, getBackgroundUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
 const {
   loadItems,
   saveItem,
@@ -174,8 +175,11 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     // Save collection to its own folder
     try {
       saveItem(metadataPath, CONTENT_FOLDER, newCollection);
-      // Add to cache
+      // Add to cache and keep sorted by title (ignore leading The/A)
       collectionsCache.push(newCollection);
+      collectionsCache.sort((a, b) =>
+        getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+      );
       
       // Note: Collection content directory is not created during collection creation.
       // It will be created only when uploading cover/background via edit endpoints.

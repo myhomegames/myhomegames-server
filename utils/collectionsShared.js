@@ -6,6 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
+const { getTitleForSort } = require("./sortUtils");
 
 /**
  * Get metadata path for an item
@@ -48,7 +49,9 @@ function loadItems(metadataPath, contentFolder) {
     }
   }
 
-  return items.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  return items.sort((a, b) =>
+    getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+  );
 }
 
 /**
@@ -181,7 +184,11 @@ function compareGamesByField(gameA, gameB, field = "releaseDate", ascending = tr
       else compareResult = yearA - yearB;
       break;
     case "title":
-      compareResult = (gameA?.title || "").toLowerCase().localeCompare((gameB?.title || "").toLowerCase());
+      compareResult = getTitleForSort(gameA?.title).localeCompare(
+        getTitleForSort(gameB?.title),
+        undefined,
+        { sensitivity: "base" }
+      );
       break;
     case "stars":
       compareResult = (gameA?.stars ?? 0) - (gameB?.stars ?? 0);

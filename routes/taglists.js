@@ -3,6 +3,7 @@ const path = require("path");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { deleteMediaFile } = require("../utils/gameMediaUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
 
 function normalizeRouteBase(routeBase) {
   if (!routeBase.startsWith("/")) {
@@ -83,7 +84,9 @@ function createTagRoutes(config) {
       }
     });
 
-    tags.sort((a, b) => a.title.localeCompare(b.title));
+    tags.sort((a, b) =>
+      getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+    );
 
     return tags;
   }
