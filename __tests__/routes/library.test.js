@@ -396,7 +396,7 @@ describe('PUT /games/:gameId', () => {
       expect(updateResponse.body.game).toHaveProperty('websites');
       expect(updateResponse.body.game.websites).toHaveLength(2);
       expect(updateResponse.body.game.websites[0]).toMatchObject({ url: 'https://store.steampowered.com/app/123' });
-      expect(updateResponse.body.game.websites[1]).toMatchObject({ url: 'https://www.gog.com/game/foo', category: 1 });
+      expect(updateResponse.body.game.websites[1]).toMatchObject({ url: 'https://www.gog.com/game/foo' });
 
       const verifyResponse = await request(app)
         .get(`/games/${gameId}`)
@@ -407,7 +407,6 @@ describe('PUT /games/:gameId', () => {
       expect(verifyResponse.body.websites).toHaveLength(2);
       expect(verifyResponse.body.websites[0].url).toBe('https://store.steampowered.com/app/123');
       expect(verifyResponse.body.websites[1].url).toBe('https://www.gog.com/game/foo');
-      expect(verifyResponse.body.websites[1].category).toBe(1);
     }
   });
 

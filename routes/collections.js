@@ -268,6 +268,12 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     gameIds.forEach((gameId) => {
       const game = allGames[gameId];
       if (game) {
+        const similarGamesResolved = (game.similarGames && Array.isArray(game.similarGames) && game.similarGames.length > 0)
+          ? game.similarGames.map((id) => ({ id: Number(id), name: (allGames[id] && allGames[id].title) ? String(allGames[id].title) : String(id) }))
+          : null;
+        const websitesResolved = (game.websites && Array.isArray(game.websites) && game.websites.length > 0)
+          ? game.websites.map((u) => (typeof u === "string" ? { url: u } : (u && u.url ? { url: String(u.url) } : null))).filter(Boolean)
+          : null;
         collectionGames.push({
           id: game.id,
           title: game.title,
@@ -282,7 +288,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           platforms: game.platforms || null,
           gameModes: game.gameModes || null,
           playerPerspectives: game.playerPerspectives || null,
-          websites: game.websites || null,
+          websites: websitesResolved,
           ageRatings: game.ageRatings || null,
           developers: game.developers || null,
           publishers: game.publishers || null,
@@ -293,7 +299,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           gameEngines: game.gameEngines || null,
           keywords: game.keywords || null,
           alternativeNames: game.alternativeNames || null,
-          similarGames: game.similarGames || null,
+          similarGames: similarGamesResolved,
         });
         const background = getBackgroundUrl(game, metadataPath);
         if (background) {

@@ -274,8 +274,39 @@ function resolveDeveloperPublisherNames(ids, list) {
   });
 }
 
-/** Build game response: tag fields are id arrays; developers/publishers can be enriched to [{ id, name }] if lists passed. */
-function buildGameResponse(metadataPath, game, developersList = null, publishersList = null) {
+/** Resolve websites (stored as url[] in metadata) to [{ url }] for API. Accepts legacy [{ url, category? }] too. */
+function resolveWebsitesForResponse(websitesField) {
+  if (websitesField == null || !Array.isArray(websitesField)) return null;
+  if (websitesField.length === 0) return null;
+  const result = websitesField
+    .map((x) => (typeof x === "string" && x.trim() ? { url: x.trim() } : (x && typeof x === "object" && x.url ? { url: String(x.url).trim() } : null)))
+    .filter((o) => o && o.url);
+  return result.length > 0 ? result : null;
+}
+
+/** Resolve similarGames (stored as id[] in metadata) to [{ id, name }] using allGames. Accepts legacy [{ id, name }] too. */
+function resolveSimilarGamesForResponse(similarGamesField, allGames) {
+  if (similarGamesField == null || !Array.isArray(similarGamesField)) return null;
+  if (similarGamesField.length === 0) return null;
+  const ids = similarGamesField.map((x) => {
+    if (typeof x === "number" && !Number.isNaN(x)) return x;
+    if (typeof x === "object" && x != null && x.id != null) return Number(x.id);
+    return null;
+  }).filter((id) => id != null && !Number.isNaN(id));
+  if (ids.length === 0) return null;
+  const seen = new Set();
+  const result = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const g = allGames && allGames[id];
+    result.push({ id, name: (g && g.title) ? String(g.title).trim() : String(id) });
+  }
+  return result.length > 0 ? result : null;
+}
+
+/** Build game response: tag fields are id arrays; developers/publishers/similarGames enriched when lists/allGames passed. */
+function buildGameResponse(metadataPath, game, developersList = null, publishersList = null, allGames = null) {
   const executables = getExecutablesWithOrder(metadataPath, game.id, game);
   const devIds = game.developers && Array.isArray(game.developers) ? game.developers : [];
   const pubIds = game.publishers && Array.isArray(game.publishers) ? game.publishers : [];
@@ -298,7 +329,7 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     platforms: game.platforms && game.platforms.length ? game.platforms : null,
     gameModes: game.gameModes && game.gameModes.length ? game.gameModes : null,
     playerPerspectives: game.playerPerspectives && game.playerPerspectives.length ? game.playerPerspectives : null,
-    websites: game.websites || null,
+    websites: resolveWebsitesForResponse(game.websites),
     ageRatings: game.ageRatings || null,
     developers: developersResolved && developersResolved.length > 0 ? developersResolved : (devIds.length > 0 ? devIds : null),
     publishers: publishersResolved && publishersResolved.length > 0 ? publishersResolved : (pubIds.length > 0 ? pubIds : null),
@@ -310,7 +341,7 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     gameEngines: game.gameEngines && game.gameEngines.length ? game.gameEngines : null,
     keywords: game.keywords || null,
     alternativeNames: game.alternativeNames || null,
-    similarGames: game.similarGames || null,
+    similarGames: resolveSimilarGamesForResponse(game.similarGames, allGames),
     showTitle: game.showTitle,
   };
   const backgroundUrl = getBackgroundUrl(game, metadataPath);
@@ -552,7 +583,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
       const responsePayload = {
-        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs)),
+        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs, allGames)),
       };
 
       if (fromCache) {
@@ -590,7 +621,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
     const devs = getDevelopersCache ? getDevelopersCache() : null;
     const pubs = getPublishersCache ? getPublishersCache() : null;
-    res.json(buildGameResponse(metadataPath, game, devs, pubs));
+    res.json(buildGameResponse(metadataPath, game, devs, pubs, allGames));
   });
 
   // Endpoint: update game fields
@@ -703,9 +734,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       } else {
         const arr = v
           .filter((item) => item && typeof item === "object" && typeof item.url === "string" && item.url.trim())
-          .map((item) => ({ url: String(item.url).trim(), category: item.category != null ? Number(item.category) : undefined }))
-          .filter((o) => o.url);
-        filteredUpdates.websites = arr.length > 0 ? arr : null;
+          .map((item) => String(item.url).trim())
+          .filter((url) => url);
+        const seen = new Set();
+        const deduped = arr.filter((url) => {
+          if (seen.has(url)) return false;
+          seen.add(url);
+          return true;
+        });
+        // Persist only URLs as string[] in metadata (category not stored)
+        filteredUpdates.websites = deduped.length > 0 ? deduped : null;
       }
     }
     if ("similarGames" in filteredUpdates) {
@@ -728,7 +766,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           seen.add(o.id);
           return true;
         });
-        filteredUpdates.similarGames = deduped.length > 0 ? deduped : null;
+        // Persist only ids in metadata (names resolved at response time from allGames)
+        filteredUpdates.similarGames = deduped.length > 0 ? deduped.map((o) => o.id) : null;
       }
     }
     
@@ -1108,7 +1147,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const updatedGame = currentGame;
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to save ${fileName}:`, e.message);
       res.status(500).json({ error: "Failed to save game updates" });
@@ -1131,7 +1170,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs) });
+      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to reload game ${gameId}:`, e.message);
       res.status(500).json({ error: "Failed to reload game metadata" });
@@ -1171,7 +1210,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const coverPath = path.join(gameContentDir, "cover.webp");
       fs.writeFileSync(coverPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save cover image" });
@@ -1208,7 +1247,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const backgroundPath = path.join(gameContentDir, "background.webp");
       fs.writeFileSync(backgroundPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save background image" });
@@ -1289,7 +1328,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'cover'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete cover image" });
@@ -1339,7 +1378,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'background'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete background image" });
@@ -1446,7 +1485,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       res.json({
         status: "success",
-        game: buildGameResponse(metadataPath, game),
+        game: buildGameResponse(metadataPath, game, null, null, allGames),
       });
     } catch (error) {
       console.error(`Failed to save executable for game ${gameId}:`, error);
@@ -1605,7 +1644,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         platforms: platformIds,
         gameModes: gameModeIds,
         playerPerspectives: playerPerspectiveIds,
-        websites: validWebsites,
+        websites: (validWebsites && validWebsites.length)
+          ? validWebsites.map((w) => (w && typeof w.url === "string" && w.url.trim() ? w.url.trim() : null)).filter(Boolean)
+          : null,
         ageRatings: validAgeRatings,
         developers: rawDevelopers ? rawDevelopers.map((d) => d.id) : null,
         publishers: rawPublishers ? rawPublishers.map((p) => p.id) : null,
@@ -1616,7 +1657,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         gameEngines: gameEngineIds,
         keywords: validKeywords,
         alternativeNames: validAlternativeNames,
-        similarGames: validSimilarGames,
+        similarGames: (validSimilarGames && validSimilarGames.length)
+          ? [...new Set(validSimilarGames.map((s) => Number(s.id)).filter((id) => !Number.isNaN(id)))]
+          : null,
         igdbCover: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
         igdbBackground: background && typeof background === "string" && background.trim() ? background.trim() : null,
         showTitle: true,
@@ -1649,7 +1692,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs), gameId: newGame.id });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
       console.error(`Failed to add game from IGDB:`, error);
       res.status(500).json({ error: "Failed to add game to library", detail: error.message });
@@ -1713,7 +1756,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs), gameId: newGame.id });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
       console.error("Failed to create game:", error);
       res.status(500).json({ error: "Failed to create game", detail: error.message });

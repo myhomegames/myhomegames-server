@@ -120,6 +120,62 @@ function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
 }
 
 /**
+ * Fetch game names from IGDB by id list.
+ * @param {number[]} ids - IGDB game IDs
+ * @param {string} accessToken - IGDB access token
+ * @param {string} clientId - Twitch Client ID
+ * @returns {Promise<Map<number, string>>} Map of id -> name (only for found games)
+ */
+function fetchIGDBGameNamesByIds(ids, accessToken, clientId) {
+  if (!ids || ids.length === 0) return Promise.resolve(new Map());
+  const uniqueIds = [...new Set(ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
+  if (uniqueIds.length === 0) return Promise.resolve(new Map());
+
+  const postData = `fields id,name; where id = (${uniqueIds.join(",")});`;
+
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const games = JSON.parse(data);
+          const map = new Map();
+          (Array.isArray(games) ? games : []).forEach((g) => {
+            if (g != null && g.id != null && g.name != null) {
+              map.set(Number(g.id), String(g.name).trim());
+            }
+          });
+          resolve(map);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+/**
  * Register IGDB routes
  * @param {express.App} app - Express app instance
  * @param {Function} requireToken - Authentication middleware
@@ -245,6 +301,49 @@ function registerIGDBRoutes(app, requireToken) {
       console.error("IGDB search error:", err);
       res.setHeader('Content-Type', 'application/json');
       res.status(500).json({ error: "Failed to search IGDB", detail: err.message });
+    }
+  });
+
+  // Endpoint: get game names by IGDB ids (for resolving similar games not in library)
+  app.get("/igdb/game-names-by-ids", requireToken, async (req, res) => {
+    const rawIds = req.query.ids;
+    if (!rawIds || typeof rawIds !== "string") {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Missing query parameter: ids (comma-separated IGDB game IDs)" });
+    }
+    const ids = rawIds
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((id) => !Number.isNaN(id));
+    if (ids.length === 0) {
+      res.setHeader("Content-Type", "application/json");
+      return res.json({ names: {} });
+    }
+    if (ids.length > 500) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "At most 500 ids allowed" });
+    }
+
+    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
+    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
+    if (!clientId || !clientSecret) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required (X-Twitch-Client-Id, X-Twitch-Client-Secret)." });
+    }
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      const nameMap = await fetchIGDBGameNamesByIds(ids, accessToken, clientId);
+      const names = {};
+      nameMap.forEach((name, id) => {
+        names[String(id)] = name;
+      });
+      res.setHeader("Content-Type", "application/json");
+      res.json({ names });
+    } catch (err) {
+      console.error("IGDB game-names-by-ids error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch names from IGDB", detail: err.message });
     }
   });
 
@@ -471,5 +570,6 @@ function registerIGDBRoutes(app, requireToken) {
 module.exports = {
   registerIGDBRoutes,
   getIGDBAccessToken,
+  fetchIGDBGameNamesByIds,
 };
 
