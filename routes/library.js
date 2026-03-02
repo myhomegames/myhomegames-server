@@ -1822,11 +1822,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       for (const id of collectionIdsContainingGame) {
         if (id != null) deleteCollectionIfUnused(metadataPath, id);
       }
-      // Remove game from all developers and publishers
-      const developersCache = getDevelopersCache && typeof getDevelopersCache === "function" ? getDevelopersCache() : null;
-      const publishersCache = getPublishersCache && typeof getPublishersCache === "function" ? getPublishersCache() : null;
-      removeGameFromAllDevelopers(metadataPath, gameId, null, developersCache);
-      removeGameFromAllPublishers(metadataPath, gameId, null, publishersCache);
+      // Remove game from all developers and publishers (pass null cache to load fresh from disk,
+      // so we include developers/publishers created when the game was added)
+      removeGameFromAllDevelopers(metadataPath, gameId, null, null);
+      removeGameFromAllPublishers(metadataPath, gameId, null, null);
 
       for (const id of gameDeveloperIds) {
         if (id != null) deleteDeveloperIfUnused(metadataPath, id);
