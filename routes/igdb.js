@@ -378,7 +378,7 @@ function registerIGDBRoutes(app, requireToken) {
       .filter((id) => !Number.isNaN(id));
     if (ids.length === 0) {
       res.setHeader("Content-Type", "application/json");
-      return res.json({ names: {} });
+      return res.json({ names: {}, covers: {} });
     }
     if (ids.length > 500) {
       res.setHeader("Content-Type", "application/json");
