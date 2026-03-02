@@ -649,6 +649,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "videos",
       "alternativeNames",
       "websites",
+      "similarGames",
     ];
     
     // Filter updates to only include allowed fields
@@ -705,6 +706,29 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           .map((item) => ({ url: String(item.url).trim(), category: item.category != null ? Number(item.category) : undefined }))
           .filter((o) => o.url);
         filteredUpdates.websites = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("similarGames" in filteredUpdates) {
+      const v = filteredUpdates.similarGames;
+      if (v == null) {
+        filteredUpdates.similarGames = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "similarGames must be an array of objects or null" });
+      } else {
+        const arr = v
+          .filter((item) => item && typeof item === "object" && item.id != null)
+          .map((item) => ({
+            id: Number(item.id),
+            name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : String(item.id),
+          }))
+          .filter((o) => !Number.isNaN(o.id));
+        const seen = new Set();
+        const deduped = arr.filter((o) => {
+          if (seen.has(o.id)) return false;
+          seen.add(o.id);
+          return true;
+        });
+        filteredUpdates.similarGames = deduped.length > 0 ? deduped : null;
       }
     }
     
