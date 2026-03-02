@@ -647,6 +647,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "showTitle",
       "screenshots",
       "videos",
+      "alternativeNames",
+      "websites",
     ];
     
     // Filter updates to only include allowed fields
@@ -678,6 +680,31 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       } else {
         const arr = v.filter((s) => typeof s === "string" && s.trim());
         filteredUpdates.videos = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("alternativeNames" in filteredUpdates) {
+      const v = filteredUpdates.alternativeNames;
+      if (v == null) {
+        filteredUpdates.alternativeNames = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "alternativeNames must be an array of strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.alternativeNames = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("websites" in filteredUpdates) {
+      const v = filteredUpdates.websites;
+      if (v == null) {
+        filteredUpdates.websites = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "websites must be an array of objects or null" });
+      } else {
+        const arr = v
+          .filter((item) => item && typeof item === "object" && typeof item.url === "string" && item.url.trim())
+          .map((item) => ({ url: String(item.url).trim(), category: item.category != null ? Number(item.category) : undefined }))
+          .filter((o) => o.url);
+        filteredUpdates.websites = arr.length > 0 ? arr : null;
       }
     }
     

@@ -369,6 +369,48 @@ describe('PUT /games/:gameId', () => {
     }
   });
 
+  test('should update alternativeNames and websites', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const alternativeNames = ['Alt Name 1', 'Alt Name 2'];
+      const websites = [
+        { url: 'https://store.steampowered.com/app/123' },
+        { url: 'https://www.gog.com/game/foo', category: 1 },
+      ];
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ alternativeNames, websites })
+        .expect(200);
+
+      expect(updateResponse.body).toHaveProperty('status', 'success');
+      expect(updateResponse.body.game).toHaveProperty('alternativeNames');
+      expect(updateResponse.body.game.alternativeNames).toEqual(alternativeNames);
+      expect(updateResponse.body.game).toHaveProperty('websites');
+      expect(updateResponse.body.game.websites).toHaveLength(2);
+      expect(updateResponse.body.game.websites[0]).toMatchObject({ url: 'https://store.steampowered.com/app/123' });
+      expect(updateResponse.body.game.websites[1]).toMatchObject({ url: 'https://www.gog.com/game/foo', category: 1 });
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.alternativeNames).toEqual(alternativeNames);
+      expect(verifyResponse.body.websites).toHaveLength(2);
+      expect(verifyResponse.body.websites[0].url).toBe('https://store.steampowered.com/app/123');
+      expect(verifyResponse.body.websites[1].url).toBe('https://www.gog.com/game/foo');
+      expect(verifyResponse.body.websites[1].category).toBe(1);
+    }
+  });
+
   test('should return 400 when no valid fields provided', async () => {
     // First get a game ID from the library
     const libraryResponse = await request(app)
