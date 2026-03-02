@@ -176,6 +176,67 @@ function fetchIGDBGameNamesByIds(ids, accessToken, clientId) {
 }
 
 /**
+ * Fetch game names and covers from IGDB by id list.
+ * @param {number[]} ids - IGDB game IDs
+ * @param {string} accessToken - IGDB access token
+ * @param {string} clientId - Twitch Client ID
+ * @returns {Promise<Map<number, { name: string, cover?: string }>>} Map of id -> { name, cover }
+ */
+function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
+  if (!ids || ids.length === 0) return Promise.resolve(new Map());
+  const uniqueIds = [...new Set(ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
+  if (uniqueIds.length === 0) return Promise.resolve(new Map());
+
+  const postData = `fields id,name,cover.url; where id = (${uniqueIds.join(",")});`;
+
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const games = JSON.parse(data);
+          const map = new Map();
+          (Array.isArray(games) ? games : []).forEach((g) => {
+            if (g != null && g.id != null && g.name != null) {
+              let coverUrl = g.cover && g.cover.url ? String(g.cover.url).trim() : null;
+              if (coverUrl) {
+                if (coverUrl.startsWith("//")) coverUrl = `https:${coverUrl}`;
+                coverUrl = coverUrl.replace("t_thumb", "t_1080p").replace("t_cover_small", "t_1080p").replace("t_cover_big", "t_1080p");
+              }
+              map.set(Number(g.id), { name: String(g.name).trim(), cover: coverUrl || undefined });
+            }
+          });
+          resolve(map);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+/**
  * Register IGDB routes
  * @param {express.App} app - Express app instance
  * @param {Function} requireToken - Authentication middleware
@@ -333,13 +394,15 @@ function registerIGDBRoutes(app, requireToken) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
-      const nameMap = await fetchIGDBGameNamesByIds(ids, accessToken, clientId);
+      const detailsMap = await fetchIGDBGameDetailsByIds(ids, accessToken, clientId);
       const names = {};
-      nameMap.forEach((name, id) => {
-        names[String(id)] = name;
+      const covers = {};
+      detailsMap.forEach((details, id) => {
+        names[String(id)] = details.name;
+        if (details.cover) covers[String(id)] = details.cover;
       });
       res.setHeader("Content-Type", "application/json");
-      res.json({ names });
+      res.json({ names, covers });
     } catch (err) {
       console.error("IGDB game-names-by-ids error:", err);
       res.setHeader("Content-Type", "application/json");
