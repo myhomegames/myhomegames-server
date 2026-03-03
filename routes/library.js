@@ -669,6 +669,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "gameEngines",
       "gameModes",
       "playerPerspectives",
+      "ageRatings",
       "developers",
       "publishers",
       "franchise",
@@ -746,6 +747,25 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         filteredUpdates.websites = deduped.length > 0 ? deduped : null;
       }
     }
+    // Age ratings: array of { category, rating } or null (category/rating can be number or string)
+    if ("ageRatings" in filteredUpdates) {
+      const v = filteredUpdates.ageRatings;
+      if (v == null) {
+        filteredUpdates.ageRatings = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "ageRatings must be an array of { category, rating } or null" });
+      } else {
+        const valid = v
+          .filter((item) => item && typeof item === "object" && item.category != null && item.rating != null)
+          .map((item) => ({
+            category: Number(item.category),
+            rating: Number(item.rating),
+          }))
+          .filter((item) => !Number.isNaN(item.category) && !Number.isNaN(item.rating));
+        filteredUpdates.ageRatings = valid.length > 0 ? valid : null;
+      }
+    }
+
     if ("similarGames" in filteredUpdates) {
       const v = filteredUpdates.similarGames;
       if (v == null) {
