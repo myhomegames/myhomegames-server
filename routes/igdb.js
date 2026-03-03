@@ -410,6 +410,205 @@ function registerIGDBRoutes(app, requireToken) {
     }
   });
 
+  function parseExcludeIds(req) {
+    const fromQuery = req.query.excludeIds;
+    const fromBody = req.body && req.body.excludeIds;
+    if (Array.isArray(fromBody)) {
+      return fromBody.map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+    }
+    if (fromBody && typeof fromBody === "string") {
+      return fromBody.split(",").map((s) => parseInt(s.trim(), 10)).filter((id) => !Number.isNaN(id));
+    }
+    if (fromQuery && typeof fromQuery === "string") {
+      return fromQuery.split(",").map((s) => parseInt(s.trim(), 10)).filter((id) => !Number.isNaN(id));
+    }
+    return [];
+  }
+
+  // Endpoint: get IGDB games by franchise ID (excludes library games)
+  const handleGamesByFranchise = async (req, res) => {
+    const franchiseId = parseInt(req.params.franchiseId, 10);
+    const excludeIds = parseExcludeIds(req);
+    if (Number.isNaN(franchiseId) || franchiseId < 1) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Invalid franchise ID" });
+    }
+
+    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
+    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
+    if (!clientId || !clientSecret) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
+    }
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      const postData = `fields id,name,cover.url,first_release_date; where franchise = ${franchiseId}; limit 100;`;
+
+      const options = {
+        hostname: "api.igdb.com",
+        path: "/v4/games",
+        method: "POST",
+        headers: {
+          "Client-ID": clientId,
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "text/plain",
+          "Content-Length": Buffer.byteLength(postData),
+        },
+      };
+
+      let games = await new Promise((resolve, reject) => {
+        const req2 = https.request(options, (res2) => {
+          let data = "";
+          res2.on("data", (chunk) => { data += chunk; });
+          res2.on("end", () => {
+            try {
+              if (res2.statusCode !== 200) {
+                reject(new Error(`IGDB API error ${res2.statusCode}: ${data}`));
+                return;
+              }
+              const parsed = JSON.parse(data);
+              resolve(Array.isArray(parsed) ? parsed : []);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+        req2.on("error", reject);
+        req2.write(postData);
+        req2.end();
+      });
+
+      if (excludeIds.length > 0) {
+        const excludeSet = new Set(excludeIds);
+        games = games.filter((g) => !excludeSet.has(g.id));
+      }
+
+      const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+      const formatted = games.map((g) => {
+        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(g.first_release_date);
+        const cover = g.cover && g.cover.url
+          ? `https:${g.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
+          : null;
+        return {
+          id: g.id,
+          name: g.name || "",
+          cover,
+          releaseDate: releaseDateFull?.year ?? null,
+          firstReleaseDate: g.first_release_date,
+        };
+      });
+
+      formatted.sort((a, b) => {
+        const aTs = a.firstReleaseDate ?? 0;
+        const bTs = b.firstReleaseDate ?? 0;
+        return aTs - bTs;
+      });
+
+      res.setHeader("Content-Type", "application/json");
+      res.json({ games: formatted });
+    } catch (err) {
+      console.error("IGDB games-by-franchise error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch games from IGDB", detail: err.message });
+    }
+  };
+
+  app.get("/igdb/games-by-franchise/:franchiseId", requireToken, handleGamesByFranchise);
+  app.post("/igdb/games-by-franchise/:franchiseId", requireToken, handleGamesByFranchise);
+
+  // Endpoint: get IGDB games by collection ID (series) - excludes library games
+  const handleGamesByCollection = async (req, res) => {
+    const collectionId = parseInt(req.params.collectionId, 10);
+    const excludeIds = parseExcludeIds(req);
+    if (Number.isNaN(collectionId) || collectionId < 1) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Invalid collection ID" });
+    }
+
+    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
+    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
+    if (!clientId || !clientSecret) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
+    }
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      const postData = `fields id,name,cover.url,first_release_date; where collections = (${collectionId}); limit 100;`;
+
+      const options = {
+        hostname: "api.igdb.com",
+        path: "/v4/games",
+        method: "POST",
+        headers: {
+          "Client-ID": clientId,
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "text/plain",
+          "Content-Length": Buffer.byteLength(postData),
+        },
+      };
+
+      let games = await new Promise((resolve, reject) => {
+        const req2 = https.request(options, (res2) => {
+          let data = "";
+          res2.on("data", (chunk) => { data += chunk; });
+          res2.on("end", () => {
+            try {
+              if (res2.statusCode !== 200) {
+                reject(new Error(`IGDB API error ${res2.statusCode}: ${data}`));
+                return;
+              }
+              const parsed = JSON.parse(data);
+              resolve(Array.isArray(parsed) ? parsed : []);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+        req2.on("error", reject);
+        req2.write(postData);
+        req2.end();
+      });
+
+      if (excludeIds.length > 0) {
+        const excludeSet = new Set(excludeIds);
+        games = games.filter((g) => !excludeSet.has(g.id));
+      }
+
+      const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+      const formatted = games.map((g) => {
+        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(g.first_release_date);
+        const cover = g.cover && g.cover.url
+          ? `https:${g.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
+          : null;
+        return {
+          id: g.id,
+          name: g.name || "",
+          cover,
+          releaseDate: releaseDateFull?.year ?? null,
+          firstReleaseDate: g.first_release_date,
+        };
+      });
+
+      formatted.sort((a, b) => {
+        const aTs = a.firstReleaseDate ?? 0;
+        const bTs = b.firstReleaseDate ?? 0;
+        return aTs - bTs;
+      });
+
+      res.setHeader("Content-Type", "application/json");
+      res.json({ games: formatted });
+    } catch (err) {
+      console.error("IGDB games-by-collection error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch games from IGDB", detail: err.message });
+    }
+  };
+
+  app.get("/igdb/games-by-collection/:collectionId", requireToken, handleGamesByCollection);
+  app.post("/igdb/games-by-collection/:collectionId", requireToken, handleGamesByCollection);
+
   // Endpoint: get single IGDB game details with high-res cover
   app.get("/igdb/game/:igdbId", requireToken, async (req, res) => {
     const igdbId = req.params.igdbId;
