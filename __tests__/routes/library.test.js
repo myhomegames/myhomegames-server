@@ -541,6 +541,44 @@ describe('PUT /games/:gameId', () => {
     }
   });
 
+  test('should update criticRating and userRating via PUT', async () => {
+    const igdbId = 888881;
+    const addRes = await request(app)
+      .post('/games/add-from-igdb')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        igdbId,
+        name: 'Test Game for Rating Update',
+        summary: 'Test',
+        releaseDate: 1609459200,
+        criticRating: 70,
+        userRating: 65
+      })
+      .expect(200);
+    const gameId = addRes.body.gameId;
+
+    const updateRes = await request(app)
+      .put(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ criticRating: 85, userRating: 78 })
+      .expect(200);
+
+    expect(updateRes.body.game.criticratings).toBe(8.5);
+    expect(updateRes.body.game.userratings).toBe(7.8);
+
+    const getRes = await request(app)
+      .get(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(getRes.body.criticratings).toBe(8.5);
+    expect(getRes.body.userratings).toBe(7.8);
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
   test('should delete orphaned franchise when removing from game via PUT', async () => {
     const franchiseId = 66666;
     const igdbId = 999990;

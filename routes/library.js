@@ -663,6 +663,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "month",
       "day",
       "stars",
+      "criticRating",
+      "userRating",
       "genre",
       "themes",
       "platforms",
@@ -747,6 +749,34 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         filteredUpdates.websites = deduped.length > 0 ? deduped : null;
       }
     }
+    // Critic/user ratings: 0-100 from client, convert to 0-10 for storage
+    if ("criticRating" in filteredUpdates) {
+      const v = filteredUpdates.criticRating;
+      if (v == null || v === "") {
+        filteredUpdates.criticratings = null;
+      } else {
+        const num = Number(v);
+        if (Number.isNaN(num) || num < 0 || num > 100) {
+          return res.status(400).json({ error: "criticRating must be a number between 0 and 100 or null" });
+        }
+        filteredUpdates.criticratings = num / 10;
+      }
+      delete filteredUpdates.criticRating;
+    }
+    if ("userRating" in filteredUpdates) {
+      const v = filteredUpdates.userRating;
+      if (v == null || v === "") {
+        filteredUpdates.userratings = null;
+      } else {
+        const num = Number(v);
+        if (Number.isNaN(num) || num < 0 || num > 100) {
+          return res.status(400).json({ error: "userRating must be a number between 0 and 100 or null" });
+        }
+        filteredUpdates.userratings = num / 10;
+      }
+      delete filteredUpdates.userRating;
+    }
+
     // Age ratings: array of { category, rating } or null (category/rating can be number or string)
     if ("ageRatings" in filteredUpdates) {
       const v = filteredUpdates.ageRatings;
