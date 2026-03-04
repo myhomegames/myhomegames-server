@@ -120,6 +120,52 @@ function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
 }
 
 /**
+ * Fetch a single game from IGDB by id (same fields as search for consistent response shape).
+ * @param {number} id - IGDB game ID
+ * @param {string} accessToken - IGDB access token
+ * @param {string} clientId - Twitch Client ID
+ * @returns {Promise<Array>} Raw game objects from IGDB (0 or 1 element)
+ */
+function runIGDBGameById(id, accessToken, clientId) {
+  const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name; where id = ${id}; limit 1;`;
+
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const games = JSON.parse(data);
+          resolve(Array.isArray(games) ? games : []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+/**
  * Fetch game names from IGDB by id list.
  * @param {number[]} ids - IGDB game IDs
  * @param {string} accessToken - IGDB access token
@@ -243,8 +289,10 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
  */
 function registerIGDBRoutes(app, requireToken) {
   // Endpoint: search games on IGDB
-  app.get("/igdb/search", requireToken, async (req, res) => {
-    const rawQuery = req.query.q;
+  const handleSearch = async (req, res) => {
+    const rawQuery = (req.method === "POST" && req.body && typeof req.body.query === "string")
+      ? req.body.query
+      : req.query.q;
     if (!rawQuery || typeof rawQuery !== "string") {
       res.setHeader('Content-Type', 'application/json');
       return res.status(400).json({ error: "Missing search query" });
@@ -283,35 +331,49 @@ function registerIGDBRoutes(app, requireToken) {
       // do not filter by year so we get all name matches and then sort by closest date.
       const yearToFilter = year !== null && !isNaN(year) ? year : null;
 
-      const words = query.split(/\s+/).filter(Boolean);
-      const seenIds = new Set();
+      let rawGames;
 
-      const mergeResults = (games) => {
-        for (const g of games) {
+      // Search by IGDB ID if query is a single numeric id
+      const numericId = /^\d+$/.test(query) ? parseInt(query, 10) : null;
+      if (numericId !== null) {
+        rawGames = await runIGDBGameById(numericId, accessToken, clientId);
+      } else {
+        const words = query.split(/\s+/).filter(Boolean);
+        const seenIds = new Set();
+
+        const mergeResults = (games) => {
+          for (const g of games) {
+            if (!seenIds.has(g.id)) {
+              seenIds.add(g.id);
+              rawGames.push(g);
+            }
+          }
+        };
+
+        rawGames = [];
+        const initial = await runIGDBSearch(query, accessToken, clientId, yearToFilter);
+        initial.forEach((g) => {
           if (!seenIds.has(g.id)) {
             seenIds.add(g.id);
             rawGames.push(g);
           }
+        });
+
+        const extraQueries = [];
+        if (words.length >= 2) {
+          const firstTwoMerged = words[0] + words[1] + (words.length > 2 ? " " + words.slice(2).join(" ") : "");
+          if (firstTwoMerged !== query) extraQueries.push(firstTwoMerged);
         }
-      };
+        const queryNoSpaces = query.replace(/\s/g, "");
+        if (queryNoSpaces.length > 0 && queryNoSpaces !== query) extraQueries.push(queryNoSpaces);
 
-      let rawGames = await runIGDBSearch(query, accessToken, clientId, yearToFilter);
-      rawGames.forEach((g) => seenIds.add(g.id));
-
-      const extraQueries = [];
-      if (words.length >= 2) {
-        const firstTwoMerged = words[0] + words[1] + (words.length > 2 ? " " + words.slice(2).join(" ") : "");
-        if (firstTwoMerged !== query) extraQueries.push(firstTwoMerged);
-      }
-      const queryNoSpaces = query.replace(/\s/g, "");
-      if (queryNoSpaces.length > 0 && queryNoSpaces !== query) extraQueries.push(queryNoSpaces);
-
-      for (const q of extraQueries) {
-        try {
-          const more = await runIGDBSearch(q, accessToken, clientId, yearToFilter);
-          mergeResults(more);
-        } catch (_) {
-          /* ignore: use only first search result */
+        for (const q of extraQueries) {
+          try {
+            const more = await runIGDBSearch(q, accessToken, clientId, yearToFilter);
+            mergeResults(more);
+          } catch (_) {
+            /* ignore: use only first search result */
+          }
         }
       }
 
@@ -363,7 +425,10 @@ function registerIGDBRoutes(app, requireToken) {
       res.setHeader('Content-Type', 'application/json');
       res.status(500).json({ error: "Failed to search IGDB", detail: err.message });
     }
-  });
+  };
+
+  app.get("/igdb/search", requireToken, handleSearch);
+  app.post("/igdb/search", requireToken, handleSearch);
 
   // Endpoint: get game names by IGDB ids (for resolving similar games not in library)
   app.get("/igdb/game-names-by-ids", requireToken, async (req, res) => {
