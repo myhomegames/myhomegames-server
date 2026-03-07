@@ -53,13 +53,10 @@ const { removeGameFromRecommended } = require("./recommended");
 const {
   removeGameFromAllCollections,
   addGameToCollection,
-  getCollectionToGameIdsMap,
-  deleteCollectionIfUnused,
 } = require("./collections");
 const {
   ensureDevelopersExistBatch,
   removeGameFromAllDevelopers,
-  deleteDeveloperIfUnused,
   removeGameFromDeveloper,
   addGameToDeveloper,
   getDeveloperToGameIdsMap,
@@ -67,7 +64,6 @@ const {
 const {
   ensurePublishersExistBatch,
   removeGameFromAllPublishers,
-  deletePublisherIfUnused,
   removeGameFromPublisher,
   addGameToPublisher,
   getPublisherToGameIdsMap,
@@ -1835,14 +1831,6 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         : [];
       const gameFranchiseIds = Array.isArray(game.franchise) ? game.franchise : game.franchise != null ? [game.franchise] : [];
       const gameCollectionIds = Array.isArray(game.collection) ? game.collection : game.collection != null ? [game.collection] : [];
-      const gameDeveloperIds = (game.developers && Array.isArray(game.developers)
-        ? game.developers
-        : game.developers != null ? [game.developers] : []
-      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
-      const gamePublisherIds = (game.publishers && Array.isArray(game.publishers)
-        ? game.publishers
-        : game.publishers != null ? [game.publishers] : []
-      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
 
       // Remove game from all tag blocks (genre, themes, platforms, etc.) and franchise/series blocks before deleting
       removeGameFromAllTagBlocks(metadataPath, gameId);
@@ -1863,26 +1851,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       // Remove game from all collections (use in-memory cache when available)
       const collectionsCache = getCollectionsCache && typeof getCollectionsCache === "function" ? getCollectionsCache() : null;
-      const collectionToGames = getCollectionToGameIdsMap(metadataPath);
-      const collectionIdsContainingGame = [];
-      for (const [collectionId, gameIds] of collectionToGames) {
-        if (gameIds.some((g) => Number(g) === Number(gameId))) collectionIdsContainingGame.push(collectionId);
-      }
       removeGameFromAllCollections(metadataPath, gameId, updateCollectionsCache, collectionsCache);
-      for (const id of collectionIdsContainingGame) {
-        if (id != null) deleteCollectionIfUnused(metadataPath, id);
-      }
       // Remove game from all developers and publishers (pass null cache to load fresh from disk,
       // so we include developers/publishers created when the game was added)
       removeGameFromAllDevelopers(metadataPath, gameId, null, null);
       removeGameFromAllPublishers(metadataPath, gameId, null, null);
-
-      for (const id of gameDeveloperIds) {
-        if (id != null) deleteDeveloperIfUnused(metadataPath, id);
-      }
-      for (const id of gamePublisherIds) {
-        if (id != null) deletePublisherIfUnused(metadataPath, id);
-      }
 
       // Remove from in-memory cache
       delete allGames[gameId];
