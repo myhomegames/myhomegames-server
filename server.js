@@ -602,15 +602,16 @@ app.get("/settings", (req, res) => {
   res.json(settings);
 });
 
-// Endpoint: update settings (optional token: when login disabled, still allow saving)
-app.put("/settings", optionalToken, (req, res) => {
+// Endpoint: update settings (no auth required so language/visibleLibraries always save to settings.json)
+app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
   const updatedSettings = {
     ...currentSettings,
     ...req.body,
   };
 
-  if (writeSettings(updatedSettings)) {
+  const ok = writeSettings(updatedSettings);
+  if (ok) {
     res.json({ status: "success", settings: updatedSettings });
   } else {
     res.status(500).json({ error: "Failed to save settings" });
