@@ -263,6 +263,26 @@ describe('POST /reload-games', () => {
   });
 });
 
+describe('GET /version', () => {
+  test('should return version without token (public endpoint)', async () => {
+    const response = await request(app)
+      .get('/version')
+      .expect(200);
+    expect(response.body).toHaveProperty('version');
+    expect(typeof response.body.version).toBe('string');
+    expect(response.body.version).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test('should return version matching server package.json', async () => {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const response = await request(app)
+      .get('/version')
+      .expect(200);
+    expect(response.body.version).toBe(pkg.version);
+  });
+});
+
 describe('GET /settings', () => {
   test('should return settings', async () => {
     const response = await request(app)

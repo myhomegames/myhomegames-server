@@ -602,6 +602,30 @@ app.get("/settings", (req, res) => {
   res.json(settings);
 });
 
+// Endpoint: get server version (public, for update notification to compare with GitHub releases)
+function getServerVersion() {
+  try {
+    const infoPath = path.join(process.cwd(), "server-info.json");
+    if (fs.existsSync(infoPath)) {
+      const data = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+      if (data && typeof data.version === "string") return data.version;
+    }
+  } catch (_) {}
+  try {
+    const pkgPath = path.join(__dirname, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      const data = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (data && typeof data.version === "string") return data.version;
+    }
+  } catch (_) {}
+  return null;
+}
+app.get("/version", (req, res) => {
+  const version = getServerVersion();
+  if (version) res.json({ version });
+  else res.status(500).json({ error: "Version not available" });
+});
+
 // Endpoint: update settings (no auth required so language/visibleLibraries always save to settings.json)
 app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
