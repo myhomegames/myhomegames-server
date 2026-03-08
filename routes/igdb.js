@@ -222,18 +222,18 @@ function fetchIGDBGameNamesByIds(ids, accessToken, clientId) {
 }
 
 /**
- * Fetch game names and covers from IGDB by id list.
+ * Fetch game names, covers and release year from IGDB by id list.
  * @param {number[]} ids - IGDB game IDs
  * @param {string} accessToken - IGDB access token
  * @param {string} clientId - Twitch Client ID
- * @returns {Promise<Map<number, { name: string, cover?: string }>>} Map of id -> { name, cover }
+ * @returns {Promise<Map<number, { name: string, cover?: string, releaseDate?: number }>>} Map of id -> { name, cover?, releaseDate? }
  */
 function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
   if (!ids || ids.length === 0) return Promise.resolve(new Map());
   const uniqueIds = [...new Set(ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
   if (uniqueIds.length === 0) return Promise.resolve(new Map());
 
-  const postData = `fields id,name,cover.url; where id = (${uniqueIds.join(",")});`;
+  const postData = `fields id,name,cover.url,first_release_date; where id = (${uniqueIds.join(",")});`;
 
   const options = {
     hostname: "api.igdb.com",
@@ -260,6 +260,7 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
         try {
           const games = JSON.parse(data);
           const map = new Map();
+          const { formatIGDBReleaseDate } = require("../utils/dateUtils");
           (Array.isArray(games) ? games : []).forEach((g) => {
             if (g != null && g.id != null && g.name != null) {
               let coverUrl = g.cover && g.cover.url ? String(g.cover.url).trim() : null;
@@ -267,7 +268,12 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
                 if (coverUrl.startsWith("//")) coverUrl = `https:${coverUrl}`;
                 coverUrl = coverUrl.replace("t_thumb", "t_1080p").replace("t_cover_small", "t_1080p").replace("t_cover_big", "t_1080p");
               }
-              map.set(Number(g.id), { name: String(g.name).trim(), cover: coverUrl || undefined });
+              const { releaseDate } = formatIGDBReleaseDate(g.first_release_date);
+              map.set(Number(g.id), {
+                name: String(g.name).trim(),
+                cover: coverUrl || undefined,
+                releaseDate: releaseDate ?? undefined,
+              });
             }
           });
           resolve(map);
@@ -443,7 +449,7 @@ function registerIGDBRoutes(app, requireToken) {
       .filter((id) => !Number.isNaN(id));
     if (ids.length === 0) {
       res.setHeader("Content-Type", "application/json");
-      return res.json({ names: {}, covers: {} });
+      return res.json({ names: {}, covers: {}, releaseDates: {} });
     }
     if (ids.length > 500) {
       res.setHeader("Content-Type", "application/json");
@@ -462,12 +468,14 @@ function registerIGDBRoutes(app, requireToken) {
       const detailsMap = await fetchIGDBGameDetailsByIds(ids, accessToken, clientId);
       const names = {};
       const covers = {};
+      const releaseDates = {};
       detailsMap.forEach((details, id) => {
         names[String(id)] = details.name;
         if (details.cover) covers[String(id)] = details.cover;
+        if (details.releaseDate != null) releaseDates[String(id)] = details.releaseDate;
       });
       res.setHeader("Content-Type", "application/json");
-      res.json({ names, covers });
+      res.json({ names, covers, releaseDates });
     } catch (err) {
       console.error("IGDB game-names-by-ids error:", err);
       res.setHeader("Content-Type", "application/json");
@@ -508,7 +516,7 @@ function registerIGDBRoutes(app, requireToken) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
-      const postData = `fields id,name,cover.url,first_release_date; where franchise = ${franchiseId}; limit 100;`;
+      const postData = `fields id,name,cover.url,first_release_date; where franchises = (${franchiseId}); limit 100;`;
 
       const options = {
         hostname: "api.igdb.com",

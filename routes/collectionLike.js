@@ -279,21 +279,33 @@ function createCollectionLikeRoutes(config) {
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const games = (entry.games || [])
-        .map((gId) => allGames[gId])
+        .map((gId) => {
+          const key = normalizeId(gId);
+          return allGames[key] || allGames[gId];
+        })
         .filter(Boolean)
-        .map((g) => ({
-          id: g.id,
-          title: g.title,
-          summary: g.summary || "",
-          cover: getCoverUrl(g, metadataPath),
-          day: g.day,
-          month: g.month,
-          year: g.year,
-          stars: g.stars,
-          developers: g.developers || null,
-          publishers: g.publishers || null,
-          executables: g.executables || null,
-        }));
+        .map((g) => {
+          const executables = g.executables;
+          const execArray =
+            Array.isArray(executables) && executables.length > 0
+              ? executables
+              : executables != null
+                ? [].concat(executables)
+                : null;
+          return {
+            id: g.id,
+            title: g.title,
+            summary: g.summary || "",
+            cover: getCoverUrl(g, metadataPath),
+            day: g.day,
+            month: g.month,
+            year: g.year,
+            stars: g.stars,
+            developers: g.developers || null,
+            publishers: g.publishers || null,
+            executables: execArray,
+          };
+        });
       res.json({ games });
     });
 

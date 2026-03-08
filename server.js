@@ -284,6 +284,15 @@ function requireToken(req, res, next) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
+// Optional token: when Twitch login is disabled, allow access without token; otherwise require token
+function optionalToken(req, res, next) {
+  const settings = readSettings();
+  if (!settings.twitchLoginEnabled) {
+    return next();
+  }
+  return requireToken(req, res, next);
+}
+
 // Load games whitelist from JSON files
 // Games JSON files are now stored in METADATA_PATH/content/games/, content/collections/, content/categories/, content/recommended/
 let allGames = {}; // Store all games by ID for launcher
@@ -302,26 +311,26 @@ setTimeout(() => {
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
-recommendedRoutes.registerRecommendedRoutes(app, requireToken, METADATA_PATH, allGames);
-categoriesRoutes.registerCategoriesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-igdbRoutes.registerIGDBRoutes(app, requireToken);
+recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
+categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+igdbRoutes.registerIGDBRoutes(app, optionalToken);
 const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   app,
-  requireToken,
+  optionalToken,
   METADATA_PATH,
   METADATA_PATH,
   allGames
 );
 const developersHandler = developersRoutes.registerDevelopersRoutes(
   app,
-  requireToken,
+  optionalToken,
   METADATA_PATH,
   METADATA_PATH,
   allGames
 );
 const publishersHandler = publishersRoutes.registerPublishersRoutes(
   app,
-  requireToken,
+  optionalToken,
   METADATA_PATH,
   METADATA_PATH,
   allGames
@@ -329,7 +338,7 @@ const publishersHandler = publishersRoutes.registerPublishersRoutes(
 const updateCollectionsCache = collectionsRoutes.createCacheUpdater(collectionsHandler.getCache());
 libraryRoutes.registerLibraryRoutes(
   app,
-  requireToken,
+  optionalToken,
   METADATA_PATH,
   allGames,
   updateCollectionsCache,
@@ -338,13 +347,13 @@ libraryRoutes.registerLibraryRoutes(
   developersHandler.getCache,
   publishersHandler.getCache
 );
-themesRoutes.registerThemesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-platformsRoutes.registerPlatformsRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-gameEnginesRoutes.registerGameEnginesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-gameModesRoutes.registerGameModesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, requireToken, METADATA_PATH, METADATA_PATH, allGames);
-seriesRoutes.registerSeriesRoutes(app, requireToken, allGames, METADATA_PATH);
-franchisesRoutes.registerFranchisesRoutes(app, requireToken, allGames, METADATA_PATH);
+themesRoutes.registerThemesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+platformsRoutes.registerPlatformsRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+gameEnginesRoutes.registerGameEnginesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+gameModesRoutes.registerGameModesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
+seriesRoutes.registerSeriesRoutes(app, optionalToken, allGames, METADATA_PATH);
+franchisesRoutes.registerFranchisesRoutes(app, optionalToken, allGames, METADATA_PATH);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {
@@ -563,13 +572,14 @@ function readSettings() {
   const defaultSettings = {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
+    twitchLoginEnabled: false,
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
-  // Ensure we always return an object
+  // Ensure we always return an object and merge with defaults for missing keys
   if (typeof settings !== 'object' || settings === null) {
     return defaultSettings;
   }
-  return settings;
+  return { ...defaultSettings, ...settings };
 }
 
 // Helper function to write settings
@@ -586,14 +596,14 @@ function writeSettings(settings) {
   }
 }
 
-// Endpoint: get settings
-app.get("/settings", requireToken, (req, res) => {
+// Endpoint: get settings (public so client can load twitchLoginEnabled without token)
+app.get("/settings", (req, res) => {
   const settings = readSettings();
   res.json(settings);
 });
 
-// Endpoint: update settings
-app.put("/settings", requireToken, (req, res) => {
+// Endpoint: update settings (optional token: when login disabled, still allow saving)
+app.put("/settings", optionalToken, (req, res) => {
   const currentSettings = readSettings();
   const updatedSettings = {
     ...currentSettings,

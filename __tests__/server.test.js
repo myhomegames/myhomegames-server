@@ -273,6 +273,15 @@ describe('GET /settings', () => {
     expect(response.body).toHaveProperty('language');
   });
 
+  test('should return settings without token (public endpoint)', async () => {
+    const response = await request(app)
+      .get('/settings')
+      .expect(200);
+    
+    expect(response.body).toHaveProperty('language');
+    expect(response.body).toHaveProperty('twitchLoginEnabled');
+  });
+
   test('should return default settings if file does not exist', async () => {
     // Temporarily rename settings file
     const settingsPath = path.join(testMetadataPath, 'settings.json');
@@ -284,23 +293,15 @@ describe('GET /settings', () => {
     
     const response = await request(app)
       .get('/settings')
-      .set('X-Auth-Token', 'test-token')
       .expect(200);
     
     expect(response.body).toHaveProperty('language', 'en');
+    expect(response.body).toHaveProperty('twitchLoginEnabled', false);
     
     // Restore settings file
     if (fs.existsSync(backupPath)) {
       fs.renameSync(backupPath, settingsPath);
     }
-  });
-
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/settings')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 });
 
@@ -343,13 +344,36 @@ describe('PUT /settings', () => {
     expect(response.body.settings).toHaveProperty('language');
   });
 
-  test('should require authentication', async () => {
+  test('should require authentication when twitchLoginEnabled is true', async () => {
     const response = await request(app)
       .put('/settings')
       .send({ language: 'en' })
       .expect(401);
     
     expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+});
+
+describe('When twitchLoginEnabled is false', () => {
+  test('should allow GET /libraries/library/games without token', async () => {
+    const settingsPath = path.join(testMetadataPath, 'settings.json');
+    const backupPath = settingsPath + '.backup';
+    
+    if (fs.existsSync(settingsPath)) {
+      fs.copyFileSync(settingsPath, backupPath);
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify({ language: 'en', twitchLoginEnabled: false }, null, 2));
+    
+    const response = await request(app)
+      .get('/libraries/library/games')
+      .expect(200);
+    
+    expect(response.body).toHaveProperty('games');
+    
+    if (fs.existsSync(backupPath)) {
+      fs.copyFileSync(backupPath, settingsPath);
+      fs.unlinkSync(backupPath);
+    }
   });
 });
 
