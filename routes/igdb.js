@@ -682,6 +682,200 @@ function registerIGDBRoutes(app, requireToken) {
   app.get("/igdb/games-by-collection/:collectionId", requireToken, handleGamesByCollection);
   app.post("/igdb/games-by-collection/:collectionId", requireToken, handleGamesByCollection);
 
+  // Endpoint: get IGDB games by keyword name (for recommended sections when Twitch login enabled)
+  const handleGamesByKeyword = async (req, res) => {
+    const keyword = req.body && typeof req.body.keyword === "string" ? req.body.keyword.trim() : null;
+    const excludeIds = parseExcludeIds(req);
+    if (!keyword || keyword.length === 0) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Missing or invalid keyword" });
+    }
+
+    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
+    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
+    if (!clientId || !clientSecret) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
+    }
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+
+      const escapedKeyword = keyword.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
+      // Try 1: filter by exact name (more reliable than search for known keyword names)
+      let keywordPostData = `fields id,name; where name = "${escapedKeyword}"; limit 5;`;
+      const keywordOptions = {
+        hostname: "api.igdb.com",
+        path: "/v4/keywords",
+        method: "POST",
+        headers: {
+          "Client-ID": clientId,
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "text/plain",
+          "Content-Length": Buffer.byteLength(keywordPostData),
+        },
+      };
+
+      let keywordsResult = await new Promise((resolve, reject) => {
+        const reqKw = https.request(keywordOptions, (resKw) => {
+          let data = "";
+          resKw.on("data", (chunk) => { data += chunk; });
+          resKw.on("end", () => {
+            try {
+              if (resKw.statusCode !== 200) {
+                resolve([]);
+                return;
+              }
+              const parsed = JSON.parse(data);
+              resolve(Array.isArray(parsed) ? parsed : []);
+            } catch (e) {
+              resolve([]);
+            }
+          });
+        });
+        reqKw.on("error", reject);
+        reqKw.write(keywordPostData);
+        reqKw.end();
+      });
+
+      // Fallback: if no keyword found by name, try search (e.g. different casing in IGDB)
+      if (keywordsResult.length === 0) {
+        keywordPostData = `search "${escapedKeyword}"; fields id,name; limit 5;`;
+        keywordOptions.headers["Content-Length"] = Buffer.byteLength(keywordPostData);
+        keywordsResult = await new Promise((resolve, reject) => {
+          const reqKw = https.request(keywordOptions, (resKw) => {
+            let data = "";
+            resKw.on("data", (chunk) => { data += chunk; });
+            resKw.on("end", () => {
+              try {
+                if (resKw.statusCode !== 200) {
+                  resolve([]);
+                  return;
+                }
+                const parsed = JSON.parse(data);
+                resolve(Array.isArray(parsed) ? parsed : []);
+              } catch (e) {
+                resolve([]);
+              }
+            });
+          });
+          reqKw.on("error", reject);
+          reqKw.write(keywordPostData);
+          reqKw.end();
+        });
+      }
+
+      // Fallback 2: try title-case name (e.g. "taste of power" -> "Taste Of Power")
+      if (keywordsResult.length === 0 && keyword.indexOf(" ") >= 0) {
+        const titleCase = keyword
+          .split(" ")
+          .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+          .join(" ");
+        const escapedTitle = titleCase.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        keywordPostData = `fields id,name; where name = "${escapedTitle}"; limit 5;`;
+        keywordOptions.headers["Content-Length"] = Buffer.byteLength(keywordPostData);
+        keywordsResult = await new Promise((resolve, reject) => {
+          const reqKw = https.request(keywordOptions, (resKw) => {
+            let data = "";
+            resKw.on("data", (chunk) => { data += chunk; });
+            resKw.on("end", () => {
+              try {
+                if (resKw.statusCode !== 200) {
+                  resolve([]);
+                  return;
+                }
+                const parsed = JSON.parse(data);
+                resolve(Array.isArray(parsed) ? parsed : []);
+              } catch (e) {
+                resolve([]);
+              }
+            });
+          });
+          reqKw.on("error", reject);
+          reqKw.write(keywordPostData);
+          reqKw.end();
+        });
+      }
+
+      const keywordId = keywordsResult.length > 0 && keywordsResult[0].id != null ? keywordsResult[0].id : null;
+      if (keywordId == null) {
+        res.setHeader("Content-Type", "application/json");
+        return res.json({ games: [] });
+      }
+
+      const postData = `fields id,name,cover.url,first_release_date; where keywords = (${keywordId}); limit 50;`;
+      const options = {
+        hostname: "api.igdb.com",
+        path: "/v4/games",
+        method: "POST",
+        headers: {
+          "Client-ID": clientId,
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "text/plain",
+          "Content-Length": Buffer.byteLength(postData),
+        },
+      };
+
+      let games = await new Promise((resolve, reject) => {
+        const req2 = https.request(options, (res2) => {
+          let data = "";
+          res2.on("data", (chunk) => { data += chunk; });
+          res2.on("end", () => {
+            try {
+              if (res2.statusCode !== 200) {
+                reject(new Error(`IGDB API error ${res2.statusCode}: ${data}`));
+                return;
+              }
+              const parsed = JSON.parse(data);
+              resolve(Array.isArray(parsed) ? parsed : []);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+        req2.on("error", reject);
+        req2.write(postData);
+        req2.end();
+      });
+
+      if (excludeIds.length > 0) {
+        const excludeSet = new Set(excludeIds);
+        games = games.filter((g) => !excludeSet.has(g.id));
+      }
+
+      const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+      const formatted = games.map((g) => {
+        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(g.first_release_date);
+        const cover = g.cover && g.cover.url
+          ? `https:${g.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
+          : null;
+        return {
+          id: g.id,
+          name: g.name || "",
+          cover,
+          releaseDate: releaseDateFull?.year ?? null,
+          firstReleaseDate: g.first_release_date,
+        };
+      });
+
+      formatted.sort((a, b) => {
+        const aTs = a.firstReleaseDate ?? 0;
+        const bTs = b.firstReleaseDate ?? 0;
+        return aTs - bTs;
+      });
+
+      res.setHeader("Content-Type", "application/json");
+      res.json({ games: formatted });
+    } catch (err) {
+      console.error("IGDB games-by-keyword error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch games from IGDB", detail: err.message });
+    }
+  };
+
+  app.post("/igdb/games-by-keyword", requireToken, handleGamesByKeyword);
+
   // Endpoint: get single IGDB game details with high-res cover
   app.get("/igdb/game/:igdbId", requireToken, async (req, res) => {
     const igdbId = req.params.igdbId;
