@@ -1621,6 +1621,17 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return null;
       };
 
+      // Normalize tag field from IGDB: client may send string[] or [{ id, name }]; return string[] of names for library tag resolution
+      const normalizeTagNamesFromIgdb = (arr) => {
+        if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
+        const names = [];
+        for (const item of arr) {
+          if (typeof item === "string" && item.trim()) names.push(item.trim());
+          else if (item && typeof item === "object" && typeof item.name === "string" && item.name.trim()) names.push(item.name.trim());
+        }
+        return names.length > 0 ? names : null;
+      };
+
       const validateObjectArray = (arr) => {
         if (arr && Array.isArray(arr) && arr.length > 0) {
           return arr.filter((item) => item && typeof item === "object");
@@ -1629,10 +1640,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       let validScreenshots = validateStringArray(screenshots);
-      let validThemes = validateStringArray(themes);
-      let validPlatforms = validateStringArray(platforms);
-      let validGameModes = validateStringArray(gameModes);
-      let validPlayerPerspectives = validateStringArray(playerPerspectives);
+      let validThemes = normalizeTagNamesFromIgdb(themes) || validateStringArray(themes);
+      let validPlatforms = normalizeTagNamesFromIgdb(platforms) || validateStringArray(platforms);
+      let validGameModes = normalizeTagNamesFromIgdb(gameModes) || validateStringArray(gameModes);
+      let validPlayerPerspectives = normalizeTagNamesFromIgdb(playerPerspectives) || validateStringArray(playerPerspectives);
       let validWebsites = validateObjectArray(websites);
       let validAgeRatings = validateObjectArray(ageRatings);
       // Developers and publishers: [{ id, name, logo?, description? }] from IGDB
@@ -1644,7 +1655,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const rawDevelopers = validateDeveloperPublisherArray(developers);
       const rawPublishers = validateDeveloperPublisherArray(publishers);
       let validVideos = validateStringArray(videos);
-      let validGameEngines = validateStringArray(gameEngines);
+      let validGameEngines = normalizeTagNamesFromIgdb(gameEngines) || validateStringArray(gameEngines);
       let validKeywords = validateStringArray(keywords);
       let validAlternativeNames = validateStringArray(alternativeNames);
       let validSimilarGames = validateObjectArray(similarGames);

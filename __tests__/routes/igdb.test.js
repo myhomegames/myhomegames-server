@@ -142,3 +142,153 @@ describe('GET /igdb/game/:igdbId', () => {
   // This is left as a placeholder for future implementation
 });
 
+describe('GET /igdb/games-by-genre/:tagId', () => {
+  test('should return 400 for invalid tag ID', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-genre/0')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Invalid tag ID');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .get('/igdb/games-by-genre/1')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(401);
+  });
+
+  test('should return 400 if Twitch credentials are missing', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-genre/1')
+      .set('X-Auth-Token', 'test-token')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+  });
+});
+
+describe('POST /igdb/games-by-genre-by-name', () => {
+  test('should return 400 if name is missing', async () => {
+    const response = await request(app)
+      .post('/igdb/games-by-genre-by-name')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({})
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Tag name is required');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .post('/igdb/games-by-genre-by-name')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({ name: 'RPG' })
+      .expect(401);
+  });
+});
+
+describe('GET /igdb/games-by-developer/:companyId', () => {
+  test('should return 400 for invalid company ID', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-developer/0')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Invalid company ID');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .get('/igdb/games-by-developer/1')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(401);
+  });
+
+  test('should return 400 if Twitch credentials are missing', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-developer/1')
+      .set('X-Auth-Token', 'test-token')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+  });
+});
+
+describe('POST /igdb/games-by-developer-by-name', () => {
+  test('should return 400 if name is missing', async () => {
+    const response = await request(app)
+      .post('/igdb/games-by-developer-by-name')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({})
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Company name is required');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .post('/igdb/games-by-developer-by-name')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({ name: 'Nintendo' })
+      .expect(401);
+  });
+});
+
+describe('GET /igdb/games-by-publisher/:companyId', () => {
+  test('should return 400 for invalid company ID', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-publisher/invalid')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Invalid company ID');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .get('/igdb/games-by-publisher/1')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .expect(401);
+  });
+
+  test('should return 400 if Twitch credentials are missing', async () => {
+    const response = await request(app)
+      .get('/igdb/games-by-publisher/1')
+      .set('X-Auth-Token', 'test-token')
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+  });
+});
+
+describe('POST /igdb/games-by-publisher-by-name', () => {
+  test('should return 400 if name is missing', async () => {
+    const response = await request(app)
+      .post('/igdb/games-by-publisher-by-name')
+      .set('X-Auth-Token', 'test-token')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({})
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Company name is required');
+  });
+
+  test('should require authentication', async () => {
+    await request(app)
+      .post('/igdb/games-by-publisher-by-name')
+      .set('X-Twitch-Client-Id', 'id')
+      .set('X-Twitch-Client-Secret', 'secret')
+      .send({ name: 'Nintendo' })
+      .expect(401);
+  });
+});
+
