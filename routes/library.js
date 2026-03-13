@@ -1448,31 +1448,29 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       return res.status(400).json({ error: "Only .sh and .bat files are allowed" });
     }
     
-    // Get optional label from body (FormData field)
+    // Get optional label, platform and platformId from body (FormData).
+    // Filename and metadata name: label + platformId (same format as frontend PUT executables).
     const label = req.body.label ? req.body.label.trim() : null;
-    
+    const platform = req.body.platform ? req.body.platform.trim() : null;
+    const platformId = (req.body.platformId != null && req.body.platformId !== '') ? String(req.body.platformId).trim() : '';
+
     // Validate game exists
     const game = allGames[gameId];
     if (!game) {
       return res.status(404).json({ error: "Game not found" });
     }
-    
+
     try {
       // Create game content directory if it doesn't exist
       const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
       // Ensure parent directories exist (important for macOS filesystem)
       ensureDirectoryExists(gameContentDir);
-      
-      // Use label if provided, otherwise default to "script"
-      let scriptName;
-      if (label) {
-        // Sanitize label (remove invalid characters for filename)
-        const sanitizedLabel = label.replace(/[^a-zA-Z0-9_-]/g, '_');
-        scriptName = `${sanitizedLabel}${fileExtension}`;
-      } else {
-        // Default behavior: script.sh or script.bat
-        scriptName = fileExtension === '.bat' ? 'script.bat' : 'script.sh';
-      }
+
+      // Name: label + platformId (same as frontend finalExecutables) so PUT and file lookup match
+      const labelPart = label || platform || 'script';
+      const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const effectiveName = sanitizedLabel + platformId;
+      const scriptName = `${effectiveName}${fileExtension}`;
       const executablePath = path.join(gameContentDir, scriptName);
       
       // Write file to disk
@@ -1489,12 +1487,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
       
       // Update executables array: maintain existing order and add new one if not present
-      // Save the original label (not sanitized) in metadata.json
+      // Save the effective name (not sanitized) in metadata.json
       const currentGame = loadGame(metadataPath, gameId);
       let executableNames;
       
-      // Use original label for metadata.json (not sanitized filename)
-      const metadataExecutableName = label || 'script';
+      const metadataExecutableName = effectiveName;
       
       if (currentGame && currentGame.executables && Array.isArray(currentGame.executables) && currentGame.executables.length > 0) {
         // Maintain existing order, add new executable if not already present
