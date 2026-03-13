@@ -462,21 +462,28 @@ app.get("/launcher", requireToken, (req, res) => {
     });
   }
   
-  // Construct the full path: {METADATA_PATH}/content/games/{gameId}/{name}.sh or {name}.bat
-  // Sanitize executable name for filesystem (files are saved with sanitized names)
+  // Metadata stores labels; files on disk can be label+platformId (e.g. Play1.sh). Resolve to path.
   const sanitizeExecutableName = (name) => {
     if (!name || typeof name !== 'string') return '';
     return name.replace(/[^a-zA-Z0-9_-]/g, '_');
   };
   const sanitizedExecutableName = sanitizeExecutableName(executableName);
   const gameContentDir = path.join(METADATA_PATH, "content", "games", String(gameId));
-  // Try .sh first, then .bat
   let fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.sh`);
   if (!fs.existsSync(fullCommandPath)) {
     fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.bat`);
   }
+  if (!fs.existsSync(fullCommandPath)) {
+    const files = fs.readdirSync(gameContentDir);
+    const match = files.find(f => {
+      const ext = path.extname(f).toLowerCase();
+      if (ext !== '.sh' && ext !== '.bat') return false;
+      const base = path.basename(f, ext);
+      return base === sanitizedExecutableName || base.startsWith(sanitizedExecutableName);
+    });
+    if (match) fullCommandPath = path.join(gameContentDir, match);
+  }
 
-  // Validate that the script file exists
   if (!fs.existsSync(fullCommandPath)) {
     return res.status(404).json({
       error: "Launch failed",

@@ -304,6 +304,9 @@ function resolveSimilarGamesForResponse(similarGamesField, allGames) {
 /** Build game response: tag fields are id arrays; developers/publishers/similarGames enriched when lists/allGames passed. */
 function buildGameResponse(metadataPath, game, developersList = null, publishersList = null, allGames = null) {
   const executables = getExecutablesWithOrder(metadataPath, game.id, game);
+  const executableFileNames = executables.length > 0
+    ? getExecutableFileBasenamesInOrder(metadataPath, game.id, { executables })
+    : [];
   const devIds = game.developers && Array.isArray(game.developers) ? game.developers : [];
   const pubIds = game.publishers && Array.isArray(game.publishers) ? game.publishers : [];
   const developersResolved = resolveDeveloperPublisherNames(devIds, developersList);
@@ -321,6 +324,7 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     criticratings: game.criticratings || null,
     userratings: game.userratings || null,
     executables: executables.length > 0 ? executables : null,
+    executableFileNames: executableFileNames.length > 0 ? executableFileNames : null,
     themes: game.themes && game.themes.length ? game.themes : null,
     platforms: game.platforms && game.platforms.length ? game.platforms : null,
     gameModes: game.gameModes && game.gameModes.length ? game.gameModes : null,
@@ -398,6 +402,73 @@ function sanitizeExecutableName(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// Helper: list executable files in game dir (basename without extension, sorted)
+function getExecutableFileBasenames(metadataPath, gameId) {
+  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+  if (!fs.existsSync(gameContentDir)) return [];
+  let files;
+  try {
+    files = fs.readdirSync(gameContentDir);
+  } catch (err) {
+    return [];
+  }
+  const executableFiles = files.filter(file => {
+    const filePath = path.join(gameContentDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.sh' || ext === '.bat';
+  });
+  return executableFiles.map(f => path.basename(f, path.extname(f))).sort((a, b) => a.localeCompare(b));
+}
+
+// Helper: find first file in list whose basename starts with sanitized label; removes it from list
+function takeFileForLabel(sanitizedLabel, fileBasenames) {
+  const idx = fileBasenames.findIndex(basename => basename === sanitizedLabel || basename.startsWith(sanitizedLabel));
+  if (idx === -1) return null;
+  fileBasenames.splice(idx, 1);
+  return true;
+}
+
+// Helper: return full file names (label-id.ext) in same order as executables, for frontend to show and derive platform id
+function getExecutableFileBasenamesInOrder(metadataPath, gameId, gameMetadata) {
+  if (!gameMetadata || !gameMetadata.executables || !Array.isArray(gameMetadata.executables) || gameMetadata.executables.length === 0) {
+    return [];
+  }
+  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+  if (!fs.existsSync(gameContentDir)) return [];
+  let files;
+  try {
+    files = fs.readdirSync(gameContentDir);
+  } catch (err) {
+    return [];
+  }
+  const executableFiles = files.filter(file => {
+    const filePath = path.join(gameContentDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.sh' || ext === '.bat';
+  });
+  const fullNames = executableFiles.map(f => path.basename(f)).sort((a, b) => path.basename(a, path.extname(a)).localeCompare(path.basename(b, path.extname(b))));
+  const basenamesNoExt = fullNames.map(f => path.basename(f, path.extname(f)));
+  const result = [];
+  for (const execName of gameMetadata.executables) {
+    if (typeof execName !== 'string' || !execName.trim()) {
+      result.push(null);
+      continue;
+    }
+    const sanitized = sanitizeExecutableName(execName);
+    const idx = basenamesNoExt.findIndex(b => b === sanitized || b.startsWith(sanitized));
+    if (idx !== -1) {
+      result.push(fullNames[idx]);
+      fullNames.splice(idx, 1);
+      basenamesNoExt.splice(idx, 1);
+    } else {
+      result.push(null);
+    }
+  }
+  return result;
+}
+
 // Helper function to get executables respecting order from metadata.json
 // If metadata.json has executables, use that order (and verify files exist)
 // Otherwise, read from directory
@@ -408,34 +479,24 @@ function getExecutablesWithOrder(metadataPath, gameId, gameMetadata = null) {
   }
   
   // If metadata.json has executables array, use it (respecting order)
+  // Metadata stores labels only; files on disk are named label+platformId (e.g. Play1.sh)
   if (gameMetadata && gameMetadata.executables && Array.isArray(gameMetadata.executables) && gameMetadata.executables.length > 0) {
-    // Verify that all executables in metadata exist as files
-    const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
     const validExecutables = [];
+    const fileBasenames = getExecutableFileBasenames(metadataPath, gameId);
     
     for (const execName of gameMetadata.executables) {
       if (typeof execName !== 'string' || !execName.trim()) continue;
-      
-      // Sanitize name for filesystem lookup (files are saved with sanitized names)
       const sanitizedExecName = sanitizeExecutableName(execName);
-      
-      // Check if file exists (.sh or .bat) using sanitized name
-      const shPath = path.join(gameContentDir, `${sanitizedExecName}.sh`);
-      const batPath = path.join(gameContentDir, `${sanitizedExecName}.bat`);
-      
-      if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
-        // Return original name (from metadata) not sanitized name
-        validExecutables.push(execName);
+      if (takeFileForLabel(sanitizedExecName, fileBasenames)) {
+        validExecutables.push(execName.trim());
       }
     }
     
-    // If we have valid executables, return them in the order from metadata
     if (validExecutables.length > 0) {
       return validExecutables;
     }
   }
   
-  // Fallback: read from directory (for backward compatibility or if metadata is missing)
   return getExecutableNames(metadataPath, gameId);
 }
 
@@ -1064,12 +1125,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           }
         }
       }
-      
+
+      const oldExecutablesBeforeUpdate = ('executables' in filteredUpdates && Array.isArray(currentGame.executables)) ? [...currentGame.executables] : null;
+
       // Update game with new values
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(currentGame, filteredUpdates);
       }
-      
+
       // If we need to delete executables (executables was set to null)
       if (shouldDeleteExecutables) {
         const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
@@ -1096,9 +1159,41 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       if ('executables' in filteredUpdates && !shouldDeleteExecutables) {
         const requestedExecutables = filteredUpdates.executables;
         const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-        
+
         if (fs.existsSync(gameContentDir)) {
           try {
+            // Rename files when label or platform changed: use OLD executables list to find current files (before currentGame was overwritten)
+            const requestedPlatformIds = Array.isArray(updates.executablePlatformIds) ? updates.executablePlatformIds : [];
+            const metadataForCurrentFiles = oldExecutablesBeforeUpdate && oldExecutablesBeforeUpdate.length > 0
+              ? { executables: oldExecutablesBeforeUpdate }
+              : currentGame;
+            const currentFileNamesInOrder = getExecutableFileBasenamesInOrder(metadataPath, gameId, metadataForCurrentFiles);
+            const expectedFilenamesAfterRename = new Set();
+            for (let i = 0; i < requestedExecutables.length && i < currentFileNamesInOrder.length; i++) {
+              const currentFullName = currentFileNamesInOrder[i];
+              const newLabel = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
+              if (!currentFullName || !newLabel) continue;
+              const currentBasenameNoExt = path.basename(currentFullName, path.extname(currentFullName));
+              const ext = path.extname(currentFullName);
+              const dashIdx = currentBasenameNoExt.indexOf('-');
+              const oldPlatformId = dashIdx >= 0 ? currentBasenameNoExt.slice(dashIdx + 1) : '';
+              const newPlatformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : oldPlatformId;
+              const newBasenameNoExt = sanitizeExecutableName(newLabel) + (newPlatformId ? '-' + newPlatformId : '');
+              const expectedFilename = newBasenameNoExt + ext;
+              expectedFilenamesAfterRename.add(expectedFilename);
+              if (newBasenameNoExt !== currentBasenameNoExt) {
+                const oldPath = path.join(gameContentDir, currentFullName);
+                const newPath = path.join(gameContentDir, expectedFilename);
+                if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+                  try {
+                    fs.renameSync(oldPath, newPath);
+                  } catch (err) {
+                    console.warn(`Failed to rename executable ${currentFullName} to ${expectedFilename}:`, err.message);
+                  }
+                }
+              }
+            }
+
             // Get all existing executable files
             const files = fs.readdirSync(gameContentDir);
             const executableFiles = files.filter(file => {
@@ -1107,17 +1202,17 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
               const ext = path.extname(file).toLowerCase();
               return ext === '.sh' || ext === '.bat';
             });
-            
-            // Delete files that are not in the requested executables array
-            // Compare using sanitized names (files are saved with sanitized names)
+
+            // Delete only files that are not requested (do not delete files we just renamed or that match a requested label)
             for (const file of executableFiles) {
               const fileNameWithoutExt = path.basename(file, path.extname(file));
-              // Check if this file's sanitized name matches any requested executable's sanitized name
-              const fileMatches = requestedExecutables.some(reqExec => {
-                const sanitizedReqExec = sanitizeExecutableName(reqExec);
-                return sanitizedReqExec === fileNameWithoutExt;
+              const isExpectedFromRename = expectedFilenamesAfterRename.has(file);
+              const fileMatchesRequested = requestedExecutables.some(reqExec => {
+                if (typeof reqExec !== 'string' || !reqExec.trim()) return false;
+                const sanitizedReqExec = sanitizeExecutableName(reqExec.trim());
+                return fileNameWithoutExt === sanitizedReqExec || fileNameWithoutExt.startsWith(sanitizedReqExec);
               });
-              if (!fileMatches) {
+              if (!isExpectedFromRename && !fileMatchesRequested) {
                 const filePath = path.join(gameContentDir, file);
                 try {
                   fs.unlinkSync(filePath);
@@ -1131,24 +1226,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           }
         }
         
-        // Update executables in metadata.json with the requested array
-        // Verify which files actually exist and maintain the requested order
+        // Metadata stores labels only; match each requested label to a file (basename starts with sanitized label)
         const finalExecutables = [];
+        const fileBasenames = getExecutableFileBasenames(metadataPath, gameId);
         
-        // Keep executables in the requested order, but only if the file exists
         for (const execName of requestedExecutables) {
           if (typeof execName !== 'string' || !execName.trim()) continue;
-          
-          // Sanitize name for filesystem lookup (files are saved with sanitized names)
           const sanitizedExecName = sanitizeExecutableName(execName);
-          
-          // Check if file exists (.sh or .bat) using sanitized name
-          const shPath = path.join(gameContentDir, `${sanitizedExecName}.sh`);
-          const batPath = path.join(gameContentDir, `${sanitizedExecName}.bat`);
-          
-          if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
-            // Return original name (from metadata) not sanitized name
-            finalExecutables.push(execName);
+          if (takeFileForLabel(sanitizedExecName, fileBasenames)) {
+            finalExecutables.push(execName.trim());
           }
         }
         
@@ -1435,11 +1521,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   app.post("/games/:gameId/upload-executable", requireToken, upload.single('file'), (req, res) => {
     const gameId = Number(req.params.gameId);
     const file = req.file;
-    
+
     if (!file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
-    
+
     // Validate file extension (only .sh or .bat allowed)
     const originalName = file.originalname || '';
     const fileExtension = path.extname(originalName).toLowerCase();
@@ -1466,48 +1552,34 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       // Ensure parent directories exist (important for macOS filesystem)
       ensureDirectoryExists(gameContentDir);
 
-      // Name: label + platformId (same as frontend finalExecutables) so PUT and file lookup match
-      const labelPart = label || platform || 'script';
+      // File on disk: label + platformId (e.g. Play1.sh). Metadata: label only (e.g. Play)
+      const labelPart = (label || platform || 'script').trim();
       const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const effectiveName = sanitizedLabel + platformId;
-      const scriptName = `${effectiveName}${fileExtension}`;
+      const scriptBasename = platformId ? `${sanitizedLabel}-${platformId}` : sanitizedLabel;
+      const scriptName = `${scriptBasename}${fileExtension}`;
       const executablePath = path.join(gameContentDir, scriptName);
       
-      // Write file to disk
       fs.writeFileSync(executablePath, file.buffer);
       
-      // Make file executable (Unix-like systems, only for .sh files)
       if (fileExtension === '.sh') {
         try {
           fs.chmodSync(executablePath, 0o755);
         } catch (chmodError) {
-          // Ignore chmod errors on Windows
           console.warn('Could not set executable permissions:', chmodError.message);
         }
       }
       
-      // Update executables array: maintain existing order and add new one if not present
-      // Save the effective name (not sanitized) in metadata.json
       const currentGame = loadGame(metadataPath, gameId);
       let executableNames;
-      
-      const metadataExecutableName = effectiveName;
+      const metadataExecutableName = labelPart;
       
       if (currentGame && currentGame.executables && Array.isArray(currentGame.executables) && currentGame.executables.length > 0) {
-        // Maintain existing order, add new executable if not already present
         executableNames = [...currentGame.executables];
         if (!executableNames.includes(metadataExecutableName)) {
           executableNames.push(metadataExecutableName);
         }
       } else {
-        // No existing order, read from directory and merge with new one
-        executableNames = getExecutableNames(metadataPath, gameId);
-        // Remove the sanitized name if present and add the original label
-        const sanitizedExecutableName = scriptName.replace(/\.(sh|bat)$/, '');
-        executableNames = executableNames.filter(name => name !== sanitizedExecutableName);
-        if (!executableNames.includes(metadataExecutableName)) {
-          executableNames.push(metadataExecutableName);
-        }
+        executableNames = [metadataExecutableName];
       }
       
       game.executables = executableNames;
