@@ -111,7 +111,8 @@ ${METADATA_PATH}/
     │       ├── metadata.json       # Game metadata (without id field)
     │       ├── cover.webp          # Game cover image
     │       ├── background.webp     # Game background image
-    │       └── script.sh           # Game launcher script (optional)
+    │       └── scripts/            # Executable scripts (.sh / .bat)
+    │           └── *.sh, *.bat     # Game launcher script(s) (optional)
     ├── collections/
     │   └── ${collectionId}/        # Per-collection content directories
     │       ├── metadata.json       # Collection metadata (without id field)
@@ -131,7 +132,7 @@ ${METADATA_PATH}/
 All JSON files and settings are stored outside the codebase in the metadata path. These files are not part of the repository and should be managed separately:
 
 - **`settings.json`**: Application settings (language preference, etc.)
-- **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name).
+- **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name). Executable scripts are stored in **`content/games/${gameId}/scripts/`** as `.sh` or `.bat` files.
 - **`content/collections/${collectionId}/metadata.json`**: Collection metadata files. Each collection has its own folder with a metadata.json file containing collection properties like `title`, `summary`, `games` array, etc. (the `id` field is derived from the folder name).
 - **`content/categories/${categoryId}/metadata.json`**: Category metadata files. Each category has its own folder (named with a numeric ID derived from the title) with a metadata.json file containing a `title` field.
 - **`content/recommended/${sectionId}/metadata.json`**: Recommended section metadata files. Each section has its own folder with a metadata.json file containing a `games` array (the `id` field is derived from the folder name).

@@ -741,7 +741,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'script.sh');
       expect(fs.existsSync(scriptPath)).toBe(true);
       
       // Verify file content
@@ -788,7 +788,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.bat');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'script.bat');
       expect(fs.existsSync(scriptPath)).toBe(true);
       
       // Verify file content
@@ -893,8 +893,8 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my-custom-name.sh');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'script.sh');
+      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'my-custom-name.sh');
       
       expect(fs.existsSync(scriptPath)).toBe(true);
       expect(fs.existsSync(customPath)).toBe(false);
@@ -924,8 +924,8 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.bat');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my-custom-name.bat');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'script.bat');
+      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'my-custom-name.bat');
       
       expect(fs.existsSync(scriptPath)).toBe(true);
       expect(fs.existsSync(customPath)).toBe(false);
@@ -1016,7 +1016,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'play.sh');
+      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'play.sh');
       
       expect(fs.existsSync(customPath)).toBe(true);
       
@@ -1050,7 +1050,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const sanitizedPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my_custom_label_.sh');
+      const sanitizedPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'my_custom_label_.sh');
       
       expect(fs.existsSync(sanitizedPath)).toBe(true);
       
@@ -1085,7 +1085,7 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
+      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts', 'script.sh');
       
       expect(fs.existsSync(scriptPath)).toBe(true);
       
@@ -1108,42 +1108,37 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
       const metadataPath = path.join(gameContentDir, 'metadata.json');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create multiple executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
       const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      fs.writeFileSync(path.join(scriptsDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, 'second.sh'), file2Content);
+      fs.writeFileSync(path.join(scriptsDir, 'third.sh'), file3Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
-      
-      // Set a specific order in metadata.json (different from alphabetical)
       const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       metadata.executables = ['third', 'first', 'second'];
       fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
       
-      // Reload the game to refresh cache
       await request(app)
         .post(`/games/${gameId}/reload`)
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      // Get the game and verify order is preserved
       const gameResponse = await request(app)
         .get(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      // Verify executables are in the order from metadata.json
       expect(gameResponse.body).toHaveProperty('executables');
       expect(gameResponse.body.executables).toEqual(['third', 'first', 'second']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'first.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'second.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'third.sh'));
     }
   });
 
@@ -1160,28 +1155,25 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create multiple executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
       const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      fs.writeFileSync(path.join(scriptsDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, 'second.sh'), file2Content);
+      fs.writeFileSync(path.join(scriptsDir, 'third.sh'), file3Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
-      
-      // Update executables with a specific order
       const updateResponse = await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ executables: ['second', 'third', 'first'] })
         .expect(200);
       
-      // Verify order is preserved in response
       expect(updateResponse.body.game).toHaveProperty('executables');
       expect(updateResponse.body.game.executables).toEqual(['second', 'third', 'first']);
       
-      // Reload the game and verify order is still preserved
       const gameResponse = await request(app)
         .get(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
@@ -1189,10 +1181,9 @@ describe('POST /games/:gameId/upload-executable', () => {
       
       expect(gameResponse.body.executables).toEqual(['second', 'third', 'first']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'first.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'second.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'third.sh'));
     }
   });
 
@@ -1209,21 +1200,19 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
       const metadataPath = path.join(gameContentDir, 'metadata.json');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create initial executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
+      fs.writeFileSync(path.join(scriptsDir, 'first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, 'second.sh'), file2Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      
-      // Set initial order in metadata.json
       const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       metadata.executables = ['first', 'second'];
       fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
       
-      // Upload a new executable with label 'third'
       const newFileContent = Buffer.from('#!/bin/bash\necho "third"');
       const uploadResponse = await request(app)
         .post(`/games/${gameId}/upload-executable`)
@@ -1232,14 +1221,12 @@ describe('POST /games/:gameId/upload-executable', () => {
         .attach('file', newFileContent, 'test-script.sh')
         .expect(200);
       
-      // Verify existing order is maintained and new executable is added
       expect(uploadResponse.body.game).toHaveProperty('executables');
       expect(uploadResponse.body.game.executables).toEqual(['first', 'second', 'third']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'first.sh'));
+      fs.unlinkSync(path.join(scriptsDir, 'second.sh'));
+      if (fs.existsSync(path.join(scriptsDir, 'third.sh'))) fs.unlinkSync(path.join(scriptsDir, 'third.sh'));
     }
   });
 });

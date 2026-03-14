@@ -97,6 +97,11 @@ function getGameMetadataPath(metadataPath, gameId) {
   return path.join(metadataPath, "content", "games", String(gameId), "metadata.json");
 }
 
+// Helper: directory where executable scripts (.sh/.bat) are stored for a game
+function getGameScriptsDir(metadataPath, gameId) {
+  return path.join(metadataPath, "content", "games", String(gameId), "scripts");
+}
+
 /** Normalize tag-like field to array of numeric ids only. Accepts only numbers (no objects). */
 function toIdsOnlyArray(val) {
   if (val == null) return [];
@@ -349,36 +354,31 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
   return gameData;
 }
 
-// Helper function to get executable names from game directory
-// Returns array of names (without extension) from .sh and .bat files
+// Helper function to get executable names from game scripts directory
+// Returns array of names (without extension) from .sh and .bat files in content/games/$id/scripts
 function getExecutableNames(metadataPath, gameId) {
-  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
   const executableNames = [];
   
-  if (!fs.existsSync(gameContentDir)) {
+  if (!fs.existsSync(scriptsDir)) {
     return executableNames;
   }
   
-  // Read all .sh and .bat files in the game directory
   let files;
   try {
-    files = fs.readdirSync(gameContentDir);
+    files = fs.readdirSync(scriptsDir);
   } catch (err) {
-    console.warn(`Failed to read game directory ${gameContentDir}:`, err.message);
+    console.warn(`Failed to read scripts directory ${scriptsDir}:`, err.message);
     return executableNames;
   }
   
   const executableFiles = files.filter(file => {
-    // Only include files, not directories
-    const filePath = path.join(gameContentDir, file);
-    if (!fs.statSync(filePath).isFile()) {
-      return false;
-    }
+    const filePath = path.join(scriptsDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
     const ext = path.extname(file).toLowerCase();
     return ext === '.sh' || ext === '.bat';
   });
   
-  // Sort files: script.sh/script.bat first (for backward compatibility), then others alphabetically
   executableFiles.sort((a, b) => {
     const aIsScript = a.startsWith('script.');
     const bIsScript = b.startsWith('script.');
@@ -387,12 +387,9 @@ function getExecutableNames(metadataPath, gameId) {
     return a.localeCompare(b);
   });
   
-  // Extract names (without extension)
   executableFiles.forEach((file) => {
-    const name = path.basename(file, path.extname(file));
-    executableNames.push(name);
+    executableNames.push(path.basename(file, path.extname(file)));
   });
-  
   return executableNames;
 }
 
@@ -402,18 +399,18 @@ function sanitizeExecutableName(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// Helper: list executable files in game dir (basename without extension, sorted)
+// Helper: list executable files in game scripts dir (basename without extension, sorted)
 function getExecutableFileBasenames(metadataPath, gameId) {
-  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-  if (!fs.existsSync(gameContentDir)) return [];
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+  if (!fs.existsSync(scriptsDir)) return [];
   let files;
   try {
-    files = fs.readdirSync(gameContentDir);
+    files = fs.readdirSync(scriptsDir);
   } catch (err) {
     return [];
   }
   const executableFiles = files.filter(file => {
-    const filePath = path.join(gameContentDir, file);
+    const filePath = path.join(scriptsDir, file);
     if (!fs.statSync(filePath).isFile()) return false;
     const ext = path.extname(file).toLowerCase();
     return ext === '.sh' || ext === '.bat';
@@ -434,16 +431,16 @@ function getExecutableFileBasenamesInOrder(metadataPath, gameId, gameMetadata) {
   if (!gameMetadata || !gameMetadata.executables || !Array.isArray(gameMetadata.executables) || gameMetadata.executables.length === 0) {
     return [];
   }
-  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-  if (!fs.existsSync(gameContentDir)) return [];
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+  if (!fs.existsSync(scriptsDir)) return [];
   let files;
   try {
-    files = fs.readdirSync(gameContentDir);
+    files = fs.readdirSync(scriptsDir);
   } catch (err) {
     return [];
   }
   const executableFiles = files.filter(file => {
-    const filePath = path.join(gameContentDir, file);
+    const filePath = path.join(scriptsDir, file);
     if (!fs.statSync(filePath).isFile()) return false;
     const ext = path.extname(file).toLowerCase();
     return ext === '.sh' || ext === '.bat';
@@ -1135,13 +1132,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       // If we need to delete executables (executables was set to null)
       if (shouldDeleteExecutables) {
-        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-        if (fs.existsSync(gameContentDir)) {
+        const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+        if (fs.existsSync(scriptsDir)) {
           try {
-            const files = fs.readdirSync(gameContentDir);
-            // Delete all .sh and .bat files
+            const files = fs.readdirSync(scriptsDir);
             for (const file of files) {
-              const filePath = path.join(gameContentDir, file);
+              const filePath = path.join(scriptsDir, file);
               const ext = path.extname(file).toLowerCase();
               if ((ext === '.sh' || ext === '.bat') && fs.statSync(filePath).isFile()) {
                 fs.unlinkSync(filePath);
@@ -1151,59 +1147,57 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             console.error(`Failed to delete executables for game ${gameId}:`, err.message);
           }
         }
-        // Remove executables field from metadata
         delete currentGame.executables;
       }
       
       // If executables was updated (but not deleted), sync files with the provided array
       if ('executables' in filteredUpdates && !shouldDeleteExecutables) {
         const requestedExecutables = filteredUpdates.executables;
-        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+        const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+        ensureDirectoryExists(scriptsDir);
 
-        if (fs.existsSync(gameContentDir)) {
-          try {
-            // Rename files when label or platform changed: use OLD executables list to find current files (before currentGame was overwritten)
-            const requestedPlatformIds = Array.isArray(updates.executablePlatformIds) ? updates.executablePlatformIds : [];
-            const metadataForCurrentFiles = oldExecutablesBeforeUpdate && oldExecutablesBeforeUpdate.length > 0
-              ? { executables: oldExecutablesBeforeUpdate }
-              : currentGame;
-            const currentFileNamesInOrder = getExecutableFileBasenamesInOrder(metadataPath, gameId, metadataForCurrentFiles);
-            const expectedFilenamesAfterRename = new Set();
-            for (let i = 0; i < requestedExecutables.length && i < currentFileNamesInOrder.length; i++) {
-              const currentFullName = currentFileNamesInOrder[i];
-              const newLabel = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
-              if (!currentFullName || !newLabel) continue;
-              const currentBasenameNoExt = path.basename(currentFullName, path.extname(currentFullName));
-              const ext = path.extname(currentFullName);
-              const dashIdx = currentBasenameNoExt.indexOf('-');
-              const oldPlatformId = dashIdx >= 0 ? currentBasenameNoExt.slice(dashIdx + 1) : '';
-              const newPlatformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : oldPlatformId;
-              const newBasenameNoExt = sanitizeExecutableName(newLabel) + (newPlatformId ? '-' + newPlatformId : '');
-              const expectedFilename = newBasenameNoExt + ext;
-              expectedFilenamesAfterRename.add(expectedFilename);
-              if (newBasenameNoExt !== currentBasenameNoExt) {
-                const oldPath = path.join(gameContentDir, currentFullName);
-                const newPath = path.join(gameContentDir, expectedFilename);
-                if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
-                  try {
-                    fs.renameSync(oldPath, newPath);
-                  } catch (err) {
-                    console.warn(`Failed to rename executable ${currentFullName} to ${expectedFilename}:`, err.message);
-                  }
+        try {
+          // Rename files when label or platform changed
+          const requestedPlatformIds = Array.isArray(updates.executablePlatformIds) ? updates.executablePlatformIds : [];
+          const metadataForCurrentFiles = oldExecutablesBeforeUpdate && oldExecutablesBeforeUpdate.length > 0
+            ? { executables: oldExecutablesBeforeUpdate }
+            : currentGame;
+          const currentFileNamesInOrder = getExecutableFileBasenamesInOrder(metadataPath, gameId, metadataForCurrentFiles);
+          const expectedFilenamesAfterRename = new Set();
+          for (let i = 0; i < requestedExecutables.length && i < currentFileNamesInOrder.length; i++) {
+            const currentFullName = currentFileNamesInOrder[i];
+            const newLabel = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
+            if (!currentFullName || !newLabel) continue;
+            const currentBasenameNoExt = path.basename(currentFullName, path.extname(currentFullName));
+            const ext = path.extname(currentFullName);
+            const dashIdx = currentBasenameNoExt.indexOf('-');
+            const oldPlatformId = dashIdx >= 0 ? currentBasenameNoExt.slice(dashIdx + 1) : '';
+            const newPlatformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : oldPlatformId;
+            const newBasenameNoExt = sanitizeExecutableName(newLabel) + (newPlatformId ? '-' + newPlatformId : '');
+            const expectedFilename = newBasenameNoExt + ext;
+            expectedFilenamesAfterRename.add(expectedFilename);
+            if (newBasenameNoExt !== currentBasenameNoExt) {
+              const oldPath = path.join(scriptsDir, currentFullName);
+              const newPath = path.join(scriptsDir, expectedFilename);
+              if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+                try {
+                  fs.renameSync(oldPath, newPath);
+                } catch (err) {
+                  console.warn(`Failed to rename executable ${currentFullName} to ${expectedFilename}:`, err.message);
                 }
               }
             }
+          }
 
-            // Get all existing executable files
-            const files = fs.readdirSync(gameContentDir);
+          if (fs.existsSync(scriptsDir)) {
+            const files = fs.readdirSync(scriptsDir);
             const executableFiles = files.filter(file => {
-              const filePath = path.join(gameContentDir, file);
+              const filePath = path.join(scriptsDir, file);
               if (!fs.statSync(filePath).isFile()) return false;
               const ext = path.extname(file).toLowerCase();
               return ext === '.sh' || ext === '.bat';
             });
 
-            // Delete only files that are not requested (do not delete files we just renamed or that match a requested label)
             for (const file of executableFiles) {
               const fileNameWithoutExt = path.basename(file, path.extname(file));
               const isExpectedFromRename = expectedFilenamesAfterRename.has(file);
@@ -1213,7 +1207,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 return fileNameWithoutExt === sanitizedReqExec || fileNameWithoutExt.startsWith(sanitizedReqExec);
               });
               if (!isExpectedFromRename && !fileMatchesRequested) {
-                const filePath = path.join(gameContentDir, file);
+                const filePath = path.join(scriptsDir, file);
                 try {
                   fs.unlinkSync(filePath);
                 } catch (err) {
@@ -1221,9 +1215,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 }
               }
             }
-          } catch (err) {
-            console.error(`Failed to sync executables for game ${gameId}:`, err.message);
           }
+        } catch (err) {
+          console.error(`Failed to sync executables for game ${gameId}:`, err.message);
         }
         
         // Metadata stores labels only; match each requested label to a file (basename starts with sanitized label)
@@ -1547,17 +1541,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
 
     try {
-      // Create game content directory if it doesn't exist
-      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-      // Ensure parent directories exist (important for macOS filesystem)
-      ensureDirectoryExists(gameContentDir);
+      const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+      ensureDirectoryExists(scriptsDir);
 
-      // File on disk: label + platformId (e.g. Play1.sh). Metadata: label only (e.g. Play)
       const labelPart = (label || platform || 'script').trim();
       const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
       const scriptBasename = platformId ? `${sanitizedLabel}-${platformId}` : sanitizedLabel;
       const scriptName = `${scriptBasename}${fileExtension}`;
-      const executablePath = path.join(gameContentDir, scriptName);
+      const executablePath = path.join(scriptsDir, scriptName);
       
       fs.writeFileSync(executablePath, file.buffer);
       

@@ -133,17 +133,16 @@ describe('GET /launcher', () => {
       const path = require('path');
       const { testMetadataPath } = require('./setup');
       
-      // Create game directory if it doesn't exist
       const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      fs.mkdirSync(gameDir, { recursive: true });
+      const scriptsDir = path.join(gameDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create two executable files
       const script1Content = '#!/bin/bash\necho "Script 1"';
       const script2Content = '#!/bin/bash\necho "Script 2"';
-      fs.writeFileSync(path.join(gameDir, 'script1.sh'), script1Content);
-      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
-      fs.writeFileSync(path.join(gameDir, 'script2.sh'), script2Content);
-      fs.chmodSync(path.join(gameDir, 'script2.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script1.sh'), script1Content);
+      fs.chmodSync(path.join(scriptsDir, 'script1.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script2.sh'), script2Content);
+      fs.chmodSync(path.join(scriptsDir, 'script2.sh'), 0o755);
       
       // Update game metadata to include both executables
       const metadataPath = path.join(gameDir, 'metadata.json');
@@ -189,14 +188,13 @@ describe('GET /launcher', () => {
       const path = require('path');
       const { testMetadataPath } = require('./setup');
       
-      // Create game directory if it doesn't exist
       const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      fs.mkdirSync(gameDir, { recursive: true });
+      const scriptsDir = path.join(gameDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create an executable file
       const scriptContent = '#!/bin/bash\necho "Script 1"';
-      fs.writeFileSync(path.join(gameDir, 'script1.sh'), scriptContent);
-      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script1.sh'), scriptContent);
+      fs.chmodSync(path.join(scriptsDir, 'script1.sh'), 0o755);
       
       // Update game metadata to include only script1
       const metadataPath = path.join(gameDir, 'metadata.json');

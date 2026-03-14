@@ -468,20 +468,20 @@ app.get("/launcher", requireToken, (req, res) => {
     return name.replace(/[^a-zA-Z0-9_-]/g, '_');
   };
   const sanitizedExecutableName = sanitizeExecutableName(executableName);
-  const gameContentDir = path.join(METADATA_PATH, "content", "games", String(gameId));
-  let fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.sh`);
+  const scriptsDir = path.join(METADATA_PATH, "content", "games", String(gameId), "scripts");
+  let fullCommandPath = path.join(scriptsDir, `${sanitizedExecutableName}.sh`);
   if (!fs.existsSync(fullCommandPath)) {
-    fullCommandPath = path.join(gameContentDir, `${sanitizedExecutableName}.bat`);
+    fullCommandPath = path.join(scriptsDir, `${sanitizedExecutableName}.bat`);
   }
-  if (!fs.existsSync(fullCommandPath)) {
-    const files = fs.readdirSync(gameContentDir);
+  if (!fs.existsSync(fullCommandPath) && fs.existsSync(scriptsDir)) {
+    const files = fs.readdirSync(scriptsDir);
     const match = files.find(f => {
       const ext = path.extname(f).toLowerCase();
       if (ext !== '.sh' && ext !== '.bat') return false;
       const base = path.basename(f, ext);
       return base === sanitizedExecutableName || base.startsWith(sanitizedExecutableName);
     });
-    if (match) fullCommandPath = path.join(gameContentDir, match);
+    if (match) fullCommandPath = path.join(scriptsDir, match);
   }
 
   if (!fs.existsSync(fullCommandPath)) {
