@@ -1193,9 +1193,24 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           }
           const unmatchedSlots = slotAssignments.map((cf, i) => (cf ? null : i)).filter(i => i !== null);
           const unmatchedFiles = currentFiles.filter(f => !used.has(f.fullName));
-          for (let k = 0; k < unmatchedSlots.length && k < unmatchedFiles.length; k++) {
-            slotAssignments[unmatchedSlots[k]] = unmatchedFiles[k];
-            used.add(unmatchedFiles[k].fullName);
+          const previousFileNames = Array.isArray(updates.executablePreviousFileNames) ? updates.executablePreviousFileNames : [];
+          // When labels are removed/reordered, match unmatched slots by previous filename so content stays correct
+          for (const slotIndex of unmatchedSlots) {
+            const prevName = previousFileNames[slotIndex];
+            if (prevName && typeof prevName === 'string' && prevName.trim() !== '') {
+              const cf = currentFiles.find(f => f.fullName === prevName.trim() && !used.has(f.fullName));
+              if (cf) {
+                slotAssignments[slotIndex] = cf;
+                used.add(cf.fullName);
+              }
+            }
+          }
+          // Any still-unmatched slots get remaining files by disk order (fallback)
+          const stillUnmatched = slotAssignments.map((cf, i) => (cf ? null : i)).filter(i => i !== null);
+          const stillUnmatchedFiles = currentFiles.filter(f => !used.has(f.fullName));
+          for (let k = 0; k < stillUnmatched.length && k < stillUnmatchedFiles.length; k++) {
+            slotAssignments[stillUnmatched[k]] = stillUnmatchedFiles[k];
+            used.add(stillUnmatchedFiles[k].fullName);
           }
 
           const renames = [];

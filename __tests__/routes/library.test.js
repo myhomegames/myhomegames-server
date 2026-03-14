@@ -1243,6 +1243,65 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
+  test('should preserve content when all labels removed and reordered (executablePreviousFileNames)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      const contentA = Buffer.from('#!/bin/bash\necho "a"');
+      const contentB = Buffer.from('#!/bin/bash\necho "b"');
+      const contentC = Buffer.from('#!/bin/bash\necho "c"');
+      const contentD = Buffer.from('#!/bin/bash\necho "d"');
+      fs.writeFileSync(path.join(scriptsDir, '01-first.sh'), contentA);
+      fs.writeFileSync(path.join(scriptsDir, '02-second.sh'), contentB);
+      fs.writeFileSync(path.join(scriptsDir, '03-third.sh'), contentC);
+      fs.writeFileSync(path.join(scriptsDir, '04-fourth.sh'), contentD);
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      // Simulate: user removes all labels (all "script") and reorders to 04, 01, 03, 02
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['script', 'script', 'script', 'script'],
+          executablePlatformIds: ['', '', '', ''],
+          executablePreviousFileNames: ['04-fourth.sh', '01-first.sh', '03-third.sh', '02-second.sh'],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['script', 'script', 'script', 'script']);
+      expect(updateResponse.body.game.executableFileNames).toEqual(['01-script.sh', '02-script.sh', '03-script.sh', '04-script.sh']);
+
+      // Content must follow executablePreviousFileNames: slot 0 was 04-fourth → 01-script has "d", etc.
+      expect(fs.readFileSync(path.join(scriptsDir, '01-script.sh')).toString()).toBe(contentD.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '02-script.sh')).toString()).toBe(contentA.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '03-script.sh')).toString()).toBe(contentC.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '04-script.sh')).toString()).toBe(contentB.toString());
+
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+    }
+  });
+
   test('should rename existing file when only label changes (sync by position)', async () => {
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
