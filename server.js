@@ -219,9 +219,10 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 // All recommended sections logic has been moved to routes/recommended.js
 
 // Signal to macOS immediately that we're starting (helps with icon bouncing)
-// Write to stdout immediately to signal app readiness
-// Note: stdout is line-buffered in Node.js, so \n forces a flush automatically
-process.stdout.write('MyHomeGames Server\n');
+// Write to stdout immediately to signal app readiness (skip in test to avoid noisy output)
+if (process.env.NODE_ENV !== 'test') {
+  process.stdout.write('MyHomeGames Server\n');
+}
 
 // Create directory structure on startup
 // In test mode, create all directories synchronously
@@ -633,8 +634,8 @@ app.get("/version", (req, res) => {
   else res.status(500).json({ error: "Version not available" });
 });
 
-// Endpoint: update settings (no auth required so language/visibleLibraries always save to settings.json)
-app.put("/settings", (req, res) => {
+// Endpoint: update settings (when twitchLoginEnabled is true, auth required; otherwise anyone can save language/visibleLibraries)
+app.put("/settings", optionalToken, (req, res) => {
   const currentSettings = readSettings();
   const updatedSettings = {
     ...currentSettings,
