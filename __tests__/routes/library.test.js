@@ -1176,6 +1176,73 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
+  test('should preserve file content when reordering executables via PUT (match by label+platformId)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const existing = fs.readdirSync(scriptsDir);
+      existing.forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      const contentColeco = Buffer.from('#!/bin/bash\necho "coleco"');
+      const contentFamily = Buffer.from('#!/bin/bash\necho "family"');
+      const contentVSmile = Buffer.from('#!/bin/bash\necho "vsmile"');
+      const contentSuperFamicom = Buffer.from('#!/bin/bash\necho "superfamicom"');
+      fs.writeFileSync(path.join(scriptsDir, '01-ColecoVision-35217721.sh'), contentColeco);
+      fs.writeFileSync(path.join(scriptsDir, '02-Family_Computer-1004170153.sh'), contentFamily);
+      fs.writeFileSync(path.join(scriptsDir, '03-V_Smile-1222250608.sh'), contentVSmile);
+      fs.writeFileSync(path.join(scriptsDir, '04-Super_Famicom-265924891.sh'), contentSuperFamicom);
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      // Reorder: move 03-V_Smile below 04-Super_Famicom (so new order: Coleco, Family, Super_Famicom, V_Smile)
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['ColecoVision', 'Family_Computer', 'Super_Famicom', 'V_Smile'],
+          executablePlatformIds: ['35217721', '1004170153', '265924891', '1222250608'],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['ColecoVision', 'Family_Computer', 'Super_Famicom', 'V_Smile']);
+      expect(updateResponse.body.game.executableFileNames).toContain('03-Super_Famicom-265924891.sh');
+      expect(updateResponse.body.game.executableFileNames).toContain('04-V_Smile-1222250608.sh');
+
+      // Content must follow the script identity, not position: 03-Super_Famicom must have Super_Famicom content, 04-V_Smile must have V_Smile content
+      const content03 = fs.readFileSync(path.join(scriptsDir, '03-Super_Famicom-265924891.sh'));
+      const content04 = fs.readFileSync(path.join(scriptsDir, '04-V_Smile-1222250608.sh'));
+      expect(content03.toString()).toBe(contentSuperFamicom.toString());
+      expect(content04.toString()).toBe(contentVSmile.toString());
+
+      const content01 = fs.readFileSync(path.join(scriptsDir, '01-ColecoVision-35217721.sh'));
+      const content02 = fs.readFileSync(path.join(scriptsDir, '02-Family_Computer-1004170153.sh'));
+      expect(content01.toString()).toBe(contentColeco.toString());
+      expect(content02.toString()).toBe(contentFamily.toString());
+
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) {
+          fs.unlinkSync(p);
+        }
+      });
+    }
+  });
+
   test('should rename existing file when only label changes (sync by position)', async () => {
     const libraryResponse = await request(app)
       .get('/libraries/library/games')

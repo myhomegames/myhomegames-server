@@ -409,6 +409,17 @@ function labelFromBasename(basenameNoExt) {
   return rest;
 }
 
+/** Extract platform id from basename (no ext): the numeric suffix after the last hyphen, or "". */
+function platformIdFromBasename(basenameNoExt) {
+  const { rest } = parseNumberPrefix(basenameNoExt);
+  const dashLast = rest.lastIndexOf('-');
+  if (dashLast > 0) {
+    const suffix = rest.slice(dashLast + 1);
+    if (/^\d+$/.test(suffix)) return suffix;
+  }
+  return '';
+}
+
 function sortKeyForExecutableBasename(basenameNoExt) {
   const { num, rest } = parseNumberPrefix(basenameNoExt);
   return [num, rest];
@@ -1145,7 +1156,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             })
             .map(file => {
               const baseNoExt = path.basename(file, path.extname(file));
-              return { fullName: file, basenameNoExt: baseNoExt, ext: path.extname(file), label: labelFromBasename(baseNoExt) };
+              return {
+                fullName: file,
+                basenameNoExt: baseNoExt,
+                ext: path.extname(file),
+                label: labelFromBasename(baseNoExt),
+                platformId: platformIdFromBasename(baseNoExt),
+              };
             })
             .sort((a, b) => {
               const [aNum, aRest] = sortKeyForExecutableBasename(a.basenameNoExt);
@@ -1156,17 +1173,40 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
           const pad = n => String(n).padStart(2, '0');
           const used = new Set();
-          const renames = [];
-          // Match by position: i-th requested slot = i-th file on disk (by N- prefix order). Rename when label/platform changed.
+          /** slotIndex -> currentFile assigned to that slot (so content follows the correct script after reorder) */
+          const slotAssignments = [];
+          // Match by label+platformId first so reorder preserves file content; fallback by position for renamed labels.
           for (let i = 0; i < requestedExecutables.length; i++) {
             const label = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
             if (!label) continue;
             const sanitizedLabel = sanitizeExecutableName(label);
             const platformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : '';
+            let cf = null;
+            const idx = currentFiles.findIndex(
+              f => !used.has(f.fullName) && sanitizeExecutableName(f.label) === sanitizedLabel && f.platformId === platformId
+            );
+            if (idx !== -1) {
+              cf = currentFiles[idx];
+              used.add(cf.fullName);
+            }
+            slotAssignments[i] = cf;
+          }
+          const unmatchedSlots = slotAssignments.map((cf, i) => (cf ? null : i)).filter(i => i !== null);
+          const unmatchedFiles = currentFiles.filter(f => !used.has(f.fullName));
+          for (let k = 0; k < unmatchedSlots.length && k < unmatchedFiles.length; k++) {
+            slotAssignments[unmatchedSlots[k]] = unmatchedFiles[k];
+            used.add(unmatchedFiles[k].fullName);
+          }
+
+          const renames = [];
+          for (let i = 0; i < requestedExecutables.length; i++) {
+            const label = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
+            if (!label) continue;
+            const cf = slotAssignments[i];
+            if (!cf) continue; // New slot (file uploaded via POST)
+            const sanitizedLabel = sanitizeExecutableName(label);
+            const platformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : '';
             const targetBasenameNoExt = pad(i + 1) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
-            if (i >= currentFiles.length) continue; // New slot (file uploaded via POST); nothing to rename here
-            const cf = currentFiles[i];
-            used.add(cf.fullName);
             const targetFull = targetBasenameNoExt + cf.ext;
             if (cf.fullName !== targetFull) renames.push({ from: cf.fullName, to: targetFull });
           }
