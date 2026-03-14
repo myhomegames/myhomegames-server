@@ -1127,6 +1127,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 fs.unlinkSync(filePath);
               }
             }
+            removeDirectoryIfEmpty(scriptsDir);
           } catch (err) {
             console.error(`Failed to delete executables for game ${gameId}:`, err.message);
           }

@@ -1355,6 +1355,40 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
+  test('should delete all executables and remove scripts directory when PUT executables is null', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.writeFileSync(path.join(scriptsDir, '01-script.sh'), Buffer.from('#!/bin/bash\necho "x"'));
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ executables: null })
+        .expect(200);
+
+      expect(updateResponse.body.game).toBeDefined();
+      expect(updateResponse.body.game.executables).toBeNull();
+
+      expect(fs.existsSync(scriptsDir)).toBe(false);
+    }
+  });
+
   test('should maintain existing order when uploading new executable', async () => {
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
