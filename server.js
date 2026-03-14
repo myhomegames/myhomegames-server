@@ -475,12 +475,19 @@ app.get("/launcher", requireToken, (req, res) => {
     fullCommandPath = path.join(scriptsDir, `${sanitizedExecutableName}.bat`);
   }
   if (!fs.existsSync(fullCommandPath) && fs.existsSync(scriptsDir)) {
+    const matchLabel = (base, label) => {
+      if (base === label) return true;
+      const m = base.match(/^\d+-(.+)$/);
+      if (!m) return false;
+      const rest = m[1];
+      return rest === label || rest.startsWith(label + '-');
+    };
     const files = fs.readdirSync(scriptsDir);
     const match = files.find(f => {
       const ext = path.extname(f).toLowerCase();
       if (ext !== '.sh' && ext !== '.bat') return false;
       const base = path.basename(f, ext);
-      return base === sanitizedExecutableName || base.startsWith(sanitizedExecutableName);
+      return matchLabel(base, sanitizedExecutableName);
     });
     if (match) fullCommandPath = path.join(scriptsDir, match);
   }
