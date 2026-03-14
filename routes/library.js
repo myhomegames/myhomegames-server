@@ -1157,15 +1157,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           const pad = n => String(n).padStart(2, '0');
           const used = new Set();
           const renames = [];
+          // Match by position: i-th requested slot = i-th file on disk (by N- prefix order). Rename when label/platform changed.
           for (let i = 0; i < requestedExecutables.length; i++) {
             const label = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
             if (!label) continue;
             const sanitizedLabel = sanitizeExecutableName(label);
             const platformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : '';
             const targetBasenameNoExt = pad(i + 1) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
-            const idx = currentFiles.findIndex(cf => !used.has(cf.fullName) && (cf.label === label || sanitizeExecutableName(cf.label) === sanitizedLabel));
-            if (idx === -1) continue;
-            const cf = currentFiles[idx];
+            if (i >= currentFiles.length) continue; // New slot (file uploaded via POST); nothing to rename here
+            const cf = currentFiles[i];
             used.add(cf.fullName);
             const targetFull = targetBasenameNoExt + cf.ext;
             if (cf.fullName !== targetFull) renames.push({ from: cf.fullName, to: targetFull });

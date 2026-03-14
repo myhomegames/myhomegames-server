@@ -1176,6 +1176,59 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
+  test('should rename existing file when only label changes (sync by position)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const existing = fs.readdirSync(scriptsDir);
+      existing.forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      fs.writeFileSync(path.join(scriptsDir, '01-script.sh'), Buffer.from('#!/bin/bash\necho "script"'));
+      fs.writeFileSync(path.join(scriptsDir, '02-ZX_Spectrum-1091661902.sh'), Buffer.from('#!/bin/bash\necho "zx"'));
+      fs.writeFileSync(path.join(scriptsDir, '03-bub.sh'), Buffer.from('#!/bin/bash\necho "bub"'));
+      fs.writeFileSync(path.join(scriptsDir, '04-scripta.sh'), Buffer.from('#!/bin/bash\necho "scripta"'));
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['script', 'ZX_Spectrum', 'bub', 'scriptaz'],
+          executablePlatformIds: ['', '1091661902', '', ''],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['script', 'ZX_Spectrum', 'bub', 'scriptaz']);
+      expect(updateResponse.body.game.executableFileNames).toContain('04-scriptaz.sh');
+
+      expect(fs.existsSync(path.join(scriptsDir, '04-scripta.sh'))).toBe(false);
+      expect(fs.existsSync(path.join(scriptsDir, '04-scriptaz.sh'))).toBe(true);
+      const content = fs.readFileSync(path.join(scriptsDir, '04-scriptaz.sh'), 'utf8');
+      expect(content).toContain('scripta');
+
+      fs.unlinkSync(path.join(scriptsDir, '01-script.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '02-ZX_Spectrum-1091661902.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '03-bub.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '04-scriptaz.sh'));
+    }
+  });
+
   test('should maintain existing order when uploading new executable', async () => {
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
