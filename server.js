@@ -5,6 +5,7 @@
 // When running as macOS app bundle, look for .env in Resources directory
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 let envPath = null;
 
 // When pkg creates an executable, __dirname doesn't work as expected.
@@ -136,14 +137,23 @@ const PORT = process.env.PORT || 4000; // PORT can have a default
 // Note: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are no longer read from .env
 // They are now passed from the client during login and API requests
 const API_BASE = process.env.API_BASE;
-const METADATA_PATH =
-  process.env.METADATA_PATH ||
-  path.join(
-    process.env.HOME || process.env.USERPROFILE || "",
-    "Library",
-    "Application Support",
-    "MyHomeGames"
-  );
+
+/** Default data directory: macOS ~/Library/..., Windows %APPDATA%\\MyHomeGames, Linux XDG or ~/.local/share */
+function getDefaultMetadataPath() {
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    const appData =
+      process.env.APPDATA || path.join(home, "AppData", "Roaming");
+    return path.join(appData, "MyHomeGames");
+  }
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "MyHomeGames");
+  }
+  const xdg = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
+  return path.join(xdg, "MyHomeGames");
+}
+
+const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
@@ -186,8 +196,29 @@ function ensureMetadataDirectories() {
   // after routes are registered
 }
 
+function unlinkIfExists(filePath) {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch {
+    // ignore
+  }
+}
+
+/** Generate self-signed PEMs without openssl (Windows and other systems without openssl in PATH). selfsigned v5 is async-only. */
+async function generateSelfSignedCertificatesWithNode(keyPath, certPath) {
+  const selfsigned = require("selfsigned");
+  const attrs = [{ name: "commonName", value: "localhost" }];
+  const pems = await selfsigned.generate(attrs, {
+    keySize: 2048,
+    keyType: "rsa",
+    algorithm: "sha256",
+  });
+  fs.writeFileSync(keyPath, pems.private);
+  fs.writeFileSync(certPath, pems.cert);
+}
+
 // Generate SSL certificates if they don't exist
-function ensureSSLCertificates(certDir, keyPath, certPath) {
+async function ensureSSLCertificates(certDir, keyPath, certPath) {
   // Check if certificates already exist
   if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
     return true;
@@ -199,14 +230,21 @@ function ensureSSLCertificates(certDir, keyPath, certPath) {
 
     console.log(`Generating SSL certificates in ${certDir}...`);
 
-    // Generate private key (suppress output for faster startup)
-    execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: 'pipe' });
-
-    // Generate self-signed certificate (suppress output for faster startup)
-    execSync(
-      `openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -subj "/CN=localhost"`,
-      { stdio: 'pipe' }
-    );
+    try {
+      // Prefer openssl when available (often preinstalled on macOS/Linux)
+      execSync(`openssl genrsa -out "${keyPath}" 2048`, { stdio: "pipe" });
+      execSync(
+        `openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -subj "/CN=localhost"`,
+        { stdio: "pipe" }
+      );
+    } catch (opensslErr) {
+      unlinkIfExists(keyPath);
+      unlinkIfExists(certPath);
+      console.warn(
+        "openssl not available or failed; generating certificates with Node.js (no openssl required)."
+      );
+      await generateSelfSignedCertificatesWithNode(keyPath, certPath);
+    }
 
     console.log(`SSL certificates generated successfully in ${certDir}`);
     return true;
@@ -763,32 +801,37 @@ if (process.env.NODE_ENV !== 'test') {
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
   
   if (HTTPS_ENABLED) {
-    // HTTPS server only
+    // HTTPS server only (async: selfsigned v5 generates certs via Promise)
     const HTTPS_PORT = process.env.HTTPS_PORT || 41440;
-    // Always use metadata path for certificates
-    const metadataCertsDir = path.join(METADATA_PATH, 'certs');
-    const keyPath = path.join(metadataCertsDir, 'key.pem');
-    const certPath = path.join(metadataCertsDir, 'cert.pem');
-    
-    // Check if certificates exist first (fast check)
-    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
-      // Certificates exist, start server immediately
+    const metadataCertsDir = path.join(METADATA_PATH, "certs");
+    const keyPath = path.join(metadataCertsDir, "key.pem");
+    const certPath = path.join(metadataCertsDir, "cert.pem");
+
+    (async () => {
       try {
+        if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+          const ok = await ensureSSLCertificates(metadataCertsDir, keyPath, certPath);
+          if (!ok) {
+            console.error("Failed to ensure SSL certificates exist.");
+            console.error("HTTPS server not started.");
+            process.exit(1);
+            return;
+          }
+        }
+
         const key = fs.readFileSync(keyPath);
         const cert = fs.readFileSync(certPath);
-        
+
         httpsServer = https.createServer({ key, cert }, app);
-        httpsServer.listen(HTTPS_PORT, '127.0.0.1', () => {
+        httpsServer.listen(HTTPS_PORT, "127.0.0.1", () => {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
-          // Signal to macOS that the app is ready
-          process.stdout.write('Server ready\n');
+          process.stdout.write("Server ready\n");
         });
-        
-        // Handle server errors
-        httpsServer.on('error', (error) => {
-          console.error('HTTPS server error:', error);
-          if (error.code === 'EADDRINUSE') {
+
+        httpsServer.on("error", (error) => {
+          console.error("HTTPS server error:", error);
+          if (error.code === "EADDRINUSE") {
             console.error(`Port ${HTTPS_PORT} is already in use.`);
           }
         });
@@ -797,39 +840,10 @@ if (process.env.NODE_ENV !== 'test') {
         console.error("HTTPS server not started.");
         process.exit(1);
       }
-    } else {
-      // Certificates don't exist, generate them (this might take a moment)
-      if (!ensureSSLCertificates(metadataCertsDir, keyPath, certPath)) {
-        console.error("Failed to ensure SSL certificates exist.");
-        console.error("HTTPS server not started.");
-        process.exit(1);
-      } else {
-        try {
-          const key = fs.readFileSync(keyPath);
-          const cert = fs.readFileSync(certPath);
-          
-          httpsServer = https.createServer({ key, cert }, app);
-          httpsServer.listen(HTTPS_PORT, '127.0.0.1', () => {
-            console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
-            console.log(`Using SSL certificates from: ${metadataCertsDir}`);
-            // Signal to macOS that the app is ready
-            process.stdout.write('Server ready\n');
-          });
-          
-          // Handle server errors
-          httpsServer.on('error', (error) => {
-            console.error('HTTPS server error:', error);
-            if (error.code === 'EADDRINUSE') {
-              console.error(`Port ${HTTPS_PORT} is already in use.`);
-            }
-          });
-        } catch (error) {
-          console.error("Error loading SSL certificates:", error.message);
-          console.error("HTTPS server not started.");
-          process.exit(1);
-        }
-      }
-    }
+    })().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
   } else {
     // HTTP server only
     const HTTP_PORT = process.env.HTTP_PORT || PORT;

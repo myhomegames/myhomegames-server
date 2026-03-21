@@ -89,7 +89,11 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
 
 The `METADATA_PATH` environment variable specifies the directory where all persistent data files are stored. This includes game metadata, cover images, settings, and game library data.
 
-**Default value**: `$HOME/Library/Application Support/MyHomeGames`
+**Default values** (when `METADATA_PATH` is unset):
+
+- **macOS**: `~/Library/Application Support/MyHomeGames`
+- **Windows**: `%APPDATA%\MyHomeGames` (e.g. `C:\Users\<you>\AppData\Roaming\MyHomeGames`)
+- **Linux**: `$XDG_DATA_HOME/MyHomeGames` or `~/.local/share/MyHomeGames`
 
 **Example configuration in `.env` file**:
 ```
@@ -245,10 +249,12 @@ If you see errors like `ERR_CERT_AUTHORITY_INVALID` or "Your connection is not p
 2. Follow the steps in the [First Time Setup](#first-time-setup-for-end-users) section above to accept the certificate
 3. You only need to do this once per browser
 
+If the server logs `"openssl" is not recognized` on Windows: current builds generate certificates with Node.js when `openssl` is not installed—rebuild from the latest server sources, or install OpenSSL / Git for Windows and add it to `PATH`, or set `HTTPS_ENABLED=false` to use HTTP only (see `.env.example`).
+
 ### Application Won't Start
 
 - Check that ports 4000 (HTTP) and 41440 (HTTPS) are available
-- Verify that the application has proper permissions to create files in `~/Library/Application Support/MyHomeGames`
+- Verify that the application has proper permissions to create files in the metadata directory (see [Metadata Path](#metadata-path) for defaults per OS)
 - Check the console logs for error messages
 
 ### Authentication Issues

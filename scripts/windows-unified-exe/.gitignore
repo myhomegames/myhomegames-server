@@ -1,0 +1,3 @@
+# Build-time binaries (populated by npm run build:win-unified)
+payload/*
+!payload/.gitkeep
