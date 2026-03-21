@@ -24,6 +24,11 @@ function externalCoverUrlFromCollectionEntry(c) {
   return typeof u === "string" && u.trim() ? u.trim() : null;
 }
 
+function externalBackgroundUrlFromCollectionEntry(c) {
+  const u = c && c.externalBackgroundUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
 /**
  * Collections routes module
  * Handles collections endpoints
@@ -206,9 +211,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      collectionData.background = background || undefined;
+      collectionData.externalBackgroundUrl = null;
       
       res.json({ status: "success", collection: collectionData });
     } catch (e) {
@@ -243,15 +247,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     collectionData.cover = localCover || extCover || undefined;
     collectionData.externalCoverUrl = extCover;
     const background = getLocalMediaPath({
-      metadataPath,
-      resourceId: collection.id,
-      resourceType: 'collections',
-      mediaType: 'background',
-      urlPrefix: '/collection-backgrounds'
-    });
-    if (background) {
-      collectionData.background = background;
-    }
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'background',
+        urlPrefix: '/collection-backgrounds'
+      });
+    const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+    collectionData.background = background || extBg || undefined;
+    collectionData.externalBackgroundUrl = extBg;
     
     res.json(collectionData);
   });
@@ -375,7 +379,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl'];
+    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl', 'externalBackgroundUrl'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -400,6 +404,17 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       } else {
         const t = v.trim();
         filteredUpdates.externalCoverUrl = t.length > 0 ? t : null;
+      }
+    }
+    if ("externalBackgroundUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalBackgroundUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalBackgroundUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
       }
     }
     Object.assign(collection, filteredUpdates);
@@ -431,9 +446,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ status: "success", collection: collectionData });
     } catch (e) {
@@ -527,9 +542,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'background',
       urlPrefix: '/collection-backgrounds'
     });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -585,9 +600,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'background',
       urlPrefix: '/collection-backgrounds'
     });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -639,9 +654,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -693,9 +708,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -747,9 +762,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       // Return updated collection data
       res.json({ status: "reloaded", collection: collectionData });

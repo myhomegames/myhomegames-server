@@ -26,6 +26,11 @@ function storedExternalCoverUrl(entry) {
   return typeof u === "string" && u.trim() ? u.trim() : null;
 }
 
+function storedExternalBackgroundUrl(entry) {
+  const u = entry && entry.externalBackgroundUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
 function createCollectionLikeRoutes(config) {
   const {
     contentFolder,
@@ -203,7 +208,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
       });
-      if (background) data.background = background;
+      data.background = background || null;
+      data.externalBackgroundUrl = null;
       res.status(201).json({ status: "success", [singleResponseKey]: data });
     });
 
@@ -230,7 +236,8 @@ function createCollectionLikeRoutes(config) {
             mediaType: "background",
             urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
           });
-          if (background) data.background = background;
+          data.background = background || storedExternalBackgroundUrl(d) || null;
+          data.externalBackgroundUrl = storedExternalBackgroundUrl(d);
           if (d.summary) data.summary = d.summary;
           return data;
         }),
@@ -270,7 +277,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) data.background = background;
+      data.background = background || storedExternalBackgroundUrl(entry) || null;
+      data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json(data);
     });
 
@@ -342,7 +350,7 @@ function createCollectionLikeRoutes(config) {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle, externalCoverUrl } = req.body;
+      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         saveItem(metadataPath, contentFolder, entry);
@@ -370,6 +378,18 @@ function createCollectionLikeRoutes(config) {
         saveItem(metadataPath, contentFolder, entry);
         updateCache();
       }
+      if (externalBackgroundUrl !== undefined) {
+        if (externalBackgroundUrl == null || externalBackgroundUrl === "") {
+          entry.externalBackgroundUrl = null;
+        } else if (typeof externalBackgroundUrl !== "string") {
+          return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+        } else {
+          const t = externalBackgroundUrl.trim();
+          entry.externalBackgroundUrl = t.length > 0 ? t : null;
+        }
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
       const cover = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -392,7 +412,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) responsePayload.background = background;
+      responsePayload.background = background || storedExternalBackgroundUrl(entry) || null;
+      responsePayload.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({
         status: "success",
         [singleResponseKey]: responsePayload,
@@ -436,7 +457,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 
@@ -470,7 +492,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 
@@ -498,6 +521,7 @@ function createCollectionLikeRoutes(config) {
         title: entry.title,
         cover: cover || storedExternalCoverUrl(entry) || null,
         background: `/${backgroundPrefix}/${encodeURIComponent(entry.id)}`,
+        externalBackgroundUrl: storedExternalBackgroundUrl(entry),
       };
       res.json({ status: "success", [singleResponseKey]: response });
     });
@@ -532,7 +556,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 
