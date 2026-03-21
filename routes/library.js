@@ -1771,8 +1771,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         similarGames: (validSimilarGames && validSimilarGames.length)
           ? [...new Set(validSimilarGames.map((s) => Number(s.id)).filter((id) => !Number.isNaN(id)))]
           : null,
-        igdbCover: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
-        igdbBackground: background && typeof background === "string" && background.trim() ? background.trim() : null,
+        externalCoverUrl: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
+        externalBackgroundUrl: background && typeof background === "string" && background.trim() ? background.trim() : null,
         showTitle: true,
       };
 
@@ -1852,8 +1852,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         keywords: null,
         alternativeNames: null,
         similarGames: null,
-        igdbCover: null,
-        igdbBackground: null,
+        externalCoverUrl: null,
+        externalBackgroundUrl: null,
         showTitle: true,
       };
 

@@ -112,8 +112,23 @@ function getBackgroundPath(metadataPath, gameId) {
 }
 
 /**
- * Get cover URL (local if exists, otherwise IGDB)
- * @param {object} game - Game object with id and igdbCover
+ * External image URLs in metadata.json (fallback when no local cover.webp / background.webp).
+ */
+function getExternalCoverUrlFromStoredMetadata(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const url = obj.externalCoverUrl;
+  return typeof url === "string" && url.trim() ? url.trim() : null;
+}
+
+function getExternalBackgroundUrlFromStoredMetadata(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const url = obj.externalBackgroundUrl;
+  return typeof url === "string" && url.trim() ? url.trim() : null;
+}
+
+/**
+ * Get cover URL (local if exists, otherwise external URL from metadata)
+ * @param {object} game - Game object with id and externalCoverUrl
  * @param {string} metadataPath - Path to metadata directory
  * @returns {string|null} - Cover URL or null
  */
@@ -124,13 +139,13 @@ function getCoverUrl(game, metadataPath) {
     resourceType: 'games',
     mediaType: 'cover',
     urlPrefix: '/covers',
-    externalUrl: game.igdbCover || null
+    externalUrl: getExternalCoverUrlFromStoredMetadata(game)
   });
 }
 
 /**
- * Get background URL (local if exists, otherwise IGDB)
- * @param {object} game - Game object with id and igdbBackground
+ * Get background URL (local if exists, otherwise external URL from metadata)
+ * @param {object} game - Game object with id and externalBackgroundUrl
  * @param {string} metadataPath - Path to metadata directory
  * @returns {string|null} - Background URL or null
  */
@@ -141,7 +156,7 @@ function getBackgroundUrl(game, metadataPath) {
     resourceType: 'games',
     mediaType: 'background',
     urlPrefix: '/backgrounds',
-    externalUrl: game.igdbBackground || null
+    externalUrl: getExternalBackgroundUrlFromStoredMetadata(game)
   });
 }
 
@@ -204,4 +219,6 @@ module.exports = {
   getBackgroundPath,
   getCoverUrl,
   getBackgroundUrl,
+  getExternalCoverUrlFromStoredMetadata,
+  getExternalBackgroundUrlFromStoredMetadata,
 };

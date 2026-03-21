@@ -36,14 +36,16 @@ function loadItems(metadataPath, contentFolder) {
       const meta = readJsonFile(metaPath, null);
       if (meta && meta.title) {
         const id = /^\d+$/.test(folderName) ? Number(folderName) : folderName;
+        const ec = meta.externalCoverUrl;
+        const externalCoverUrl = typeof ec === "string" && ec.trim() ? ec.trim() : null;
         items.push({
           id,
           title: meta.title,
           summary: meta.summary || "",
           games: meta.games || [],
           showTitle: meta.showTitle !== false,
-          igdbCover: meta.igdbCover || null,
           ...meta,
+          externalCoverUrl,
         });
       }
     }

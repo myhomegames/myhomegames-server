@@ -21,6 +21,11 @@ const {
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 
+function storedExternalCoverUrl(entry) {
+  const u = entry && entry.externalCoverUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
 function createCollectionLikeRoutes(config) {
   const {
     contentFolder,
@@ -69,7 +74,7 @@ function createCollectionLikeRoutes(config) {
           title: name.trim(),
           games: [],
           summary: description || "",
-          igdbCover: logo || null,
+          externalCoverUrl: logo || null,
         };
         saveItem(metadataPath, contentFolder, entry);
         byId.set(numId, entry);
@@ -217,7 +222,7 @@ function createCollectionLikeRoutes(config) {
             mediaType: "cover",
             urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
           });
-          data.cover = cover || d.igdbCover || null;
+          data.cover = cover || storedExternalCoverUrl(d) || null;
           const background = getLocalMediaPath({
             metadataPath,
             resourceId: d.id,
@@ -256,7 +261,7 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      data.cover = cover || entry.igdbCover || null;
+      data.cover = cover || storedExternalCoverUrl(entry) || null;
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -426,7 +431,7 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      const response = { id: entry.id, title: entry.title, cover: cover || entry.igdbCover || null };
+      const response = { id: entry.id, title: entry.title, cover: cover || storedExternalCoverUrl(entry) || null };
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: id,
@@ -460,7 +465,7 @@ function createCollectionLikeRoutes(config) {
       const response = {
         id: entry.id,
         title: entry.title,
-        cover: cover || entry.igdbCover || null,
+        cover: cover || storedExternalCoverUrl(entry) || null,
         background: `/${backgroundPrefix}/${encodeURIComponent(entry.id)}`,
       };
       res.json({ status: "success", [singleResponseKey]: response });
@@ -488,7 +493,7 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      const response = { id: entry.id, title: entry.title, cover: cover || entry.igdbCover || null };
+      const response = { id: entry.id, title: entry.title, cover: cover || storedExternalCoverUrl(entry) || null };
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: id,
