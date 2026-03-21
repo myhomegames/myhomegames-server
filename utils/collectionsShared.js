@@ -131,9 +131,6 @@ function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallb
     }
   }
 
-  if (count > 0) {
-    console.log(`Removed game ${gameId} from ${count} ${contentFolder} item(s)`);
-  }
   return count;
 }
 
