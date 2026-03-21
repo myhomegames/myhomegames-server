@@ -19,6 +19,11 @@ const {
 
 const CONTENT_FOLDER = "collections";
 
+function externalCoverUrlFromCollectionEntry(c) {
+  const u = c && c.externalCoverUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
 /**
  * Collections routes module
  * Handles collections endpoints
@@ -114,9 +119,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           mediaType: 'cover',
           urlPrefix: '/collection-covers'
         });
-        if (localCover) {
-          collectionData.cover = localCover;
-        }
+        const extCover = externalCoverUrlFromCollectionEntry(c);
+        collectionData.cover = localCover || extCover || undefined;
+        collectionData.externalCoverUrl = extCover;
         const background = getLocalMediaPath({
           metadataPath,
           resourceId: c.id,
@@ -234,9 +239,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'cover',
       urlPrefix: '/collection-covers'
     });
-    if (localCover) {
-      collectionData.cover = localCover;
-    }
+    const extCover = externalCoverUrlFromCollectionEntry(collection);
+    collectionData.cover = localCover || extCover || undefined;
+    collectionData.externalCoverUrl = extCover;
     const background = getLocalMediaPath({
       metadataPath,
       resourceId: collection.id,
@@ -370,7 +375,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'showTitle'];
+    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -386,6 +391,17 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     
     // Load current collection and update it
     const collection = collectionsCache[collectionIndex];
+    if ("externalCoverUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalCoverUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalCoverUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalCoverUrl = t.length > 0 ? t : null;
+      }
+    }
     Object.assign(collection, filteredUpdates);
     
     // Save updated collection
@@ -398,7 +414,6 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
       };
-      // Only include cover/background if they exist (like GET and developers)
       const localCover = getLocalMediaPath({
         metadataPath,
         resourceId: collection.id,
@@ -406,9 +421,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'cover',
         urlPrefix: '/collection-covers'
       });
-      if (localCover) {
-        collectionData.cover = localCover;
-      }
+      const extCover = externalCoverUrlFromCollectionEntry(collection);
+      collectionData.cover = localCover || extCover || undefined;
+      collectionData.externalCoverUrl = extCover;
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: collection.id,

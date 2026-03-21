@@ -262,6 +262,7 @@ function createCollectionLikeRoutes(config) {
         urlPrefix: `/${coverPrefix}`,
       });
       data.cover = cover || storedExternalCoverUrl(entry) || null;
+      data.externalCoverUrl = storedExternalCoverUrl(entry);
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -341,7 +342,7 @@ function createCollectionLikeRoutes(config) {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle } = req.body;
+      const { title, summary, showTitle, externalCoverUrl } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         saveItem(metadataPath, contentFolder, entry);
@@ -357,14 +358,44 @@ function createCollectionLikeRoutes(config) {
         saveItem(metadataPath, contentFolder, entry);
         updateCache();
       }
+      if (externalCoverUrl !== undefined) {
+        if (externalCoverUrl == null || externalCoverUrl === "") {
+          entry.externalCoverUrl = null;
+        } else if (typeof externalCoverUrl !== "string") {
+          return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+        } else {
+          const t = externalCoverUrl.trim();
+          entry.externalCoverUrl = t.length > 0 ? t : null;
+        }
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
+      const cover = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "cover",
+        urlPrefix: `/${coverPrefix}`,
+      });
+      const responsePayload = {
+        id: entry.id,
+        title: entry.title,
+        summary: entry.summary || "",
+        showTitle: entry.showTitle !== false,
+        cover: cover || storedExternalCoverUrl(entry) || null,
+        externalCoverUrl: storedExternalCoverUrl(entry),
+      };
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "background",
+        urlPrefix: `/${backgroundPrefix}`,
+      });
+      if (background) responsePayload.background = background;
       res.json({
         status: "success",
-        [singleResponseKey]: {
-          id: entry.id,
-          title: entry.title,
-          summary: entry.summary || "",
-          showTitle: entry.showTitle !== false,
-        },
+        [singleResponseKey]: responsePayload,
       });
     });
 

@@ -350,6 +350,16 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     similarGames: resolveSimilarGamesForResponse(game.similarGames, allGames),
     showTitle: game.showTitle,
   };
+  const extCover =
+    game.externalCoverUrl != null && typeof game.externalCoverUrl === "string" && game.externalCoverUrl.trim()
+      ? game.externalCoverUrl.trim()
+      : null;
+  const extBg =
+    game.externalBackgroundUrl != null && typeof game.externalBackgroundUrl === "string" && game.externalBackgroundUrl.trim()
+      ? game.externalBackgroundUrl.trim()
+      : null;
+  gameData.externalCoverUrl = extCover;
+  gameData.externalBackgroundUrl = extBg;
   const backgroundUrl = getBackgroundUrl(game, metadataPath);
   if (backgroundUrl) gameData.background = backgroundUrl;
   return gameData;
@@ -724,6 +734,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "alternativeNames",
       "websites",
       "similarGames",
+      "externalCoverUrl",
+      "externalBackgroundUrl",
     ];
     
     // Filter updates to only include allowed fields
@@ -787,6 +799,28 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         });
         // Persist only URLs as string[] in metadata (category not stored)
         filteredUpdates.websites = deduped.length > 0 ? deduped : null;
+      }
+    }
+    if ("externalCoverUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalCoverUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalCoverUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalCoverUrl = t.length > 0 ? t : null;
+      }
+    }
+    if ("externalBackgroundUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalBackgroundUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalBackgroundUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
       }
     }
     // Critic/user ratings: 0-100 from client, convert to 0-10 for storage
