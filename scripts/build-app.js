@@ -4,11 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const {
-  packageWindowsExeZip,
-  packageWindowsTrayZip,
-  buildWindowsUnifiedExe,
-} = require('./windows-release-assets');
+const { buildWindowsUnifiedExe } = require('./windows-release-assets');
 
 const APP_NAME = 'MyHomeGames';
 const APP_BUNDLE = `${APP_NAME}.app`;
@@ -742,9 +738,7 @@ function keepOnlyFinalArtifacts() {
   const keepPatterns = [
     /\.pkg$/,
     /-linux-x64\.tar\.gz$/,
-    /-win-x64-exe\.zip$/,
-    /-win-x64-tray\.zip$/,
-    /-win-x64-unified\.exe$/,
+    /^MyHomeGames-.*-win-x64\.zip$/,
     /^myhomegames-server_.*_amd64\.deb$/,
     /^myhomegames-server-.*\.x86_64\.rpm$/,
   ];
@@ -779,8 +773,6 @@ if (linuxExe || winExe) {
 
   if (winExe) {
     try {
-      packageWindowsExeZip();
-      packageWindowsTrayZip();
       buildWindowsUnifiedExe();
     } catch (e) {
       console.log('⚠️  Windows packaging failed:', e.message);

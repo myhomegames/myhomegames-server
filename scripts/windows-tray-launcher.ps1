@@ -1,7 +1,7 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 # Encoding: UTF-8 with BOM (required for Windows PowerShell 5.1 string parsing).
 # MyHomeGames Server - Windows system tray launcher (no console window).
-# Launched by "Start-MyHomeGames-Server.exe" in this folder (double-click the .exe).
+# Started from the runtime folder (e.g. after MyHomeGames-*-win-x64.exe from the zip unpacks here).
 
 $ErrorActionPreference = "Stop"
 
@@ -75,7 +75,7 @@ foreach ($n in $exeNames) {
 }
 
 if (-not $serverExe) {
-  $errMsg = "Server executable not found in:`n$ScriptDir`n`nExpected one of:`n" + ($exeNames -join "`n") + "`n`nRe-extract the full MyHomeGames-*-win-x64-tray.zip or copy the server .exe here."
+  $errMsg = "Server executable not found in:`n$ScriptDir`n`nExpected one of:`n" + ($exeNames -join "`n") + "`n`nDelete this runtime folder and run MyHomeGames-*-win-x64.exe again (extract it from MyHomeGames-*-win-x64.zip if needed), or copy the server .exe here."
   [Console]::Error.WriteLine("MyHomeGames tray: $errMsg")
   [System.Windows.Forms.MessageBox]::Show(
     $errMsg,

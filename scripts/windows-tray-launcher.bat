@@ -1,5 +1,5 @@
 @echo off
-REM Optional fallback (dev): same as Start-MyHomeGames-Server.exe — double-click to start tray launcher.
+REM Optional fallback (dev): double-click to start tray launcher via PowerShell.
 set "SCRIPT_DIR=%~dp0"
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT_DIR%MyHomeGames-Server-Tray.ps1"
 if errorlevel 1 (

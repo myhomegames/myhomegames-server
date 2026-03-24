@@ -3,28 +3,19 @@ MyHomeGames Server — Windows
 
 DISTRIBUTION
 ------------
-**Single file (simplest):** MyHomeGames-*-win-x64-unified.exe — one download. Double-click
-it; on first run it unpacks the server, scripts and config under:
+**Release build:** MyHomeGames-*-win-x64.zip — contains the installer executable.
+Unzip anywhere, then run the .exe inside. On first run it unpacks the server, scripts
+and config under:
 
   %LOCALAPPDATA%\\MyHomeGames\\server-runtime\\<version>\\
 
-and starts the tray. No zip to extract. Same tray behaviour as below.
+and starts the tray.
 
-**Folder package (all-in-one zip):** MyHomeGames-*-win-x64-tray.zip — contains the packaged
-server (`myhomegames-server-*.exe`), tray launcher (`Start-MyHomeGames-Server.exe`),
-`MyHomeGames-Server-Tray.ps1`, `README-WINDOWS.txt`, optional `MyHomeGames-Tray.png`,
-plus `.env` and `server-info.json`. Unzip anywhere and use QUICK START below.
+QUICK START
+-----------
+Unzip the archive, then double-click:
 
-**Optional smaller package:** MyHomeGames-*-win-x64-exe.zip — server executable + `.env`
-+ `server-info` only (no tray; for headless / scripting).
-
-QUICK START (tray zip — recommended layout)
---------------------------------------------
-Double-click:
-
-  Start-MyHomeGames-Server.exe
-
-Or use **MyHomeGames-*-win-x64-unified.exe** (single file) instead — no unzip step.
+  MyHomeGames-*-win-x64.exe
 
 This starts the server in the background (no server console window) and shows an icon
 in the system tray (notification area, near the clock). Right-click the icon
@@ -40,12 +31,12 @@ FIRST RUN
 If Windows PowerShell asks about execution policy, the script uses
 -ExecutionPolicy Bypass for this session only.
 
-The server reads .env in this same folder. Default HTTPS URL is
+The server reads .env in the extracted runtime folder. Default HTTPS URL is
 https://localhost:41440
 
 WINDOWS SECURITY / SMARTSCREEN / DEFENDER
 ------------------------------------------
-The tray launcher and server .exe are not code-signed. Windows may show:
+The unified launcher and server .exe are not code-signed. Windows may show:
 
   - **SmartScreen** — "Windows protected your PC" / (IT) *Un'app non riconosciuta…* /
     **Consenti sull'app** — use **More info** / *Altre informazioni*, then **Run anyway**
@@ -60,7 +51,7 @@ background. Only allow the file if you trust the source of the download.
 
 ERROR LOG (copy/paste support)
 ------------------------------
-If something fails, the same folder as the launcher may contain:
+If something fails, the runtime folder may contain:
 
   MyHomeGames-Server-Tray-errors.log
 
@@ -76,14 +67,14 @@ TROUBLESHOOTING
 then start again.
 
 "Could not start the tray launcher" / exit code 1 — if the log says **server
-executable not found**, the packaged server `.exe` is missing next to the launcher
-(same folder). Re-extract the full **win-x64-tray** zip or copy `myhomegames-server-*.exe`
-back into that folder.
+executable not found**, the runtime folder may be incomplete. Delete the runtime folder
+for that version under `%LOCALAPPDATA%\\MyHomeGames\\server-runtime\\` and run the
+unified .exe again, or re-download the release from the official source.
 
-MyHomeGames-Tray.png (when present) is the same icon as the macOS app — keep it
-next to the scripts so the tray uses it.
+MyHomeGames-Tray.png (when present) is the same icon as the macOS app — it is embedded
+in the unified .exe when available.
 
-ALTERNATIVE: run the .exe directly
-----------------------------------
-myhomegames-server-win-x64.exe opens a console (CMD) window. Use
-Start-MyHomeGames-Server.exe above if you prefer no server window and a tray icon.
+ALTERNATIVE: run the packaged server .exe directly
+----------------------------------------------------
+After extraction, `myhomegames-server-win-x64.exe` (name may vary) in the runtime folder
+opens a console (CMD) window. Prefer the unified .exe above for no server window and a tray icon.

@@ -5,7 +5,7 @@
  */
 const { findWinExe, runPkgWindowsOnly, buildWindowsUnifiedExe } = require("./windows-release-assets");
 
-console.log("Building MyHomeGames-*-win-x64-unified.exe (single file)…\n");
+console.log("Building MyHomeGames-*-win-x64.exe and .zip (single file in archive)…\n");
 try {
   if (!findWinExe()) {
     console.log("No server .exe in build/ — running pkg (node18-win-x64)…\n");
