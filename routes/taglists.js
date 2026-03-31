@@ -619,13 +619,8 @@ function createTagRoutes(config) {
       return false;
     }
 
-    // Only delete if the tag has no cover (user may want to keep tags that have a custom cover)
-    const tagDir = getTagDir(metadataPath, tagId);
-    const coverPath = path.join(tagDir, "cover.webp");
-    if (fs.existsSync(coverPath)) {
-      return false;
-    }
-
+    // Safe delete: remove tag metadata when no games reference it.
+    // Covers (cover.webp) do NOT block deletion; they remain on disk if present.
     deleteTag(metadataPath, tag.title);
 
     return true;
