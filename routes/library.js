@@ -85,6 +85,7 @@ const {
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 
 /**
@@ -144,6 +145,17 @@ function saveGame(metadataPath, game) {
   delete gameToSave.publishers;
   delete gameToSave.franchise;
   delete gameToSave.collection;
+  // metadata.json stores game type as numeric id only (legacy { id, name } → number on write)
+  if (Object.prototype.hasOwnProperty.call(gameToSave, "type")) {
+    const tid = coerceToGameTypeId(gameToSave.type);
+    if (tid == null) {
+      delete gameToSave.type;
+      delete game.type;
+    } else {
+      gameToSave.type = tid;
+      game.type = tid;
+    }
+  }
   writeJsonFile(filePath, gameToSave);
 }
 
@@ -349,6 +361,7 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     alternativeNames: game.alternativeNames || null,
     similarGames: resolveSimilarGamesForResponse(game.similarGames, allGames),
     showTitle: game.showTitle,
+    type: coerceToGameTypeId(game.type),
   };
   const extCover =
     game.externalCoverUrl != null && typeof game.externalCoverUrl === "string" && game.externalCoverUrl.trim()
@@ -736,6 +749,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "similarGames",
       "externalCoverUrl",
       "externalBackgroundUrl",
+      "type",
     ];
     
     // Filter updates to only include allowed fields
@@ -1013,6 +1027,18 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       } else {
         const filtered = raw.filter((x) => typeof x === "string" && x.trim());
         filteredUpdates.keywords = filtered.length > 0 ? filtered : null;
+      }
+    }
+    if ("type" in filteredUpdates) {
+      const raw = filteredUpdates.type;
+      if (raw == null) {
+        filteredUpdates.type = null;
+      } else {
+        const id = coerceToGameTypeId(raw);
+        if (id === null) {
+          return res.status(400).json({ error: "type must be null, a number, or { id: number }" });
+        }
+        filteredUpdates.type = id;
       }
     }
 
@@ -1656,7 +1682,36 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
   // Endpoint: add game from IGDB to library
   app.post("/games/add-from-igdb", requireToken, async (req, res) => {
-    const { igdbId, name, summary, cover, background, releaseDate, genres, criticRating, userRating, stars, themes, platforms, gameModes, playerPerspectives, websites, ageRatings, developers, publishers, franchise, collection, series, screenshots, videos, gameEngines, keywords, alternativeNames, similarGames } = req.body;
+    const {
+      igdbId,
+      name,
+      summary,
+      cover,
+      background,
+      releaseDate,
+      genres,
+      criticRating,
+      userRating,
+      stars,
+      themes,
+      platforms,
+      gameModes,
+      playerPerspectives,
+      websites,
+      ageRatings,
+      developers,
+      publishers,
+      franchise,
+      collection,
+      series,
+      screenshots,
+      videos,
+      gameEngines,
+      keywords,
+      alternativeNames,
+      similarGames,
+      type: gameTypeFromClient,
+    } = req.body;
     
     if (!igdbId || !name) {
       return res.status(400).json({ error: "Missing required fields: igdbId and name" });
@@ -1793,6 +1848,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const franchiseForEnsure = normalizeFranchiseOrCollectionToArray(franchise);
       const collectionForEnsure = normalizeFranchiseOrCollectionToArray(collection ?? series);
 
+      const storedGameTypeId = coerceToGameTypeId(gameTypeFromClient);
+
       // Resolve tag titles to ids (creates missing tags)
       const genreIds = normalizeCategoryFieldToIds(metadataPath, validGenres);
       const themeIds = normalizeThemeFieldToIds(metadataPath, validThemes);
@@ -1835,6 +1892,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         externalCoverUrl: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
         externalBackgroundUrl: background && typeof background === "string" && background.trim() ? background.trim() : null,
         showTitle: true,
+        ...(storedGameTypeId != null ? { type: storedGameTypeId } : {}),
       };
 
       if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);

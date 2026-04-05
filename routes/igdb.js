@@ -2,6 +2,7 @@
 // IGDB API routes for game search and details
 
 const https = require("https");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 // IGDB Access Token cache (per clientId)
 const igdbTokenCache = new Map();
@@ -75,7 +76,7 @@ async function getIGDBAccessToken(clientId, clientSecret) {
  * @returns {Promise<Array>} Raw game objects from IGDB
  */
 function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
-  let postData = `search "${searchQuery}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name;`;
+  let postData = `search "${searchQuery}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name,game_type;`;
   if (yearToFilter !== null && yearToFilter !== undefined) {
     const yearStart = Math.floor(new Date(yearToFilter, 0, 1).getTime() / 1000);
     const yearEnd = Math.floor(new Date(yearToFilter, 11, 31, 23, 59, 59).getTime() / 1000);
@@ -127,7 +128,7 @@ function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
  * @returns {Promise<Array>} Raw game objects from IGDB (0 or 1 element)
  */
 function runIGDBGameById(id, accessToken, clientId) {
-  const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name; where id = ${id}; limit 1;`;
+  const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name,game_type; where id = ${id}; limit 1;`;
 
   const options = {
     hostname: "api.igdb.com",
@@ -386,6 +387,7 @@ function registerIGDBRoutes(app, requireToken) {
       const { formatIGDBReleaseDate } = require("../utils/dateUtils");
       const formattedGames = rawGames.map((game) => {
         const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
+        const typeId = coerceToGameTypeId(game.game_type);
         return {
           id: game.id,
           name: game.name,
@@ -400,6 +402,7 @@ function registerIGDBRoutes(app, requireToken) {
           userRating: game.rating ? Math.round(game.rating / 10) : null,
           series: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
           franchise: (game.franchises || []).map((f) => ({ id: f.id, name: f.name || "" })).filter((f) => f.name),
+          ...(typeId != null ? { type: typeId } : {}),
         };
       });
 
@@ -1444,7 +1447,7 @@ function registerIGDBRoutes(app, requireToken) {
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
 
-      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name; where id = ${igdbId};`;
+      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name,game_type; where id = ${igdbId};`;
 
       const options = {
         hostname: "api.igdb.com",
@@ -1584,7 +1587,9 @@ function registerIGDBRoutes(app, requireToken) {
             const similarGames = game.similar_games
               ? game.similar_games.map((sg) => ({ id: sg.id, name: sg.name || '' })).filter((sg) => sg.name)
               : [];
-            
+
+            const gameTypeId = coerceToGameTypeId(game.game_type);
+
             const gameData = {
               id: game.id,
               name: game.name,
@@ -1615,6 +1620,7 @@ function registerIGDBRoutes(app, requireToken) {
               similarGames: similarGames.length > 0 ? similarGames : undefined,
               criticRating: game.rating !== undefined && game.rating !== null ? game.rating : null,
               userRating: game.aggregated_rating !== undefined && game.aggregated_rating !== null ? game.aggregated_rating : null,
+              ...(gameTypeId != null ? { type: gameTypeId } : {}),
             };
             
             res.setHeader('Content-Type', 'application/json');

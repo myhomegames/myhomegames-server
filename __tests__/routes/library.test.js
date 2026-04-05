@@ -47,6 +47,7 @@ describe('GET /libraries/library/games', () => {
       expect(game).toHaveProperty('summary');
       expect(game).toHaveProperty('cover');
       expect(game.cover).toContain('/covers/');
+      expect(game).toHaveProperty('type');
     }
   });
 
@@ -156,6 +157,7 @@ describe('GET /games/:gameId', () => {
       expect(game).toHaveProperty('genre');
       expect(game).toHaveProperty('criticratings');
       expect(game).toHaveProperty('userratings');
+      expect(game).toHaveProperty('type');
     }
   });
 
@@ -407,6 +409,103 @@ describe('PUT /games/:gameId', () => {
       expect(verifyResponse.body.websites).toHaveLength(2);
       expect(verifyResponse.body.websites[0].url).toBe('https://store.steampowered.com/app/123');
       expect(verifyResponse.body.websites[1].url).toBe('https://www.gog.com/game/foo');
+    }
+  });
+
+  test('should update IGDB game type', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 1 })
+        .expect(200);
+
+      expect(updateResponse.body.game).toHaveProperty('type', 1);
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.type).toBe(1);
+    }
+  });
+
+  test('should accept legacy game type as object with id', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: { id: 2 } })
+        .expect(200);
+
+      expect(updateResponse.body.game).toHaveProperty('type', 2);
+    }
+  });
+
+  test('should clear game type with null', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 5 })
+        .expect(200);
+
+      const clearResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: null })
+        .expect(200);
+
+      expect(clearResponse.body.game.type).toBeNull();
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.type).toBeNull();
+    }
+  });
+
+  test('should return 400 for invalid game type', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 'not-a-valid-type' })
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error');
+      expect(String(response.body.error)).toContain('type');
     }
   });
 
