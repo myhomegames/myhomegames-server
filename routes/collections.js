@@ -16,6 +16,7 @@ const {
   getResourceToGameIdsMap,
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 const CONTENT_FOLDER = "collections";
 
@@ -283,7 +284,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         const websitesResolved = (game.websites && Array.isArray(game.websites) && game.websites.length > 0)
           ? game.websites.map((u) => (typeof u === "string" ? { url: u } : (u && u.url ? { url: String(u.url) } : null))).filter(Boolean)
           : null;
-        collectionGames.push({
+        const typeId = coerceToGameTypeId(game.type);
+        const row = {
           id: game.id,
           title: game.title,
           summary: game.summary || "",
@@ -309,7 +311,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           keywords: game.keywords || null,
           alternativeNames: game.alternativeNames || null,
           similarGames: similarGamesResolved,
-        });
+        };
+        if (typeId != null) row.type = typeId;
+        collectionGames.push(row);
         const background = getBackgroundUrl(game, metadataPath);
         if (background) {
           collectionGames[collectionGames.length - 1].background = background;

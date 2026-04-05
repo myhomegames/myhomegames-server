@@ -20,6 +20,7 @@ const {
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -306,6 +307,7 @@ function createCollectionLikeRoutes(config) {
               : executables != null
                 ? [].concat(executables)
                 : null;
+          const typeId = coerceToGameTypeId(g.type);
           return {
             id: g.id,
             title: g.title,
@@ -318,6 +320,7 @@ function createCollectionLikeRoutes(config) {
             developers: g.developers || null,
             publishers: g.publishers || null,
             executables: execArray,
+            ...(typeId != null ? { type: typeId } : {}),
           };
         });
       res.json({ games });
