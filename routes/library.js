@@ -1578,6 +1578,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const label = req.body.label ? req.body.label.trim() : null;
     const platform = req.body.platform ? req.body.platform.trim() : null;
     const platformId = (req.body.platformId != null && req.body.platformId !== '') ? String(req.body.platformId).trim() : '';
+    /** When replacing an existing script from Manage Installation, client sends the current on-disk basename so we overwrite instead of allocating the next N- slot (which left the old file and confused PUT matching). */
+    const replaceFileNameRaw = req.body.replaceFileName != null ? String(req.body.replaceFileName).trim() : '';
 
     // Validate game exists
     const game = allGames[gameId];
@@ -1588,22 +1590,47 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     try {
       const scriptsDir = getGameScriptsDir(metadataPath, gameId);
       ensureDirectoryExists(scriptsDir);
+      const resolvedScriptsDir = path.resolve(scriptsDir);
 
-      const labelPart = (label || platform || 'script').trim();
-      const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
-      let nextNum = 1;
-      if (fs.existsSync(scriptsDir)) {
-        const files = fs.readdirSync(scriptsDir);
-        for (const file of files) {
-          const baseNoExt = path.basename(file, path.extname(file));
-          const parsed = parseNumberPrefix(baseNoExt);
-          if (parsed.num !== Number.MAX_SAFE_INTEGER && parsed.num >= nextNum) nextNum = parsed.num + 1;
+      let scriptName;
+      let executablePath;
+
+      if (replaceFileNameRaw) {
+        const safeBase = path.basename(replaceFileNameRaw);
+        if (safeBase !== replaceFileNameRaw || safeBase.includes("..") || !/^[\w.-]+\.(sh|bat)$/i.test(safeBase)) {
+          return res.status(400).json({ error: "Invalid replaceFileName" });
         }
+        const baseNoExt = safeBase.replace(/\.(sh|bat)$/i, "");
+        scriptName = baseNoExt + fileExtension;
+        executablePath = path.resolve(path.join(scriptsDir, scriptName));
+        if (!executablePath.startsWith(resolvedScriptsDir + path.sep)) {
+          return res.status(400).json({ error: "Invalid replaceFileName path" });
+        }
+        const oldPathSameSlot = path.join(scriptsDir, safeBase);
+        if (oldPathSameSlot !== executablePath && fs.existsSync(oldPathSameSlot)) {
+          try {
+            fs.unlinkSync(oldPathSameSlot);
+          } catch (unlinkErr) {
+            console.warn(`Could not remove previous script ${safeBase}:`, unlinkErr.message);
+          }
+        }
+      } else {
+        const labelPart = (label || platform || 'script').trim();
+        const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
+        let nextNum = 1;
+        if (fs.existsSync(scriptsDir)) {
+          const files = fs.readdirSync(scriptsDir);
+          for (const file of files) {
+            const baseNoExt = path.basename(file, path.extname(file));
+            const parsed = parseNumberPrefix(baseNoExt);
+            if (parsed.num !== Number.MAX_SAFE_INTEGER && parsed.num >= nextNum) nextNum = parsed.num + 1;
+          }
+        }
+        const pad = n => String(n).padStart(2, '0');
+        const scriptBasenameNoExt = pad(nextNum) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
+        scriptName = scriptBasenameNoExt + fileExtension;
+        executablePath = path.join(scriptsDir, scriptName);
       }
-      const pad = n => String(n).padStart(2, '0');
-      const scriptBasenameNoExt = pad(nextNum) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
-      const scriptName = scriptBasenameNoExt + fileExtension;
-      const executablePath = path.join(scriptsDir, scriptName);
 
       fs.writeFileSync(executablePath, file.buffer);
 

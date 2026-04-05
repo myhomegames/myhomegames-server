@@ -796,6 +796,42 @@ describe('POST /games/:gameId/upload-executable', () => {
     }
   });
 
+  test('should overwrite existing script when replaceFileName is sent (no new 02- file)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const oldContent = Buffer.from('#!/bin/bash\necho "old"');
+      fs.writeFileSync(path.join(scriptsDir, '01-Play-99.sh'), oldContent);
+
+      const newContent = Buffer.from('#!/bin/bash\necho "new"');
+      await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('label', 'Play')
+        .field('platformId', '99')
+        .field('replaceFileName', '01-Play-99.sh')
+        .attach('file', newContent, 'replacement.sh')
+        .expect(200);
+
+      const disk = fs.readFileSync(path.join(scriptsDir, '01-Play-99.sh'));
+      expect(disk.toString()).toBe(newContent.toString());
+      const names = fs.readdirSync(scriptsDir);
+      expect(names.some((f) => /^02-.*Play.*99/.test(f))).toBe(false);
+      try {
+        fs.unlinkSync(path.join(scriptsDir, '01-Play-99.sh'));
+      } catch (_) {}
+    }
+  });
+
   test('should reject files with invalid extensions', async () => {
     // First get a game ID from the library
     const libraryResponse = await request(app)
