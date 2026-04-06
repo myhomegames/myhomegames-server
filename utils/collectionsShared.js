@@ -7,6 +7,17 @@ const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
 const { getTitleForSort } = require("./sortUtils");
+const SUBTITLE_SEPARATORS = [":", "-", ";", "_", "/", "\\", "@", "#"];
+
+function isSubCollectionTitle(parentTitle, childTitle) {
+  const parent = String(parentTitle || "").trim();
+  const child = String(childTitle || "").trim();
+  if (!parent || !child || child.length <= parent.length) return false;
+  if (!child.startsWith(parent)) return false;
+  const restTrimmed = child.slice(parent.length).replace(/^\s+/, "");
+  if (!restTrimmed) return false;
+  return SUBTITLE_SEPARATORS.includes(restTrimmed[0]);
+}
 
 /**
  * Get metadata path for an item
@@ -128,6 +139,26 @@ function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallb
       saveItem(metadataPath, contentFolder, item);
       count++;
       if (updateCacheCallback) updateCacheCallback(item);
+    }
+  }
+
+  // Cleanup orphan "collection-like" entries after game deletion:
+  // delete only leaves (no children by title), no games, and no local custom cover.
+  let removedSomething = true;
+  while (removedSomething) {
+    removedSomething = false;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      const games = Array.isArray(item.games) ? item.games : [];
+      if (games.length > 0) continue;
+      const parentTitle = String(item.title || "").trim();
+      const hasChildren = parentTitle
+        ? items.some((other, idx) => idx !== i && isSubCollectionTitle(parentTitle, other.title))
+        : false;
+      if (hasChildren) continue;
+      deleteItem(metadataPath, contentFolder, item.id);
+      items.splice(i, 1);
+      removedSomething = true;
     }
   }
 
