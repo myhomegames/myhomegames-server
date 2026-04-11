@@ -18,6 +18,8 @@ const {
   normalizeId,
   removeGameFromAll,
   computeFinalGameIdsForOrder,
+  addChildToItem,
+  removeChildFromItem,
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
@@ -79,6 +81,7 @@ function createCollectionLikeRoutes(config) {
           id: numId,
           title: name.trim(),
           games: [],
+          childs: [],
           summary: description || "",
           externalCoverUrl: logo || null,
         };
@@ -179,6 +182,7 @@ function createCollectionLikeRoutes(config) {
         summary: (summary && typeof summary === "string") ? summary.trim() : "",
         showTitle: true,
         games: [],
+        childs: [],
       };
       try {
         saveItem(metadataPath, contentFolder, newItem);
@@ -221,7 +225,13 @@ function createCollectionLikeRoutes(config) {
         [listResponseKey]: list.map((d) => {
           const gameIds = d.games || [];
           const actualCount = gameIds.filter((g) => allGames[g]).length;
-          const data = { id: d.id, title: d.title, gameCount: actualCount, showTitle: d.showTitle !== false };
+          const data = {
+            id: d.id,
+            title: d.title,
+            gameCount: actualCount,
+            showTitle: d.showTitle !== false,
+            childs: Array.isArray(d.childs) ? d.childs : [],
+          };
           const cover = getLocalMediaPath({
             metadataPath,
             resourceId: d.id,
@@ -261,6 +271,7 @@ function createCollectionLikeRoutes(config) {
         summary: entry.summary || "",
         showTitle: entry.showTitle !== false,
         gameCount: (entry.games || []).filter((g) => allGames[g]).length,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
       };
       const cover = getLocalMediaPath({
         metadataPath,
@@ -353,7 +364,7 @@ function createCollectionLikeRoutes(config) {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl } = req.body;
+      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         saveItem(metadataPath, contentFolder, entry);
@@ -393,6 +404,25 @@ function createCollectionLikeRoutes(config) {
         saveItem(metadataPath, contentFolder, entry);
         updateCache();
       }
+      if (childs !== undefined) {
+        if (!Array.isArray(childs)) {
+          return res.status(400).json({ error: "childs must be an array of ids" });
+        }
+        const normalizedChilds = [];
+        const seen = new Set();
+        for (const raw of childs) {
+          const id = normalizeId(raw);
+          if (id == null) continue;
+          if (String(id) === String(entry.id)) continue;
+          const key = String(id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          normalizedChilds.push(id);
+        }
+        entry.childs = normalizedChilds;
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
       const cover = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -405,6 +435,7 @@ function createCollectionLikeRoutes(config) {
         title: entry.title,
         summary: entry.summary || "",
         showTitle: entry.showTitle !== false,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
         cover: cover || storedExternalCoverUrl(entry) || null,
         externalCoverUrl: storedExternalCoverUrl(entry),
       };
@@ -434,6 +465,28 @@ function createCollectionLikeRoutes(config) {
       deleteItem(metadataPath, contentFolder, id);
       cache.splice(idx, 1);
       res.json({ status: "success" });
+    });
+
+    app.post(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const childId = normalizeId(req.params.childId);
+      const added = addChildToItem(metadataPath, contentFolder, id, childId);
+      if (!added) {
+        return res.status(404).json({ error: `${humanName} parent or child not found, or child already linked` });
+      }
+      updateCache();
+      return res.json({ status: "success" });
+    });
+
+    app.delete(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const childId = normalizeId(req.params.childId);
+      const removed = removeChildFromItem(metadataPath, contentFolder, id, childId);
+      if (!removed) {
+        return res.status(404).json({ error: `${humanName} parent or child link not found` });
+      }
+      updateCache();
+      return res.json({ status: "success" });
     });
 
     app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {

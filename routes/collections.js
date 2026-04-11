@@ -13,6 +13,8 @@ const {
   normalizeId,
   removeGameFromAll,
   addGameToItem,
+  addChildToItem,
+  removeChildFromItem,
   getResourceToGameIdsMap,
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
@@ -116,6 +118,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           summary: c.summary || "",
           showTitle: c.showTitle,
           gameCount: actualGameCount,
+          childs: Array.isArray(c.childs) ? c.childs : [],
         };
         // Check if cover exists locally
         const localCover = getLocalMediaPath({
@@ -181,6 +184,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       summary: (summary && typeof summary === "string") ? summary.trim() : "",
       showTitle: true,
       games: [],
+      childs: [],
     };
 
     // Save collection to its own folder
@@ -204,6 +208,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
+        childs: [],
       };
       const background = getLocalMediaPath({
         metadataPath,
@@ -236,6 +241,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       summary: collection.summary || "",
       showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
+      childs: Array.isArray(collection.childs) ? collection.childs : [],
     };
     const localCover = getLocalMediaPath({
       metadataPath,
@@ -383,7 +389,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl', 'externalBackgroundUrl'];
+    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl', 'externalBackgroundUrl', 'childs'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -421,6 +427,24 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
       }
     }
+    if ("childs" in filteredUpdates) {
+      const rawChilds = filteredUpdates.childs;
+      if (!Array.isArray(rawChilds)) {
+        return res.status(400).json({ error: "childs must be an array of ids" });
+      }
+      const normalizedChilds = [];
+      const seen = new Set();
+      for (const raw of rawChilds) {
+        const id = normalizeId(raw);
+        if (id == null) continue;
+        if (String(id) === String(collection.id)) continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalizedChilds.push(id);
+      }
+      filteredUpdates.childs = normalizedChilds;
+    }
     Object.assign(collection, filteredUpdates);
     
     // Save updated collection
@@ -432,6 +456,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         summary: collection.summary || "",
         showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
+        childs: Array.isArray(collection.childs) ? collection.childs : [],
       };
       const localCover = getLocalMediaPath({
         metadataPath,
@@ -747,6 +772,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
         gameCount: (collection.games || []).length,
+        childs: Array.isArray(collection.childs) ? collection.childs : [],
       };
       // Check if cover exists locally
       const localCover = getLocalMediaPath({
@@ -776,6 +802,28 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       console.error(`Failed to reload collection ${collectionId}:`, e.message);
       res.status(500).json({ error: "Failed to reload collection metadata" });
     }
+  });
+
+  app.post("/collections/:id/childs/:childId", requireToken, (req, res) => {
+    const id = normalizeId(req.params.id);
+    const childId = normalizeId(req.params.childId);
+    const added = addChildToItem(metadataPath, CONTENT_FOLDER, id, childId);
+    if (!added) {
+      return res.status(404).json({ error: "Collection parent or child not found, or child already linked" });
+    }
+    collectionsCache = loadCollections(metadataPath);
+    return res.json({ status: "success" });
+  });
+
+  app.delete("/collections/:id/childs/:childId", requireToken, (req, res) => {
+    const id = normalizeId(req.params.id);
+    const childId = normalizeId(req.params.childId);
+    const removed = removeChildFromItem(metadataPath, CONTENT_FOLDER, id, childId);
+    if (!removed) {
+      return res.status(404).json({ error: "Collection parent or child link not found" });
+    }
+    collectionsCache = loadCollections(metadataPath);
+    return res.json({ status: "success" });
   });
 
   // Return reload function

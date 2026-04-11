@@ -7,16 +7,35 @@ const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
 const { getTitleForSort } = require("./sortUtils");
-const SUBTITLE_SEPARATORS = [":", "-", ";", "_", "/", "\\", "@", "#"];
 
-function isSubCollectionTitle(parentTitle, childTitle) {
-  const parent = String(parentTitle || "").trim();
-  const child = String(childTitle || "").trim();
-  if (!parent || !child || child.length <= parent.length) return false;
-  if (!child.startsWith(parent)) return false;
-  const restTrimmed = child.slice(parent.length).replace(/^\s+/, "");
-  if (!restTrimmed) return false;
-  return SUBTITLE_SEPARATORS.includes(restTrimmed[0]);
+function normalizeChildIds(rawChilds, selfId) {
+  const arr = Array.isArray(rawChilds) ? rawChilds : [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr) {
+    const id = normalizeId(raw);
+    if (id == null) continue;
+    if (String(id) === String(selfId)) continue;
+    const key = String(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(id);
+  }
+  return out;
+}
+
+function pruneInvalidChildLinks(items) {
+  const validIds = new Set(items.map((i) => String(i.id)));
+  let changed = false;
+  for (const item of items) {
+    const before = Array.isArray(item.childs) ? item.childs : [];
+    const pruned = normalizeChildIds(before, item.id).filter((id) => validIds.has(String(id)));
+    if (before.length !== pruned.length || before.some((id, idx) => String(id) !== String(pruned[idx]))) {
+      item.childs = pruned;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 /**
@@ -54,11 +73,19 @@ function loadItems(metadataPath, contentFolder) {
           title: meta.title,
           summary: meta.summary || "",
           games: meta.games || [],
+          childs: normalizeChildIds(meta.childs, id),
           showTitle: meta.showTitle !== false,
           ...meta,
           externalCoverUrl,
         });
       }
+    }
+  }
+
+  const mutated = pruneInvalidChildLinks(items);
+  if (mutated) {
+    for (const item of items) {
+      saveItem(metadataPath, contentFolder, item);
     }
   }
 
@@ -75,6 +102,7 @@ function saveItem(metadataPath, contentFolder, item) {
   ensureDirectoryExists(dir);
   const toSave = { ...item };
   delete toSave.id;
+  toSave.childs = normalizeChildIds(toSave.childs, item.id);
   writeJsonFile(getMetadataPath(metadataPath, contentFolder, item.id), toSave);
 }
 
@@ -84,6 +112,17 @@ function saveItem(metadataPath, contentFolder, item) {
 function deleteItem(metadataPath, contentFolder, itemId) {
   const dir = path.join(metadataPath, "content", contentFolder, String(itemId));
   const metaPath = getMetadataPath(metadataPath, contentFolder, itemId);
+  const list = loadItems(metadataPath, contentFolder);
+  let parentLinksChanged = false;
+  for (const item of list) {
+    const childs = Array.isArray(item.childs) ? item.childs : [];
+    const filtered = childs.filter((id) => String(id) !== String(itemId));
+    if (filtered.length !== childs.length) {
+      item.childs = filtered;
+      saveItem(metadataPath, contentFolder, item);
+      parentLinksChanged = true;
+    }
+  }
 
   if (fs.existsSync(metaPath)) {
     fs.unlinkSync(metaPath);
@@ -91,6 +130,7 @@ function deleteItem(metadataPath, contentFolder, itemId) {
   if (fs.existsSync(dir)) {
     removeDirectoryIfEmpty(dir);
   }
+  return parentLinksChanged;
 }
 
 /**
@@ -143,19 +183,26 @@ function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallb
   }
 
   // Cleanup orphan "collection-like" entries after game deletion:
-  // delete only leaves (no children by title), no games, and no local custom cover.
+  // remove only structured leaves (no childs) with no games.
   let removedSomething = true;
   while (removedSomething) {
+    pruneInvalidChildLinks(items);
     removedSomething = false;
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       const games = Array.isArray(item.games) ? item.games : [];
       if (games.length > 0) continue;
-      const parentTitle = String(item.title || "").trim();
-      const hasChildren = parentTitle
-        ? items.some((other, idx) => idx !== i && isSubCollectionTitle(parentTitle, other.title))
-        : false;
-      if (hasChildren) continue;
+      const childs = Array.isArray(item.childs) ? item.childs : [];
+      if (childs.length > 0) continue;
+      for (const parent of items) {
+        if (!Array.isArray(parent.childs) || parent.childs.length === 0) continue;
+        const filtered = parent.childs.filter((id) => String(id) !== String(item.id));
+        if (filtered.length !== parent.childs.length) {
+          parent.childs = filtered;
+          saveItem(metadataPath, contentFolder, parent);
+          if (updateCacheCallback) updateCacheCallback(parent);
+        }
+      }
       deleteItem(metadataPath, contentFolder, item.id);
       items.splice(i, 1);
       removedSomething = true;
@@ -176,6 +223,31 @@ function addGameToItem(metadataPath, contentFolder, itemId, gameId) {
   if (games.some((g) => Number(g) === Number(gameId))) return false;
   entry.games = [...games, gameId];
   saveItem(metadataPath, contentFolder, entry);
+  return true;
+}
+
+function addChildToItem(metadataPath, contentFolder, parentId, childId) {
+  const items = loadItems(metadataPath, contentFolder);
+  const parent = findById(items, parentId);
+  const child = findById(items, childId);
+  if (!parent || !child) return false;
+  const normalizedChildId = normalizeId(child.id);
+  const childs = normalizeChildIds(parent.childs, parent.id);
+  if (childs.some((id) => String(id) === String(normalizedChildId))) return false;
+  parent.childs = [...childs, normalizedChildId];
+  saveItem(metadataPath, contentFolder, parent);
+  return true;
+}
+
+function removeChildFromItem(metadataPath, contentFolder, parentId, childId) {
+  const items = loadItems(metadataPath, contentFolder);
+  const parent = findById(items, parentId);
+  if (!parent) return false;
+  const before = normalizeChildIds(parent.childs, parent.id);
+  const after = before.filter((id) => String(id) !== String(normalizeId(childId)));
+  if (after.length === before.length) return false;
+  parent.childs = after;
+  saveItem(metadataPath, contentFolder, parent);
   return true;
 }
 
@@ -300,6 +372,8 @@ module.exports = {
   findIndexById,
   removeGameFromAll,
   addGameToItem,
+  addChildToItem,
+  removeChildFromItem,
   getResourceToGameIdsMap,
   compareGamesByField,
   sortGameIdsByField,
