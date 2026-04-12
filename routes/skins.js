@@ -10,7 +10,7 @@ const MAX_ZIP_BYTES = 30 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function skinsRoot(metadataPath) {
-  return path.join(metadataPath, "content", "skins");
+  return path.join(metadataPath, "skins");
 }
 
 function isUuidSkinId(id) {

@@ -177,7 +177,7 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "series"),
     path.join(METADATA_PATH, "content", "franchises"),
     path.join(METADATA_PATH, "content", "recommended"),
-    path.join(METADATA_PATH, "content", "skins"),
+    path.join(METADATA_PATH, "skins"),
     path.join(METADATA_PATH, "certs"),
   ];
 
