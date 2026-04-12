@@ -122,6 +122,7 @@ const gameModesRoutes = require("./routes/gamemodes");
 const playerPerspectivesRoutes = require("./routes/playerperspectives");
 const seriesRoutes = require("./routes/series");
 const franchisesRoutes = require("./routes/franchises");
+const skinsRoutes = require("./routes/skins");
 const collectionsRoutes = require("./routes/collections");
 const developersRoutes = require("./routes/developers");
 const publishersRoutes = require("./routes/publishers");
@@ -176,6 +177,7 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "series"),
     path.join(METADATA_PATH, "content", "franchises"),
     path.join(METADATA_PATH, "content", "recommended"),
+    path.join(METADATA_PATH, "content", "skins"),
     path.join(METADATA_PATH, "certs"),
   ];
 
@@ -393,6 +395,7 @@ gameModesRoutes.registerGameModesRoutes(app, optionalToken, METADATA_PATH, METAD
 playerPerspectivesRoutes.registerPlayerPerspectivesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
 seriesRoutes.registerSeriesRoutes(app, optionalToken, allGames, METADATA_PATH);
 franchisesRoutes.registerFranchisesRoutes(app, optionalToken, allGames, METADATA_PATH);
+skinsRoutes.registerSkinsRoutes(app, requireToken, optionalToken, METADATA_PATH);
 
 // Endpoint: serve game cover image (public, no auth required for images)
 app.get("/covers/:gameId", (req, res) => {

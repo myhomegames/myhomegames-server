@@ -91,6 +91,7 @@ describe('Directory Structure Initialization', () => {
       path.join(tempMetadataPath, 'content', 'game-modes'),
       path.join(tempMetadataPath, 'content', 'player-perspectives'),
       path.join(tempMetadataPath, 'content', 'recommended'),
+      path.join(tempMetadataPath, 'content', 'skins'),
     ];
     
     expectedDirectories.forEach((dir) => {

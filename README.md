@@ -129,6 +129,10 @@ ${METADATA_PATH}/
     └── recommended/
         └── ${sectionId}/           # Per-section content directories
             └── metadata.json       # Section metadata with games array (without id field)
+    └── skins/
+        └── ${uuid}/                # Web UI themes (zip-installed or manual)
+            ├── skin.json           # { "name", ... } — id folder name is the skin id
+            └── bundle.css          # Full theme CSS (or multiple .css files; see SKINS.md in myhomegames-skins)
 ```
 
 #### Persistent Data Files
@@ -140,6 +144,7 @@ All JSON files and settings are stored outside the codebase in the metadata path
 - **`content/collections/${collectionId}/metadata.json`**: Collection metadata files. Each collection has its own folder with a metadata.json file containing collection properties like `title`, `summary`, `games` array, etc. (the `id` field is derived from the folder name).
 - **`content/categories/${categoryId}/metadata.json`**: Category metadata files. Each category has its own folder (named with a numeric ID derived from the title) with a metadata.json file containing a `title` field.
 - **`content/recommended/${sectionId}/metadata.json`**: Recommended section metadata files. Each section has its own folder with a metadata.json file containing a `games` array (the `id` field is derived from the folder name).
+- **`content/skins/${uuid}/`**: Optional web UI skins. Installed via the web app (Settings) as a zip, or placed manually. See **`SKINS.md`** in the **myhomegames-skins** repository for archive format and API.
 
 #### Initial Setup
 
