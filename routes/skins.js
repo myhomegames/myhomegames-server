@@ -145,7 +145,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     }
   });
 
-  app.post("/skins", requireToken, upload.single("archive"), (req, res) => {
+  app.post("/skins", optionalToken, upload.single("archive"), (req, res) => {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: "missing_archive" });
     }
@@ -226,7 +226,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     }
   });
 
-  app.delete("/skins/:skinId", requireToken, (req, res) => {
+  app.delete("/skins/:skinId", optionalToken, (req, res) => {
     const skinId = req.params.skinId;
     if (!isUuidSkinId(skinId)) {
       return res.status(400).json({ error: "invalid_skin_id" });

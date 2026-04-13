@@ -303,26 +303,29 @@ if (!fs.existsSync(SETTINGS_FILE)) {
 
 // Token auth middleware - supports both development token and Twitch tokens
 function requireToken(req, res, next) {
-  const token =
-    req.header("X-Auth-Token") ||
-    req.query.token ||
-    req.header("Authorization");
-
+  const token = getRequestToken(req);
   if (!token) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-
-  // Check if it's the development token (for development only)
-  if (API_TOKEN && token === API_TOKEN) {
-    return next();
-  }
-
-  // Check if it's a valid Twitch token
-  if (authRoutes.isValidToken(token, METADATA_PATH)) {
+  if (isAuthorizedToken(token)) {
     return next();
   }
 
   return res.status(401).json({ error: "Unauthorized" });
+}
+
+function getRequestToken(req) {
+  return (
+    req.header("X-Auth-Token") ||
+    req.query.token ||
+    req.header("Authorization")
+  );
+}
+
+function isAuthorizedToken(token) {
+  if (!token) return false;
+  if (API_TOKEN && token === API_TOKEN) return true;
+  return authRoutes.isValidToken(token, METADATA_PATH);
 }
 
 // Optional token: when Twitch login is disabled, allow access without token; otherwise require token
@@ -629,6 +632,9 @@ function readSettings() {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
     twitchLoginEnabled: false,
+    activeSkinId: "",
+    twitchClientId: "",
+    twitchClientSecret: "",
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object and merge with defaults for missing keys
@@ -682,9 +688,28 @@ app.get("/version", (req, res) => {
   else res.status(500).json({ error: "Version not available" });
 });
 
-// Endpoint: update settings (when twitchLoginEnabled is true, auth required; otherwise anyone can save language/visibleLibraries)
-app.put("/settings", optionalToken, (req, res) => {
+// Endpoint: update settings
+// Special case: if Twitch login is currently enabled and caller is unauthenticated,
+// allow only the emergency toggle { twitchLoginEnabled: false } to avoid lock-out.
+app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
+  const token = getRequestToken(req);
+  const authorized = isAuthorizedToken(token);
+  const twitchEnabled = !!currentSettings.twitchLoginEnabled;
+
+  if (twitchEnabled && !authorized) {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const keys = Object.keys(body);
+    const isDisableOnlyRequest =
+      keys.length === 1 &&
+      keys[0] === "twitchLoginEnabled" &&
+      body.twitchLoginEnabled === false;
+
+    if (!isDisableOnlyRequest) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+  }
+
   const updatedSettings = {
     ...currentSettings,
     ...req.body,
