@@ -99,7 +99,8 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     limits: { fileSize: MAX_ZIP_BYTES },
   });
 
-  app.get("/skins", optionalToken, (req, res) => {
+  /** Public read: theme CSS must load on /login before the user has a token (Twitch-on). */
+  app.get("/skins", (req, res) => {
     try {
       const dir = root();
       ensureDirectoryExists(dir);
@@ -123,7 +124,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     }
   });
 
-  app.get("/skins/:skinId/bundle.css", optionalToken, (req, res) => {
+  app.get("/skins/:skinId/bundle.css", (req, res) => {
     const skinId = req.params.skinId;
     if (!isUuidSkinId(skinId)) {
       return res.status(400).type("text/css").send("/* invalid skin id */");
