@@ -84,6 +84,7 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
 - `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
 - **Note:** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are no longer required in `.env`. They are now provided by users during login through the frontend.
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
+- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive installed on first startup when no skins are present (default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`)
 
 ### Metadata Path
 
@@ -159,6 +160,8 @@ mkdir -p "${METADATA_PATH}/skins"
 ```
 
 Then create the required JSON files or copy them from a backup. The server will create default settings if `settings.json` doesn't exist.
+
+On first run, if `METADATA_PATH/skins` has no installed skins, the server automatically installs the archive from `DEFAULT_SKIN_URL` (Plex by default) and sets it as `activeSkinId` in `settings.json`.
 
 **Note**: If you're migrating from an older version, you'll need to migrate from the old monolithic JSON files (`games-library.json`, `games-collections.json`, etc.) to the new directory-per-item structure. Each game, collection, category, and recommended section should have its own directory under the appropriate `content/` subdirectory.
 

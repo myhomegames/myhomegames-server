@@ -109,6 +109,8 @@ const cors = require("cors");
 const { spawn, execSync } = require("child_process");
 const https = require("https");
 const http = require("http");
+const crypto = require("crypto");
+const AdmZip = require("adm-zip");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("./utils/fileUtils");
 
 // Import route modules
@@ -155,6 +157,8 @@ function getDefaultMetadataPath() {
 }
 
 const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
+const DEFAULT_SKIN_URL =
+  process.env.DEFAULT_SKIN_URL || "https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip";
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
@@ -196,6 +200,136 @@ function ensureMetadataDirectories() {
   // Each item (game, collection, category, section) has its own folder with metadata.json
   // content/recommended sections will be handled by recommendedRoutes.ensureRecommendedSectionsComplete()
   // after routes are registered
+}
+
+function isUuidSkinId(id) {
+  return (
+    typeof id === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+  );
+}
+
+function hasInstalledSkins(skinsDir) {
+  if (!fs.existsSync(skinsDir)) return false;
+  return fs
+    .readdirSync(skinsDir, { withFileTypes: true })
+    .some((ent) => ent.isDirectory() && isUuidSkinId(ent.name));
+}
+
+function fetchUrlBuffer(url, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https://") ? https : http;
+    const req = client.get(url, (res) => {
+      const status = Number(res.statusCode || 0);
+      if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+        const next = new URL(res.headers.location, url).toString();
+        res.resume();
+        fetchUrlBuffer(next, redirectsLeft - 1).then(resolve).catch(reject);
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        res.resume();
+        reject(new Error(`HTTP ${status}`));
+        return;
+      }
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+    req.on("error", reject);
+    req.setTimeout(30000, () => req.destroy(new Error("Request timeout")));
+  });
+}
+
+function findSkinContentRoot(extractRoot) {
+  const atRoot = path.join(extractRoot, "skin.json");
+  if (fs.existsSync(atRoot)) return extractRoot;
+  const entries = fs.readdirSync(extractRoot, { withFileTypes: true });
+  const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
+  const files = entries.filter((e) => e.isFile());
+  if (dirs.length === 1 && files.length === 0) {
+    const nested = path.join(extractRoot, dirs[0].name);
+    if (fs.existsSync(path.join(nested, "skin.json"))) return nested;
+  }
+  return null;
+}
+
+function readBundleCssFromSkinDir(skinDir) {
+  const bundlePath = path.join(skinDir, "bundle.css");
+  if (!fs.existsSync(bundlePath)) return null;
+  const css = fs.readFileSync(bundlePath, "utf8");
+  return String(css).trim() ? css : null;
+}
+
+function installSkinZipBuffer(buffer, metadataPath, fallbackName = "Plex") {
+  const skinsDir = path.join(metadataPath, "skins");
+  ensureDirectoryExists(skinsDir);
+
+  const tempDir = path.join(skinsDir, `.bootstrap-${crypto.randomUUID()}`);
+  ensureDirectoryExists(tempDir);
+  try {
+    const zip = new AdmZip(buffer);
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory) continue;
+      const rel = String(entry.entryName).replace(/\\/g, "/").replace(/^\/+/, "");
+      if (!rel || rel.includes("..")) throw new Error("invalid_zip_path");
+      const out = path.join(tempDir, rel);
+      const resolved = path.resolve(out);
+      const resolvedBase = path.resolve(tempDir);
+      if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
+        throw new Error("invalid_zip_path");
+      }
+      ensureDirectoryExists(path.dirname(out));
+      fs.writeFileSync(out, entry.getData());
+    }
+
+    const contentRoot = findSkinContentRoot(tempDir);
+    if (!contentRoot) throw new Error("missing_skin_json");
+    const css = readBundleCssFromSkinDir(contentRoot);
+    if (!css) throw new Error("missing_css");
+
+    const rawMeta = readJsonFile(path.join(contentRoot, "skin.json"), {});
+    const meta = rawMeta && typeof rawMeta === "object" && !Array.isArray(rawMeta) ? { ...rawMeta } : {};
+    const metaName = typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : fallbackName;
+
+    const id = crypto.randomUUID();
+    const finalDir = path.join(skinsDir, id);
+    fs.mkdirSync(finalDir, { recursive: true });
+    for (const ent of fs.readdirSync(contentRoot, { withFileTypes: true })) {
+      const src = path.join(contentRoot, ent.name);
+      const dst = path.join(finalDir, ent.name);
+      fs.cpSync(src, dst, { recursive: true });
+    }
+    const nextMeta = { ...meta, name: metaName, id, installedAt: Date.now() };
+    fs.writeFileSync(path.join(finalDir, "skin.json"), JSON.stringify(nextMeta, null, 2), "utf8");
+    return { id, name: metaName };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function ensureDefaultSkinInstalled() {
+  if (process.env.NODE_ENV === "test") return;
+  const skinsDir = path.join(METADATA_PATH, "skins");
+  try {
+    ensureDirectoryExists(skinsDir);
+    if (hasInstalledSkins(skinsDir)) return;
+    const zipBuffer = await fetchUrlBuffer(DEFAULT_SKIN_URL);
+    const installed = installSkinZipBuffer(zipBuffer, METADATA_PATH, "Plex");
+    const currentSettings = readJsonFile(SETTINGS_FILE, {});
+    const safeSettings =
+      currentSettings && typeof currentSettings === "object" && !Array.isArray(currentSettings)
+        ? currentSettings
+        : {};
+    writeJsonFile(SETTINGS_FILE, {
+      ...safeSettings,
+      activeSkinId: installed.id,
+    });
+    console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${DEFAULT_SKIN_URL}`);
+    console.log(`Selected default skin "${installed.name}" (${installed.id})`);
+  } catch (error) {
+    console.error(`Failed to install default skin from ${DEFAULT_SKIN_URL}:`, error.message);
+  }
 }
 
 function unlinkIfExists(filePath) {
@@ -347,6 +481,7 @@ let allGames = {}; // Store all games by ID for launcher
 setTimeout(() => {
   // Create remaining directories if needed
   ensureMetadataDirectories();
+  void ensureDefaultSkinInstalled();
   
   // Load games in background
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
