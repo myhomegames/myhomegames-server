@@ -94,6 +94,22 @@ function countUuidSkinDirs(root) {
     .length;
 }
 
+/** Same display name as an installed skin → replace that folder (keeps UUID / activeSkinId). */
+function findExistingSkinIdByName(skinsDir, displayName) {
+  const target = typeof displayName === "string" ? displayName.trim() : "";
+  if (!target || !fs.existsSync(skinsDir)) return null;
+  const matches = [];
+  for (const ent of fs.readdirSync(skinsDir, { withFileTypes: true })) {
+    if (!ent.isDirectory() || !isUuidSkinId(ent.name)) continue;
+    const meta = readJsonFile(path.join(skinsDir, ent.name, "skin.json"), null);
+    const n = meta && typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : "";
+    if (n === target) matches.push(ent.name);
+  }
+  if (matches.length === 0) return null;
+  matches.sort();
+  return matches[0];
+}
+
 function extractZipToDir(buffer, destDir) {
   const zip = new AdmZip(buffer);
   const entries = zip.getEntries();
@@ -211,9 +227,6 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     const dir = root();
     try {
       ensureDirectoryExists(dir);
-      if (countUuidSkinDirs(dir) >= MAX_SKINS) {
-        return res.status(400).json({ error: "too_many_skins" });
-      }
 
       const extractRoot = path.join(dir, `.upload-${crypto.randomUUID()}`);
       ensureDirectoryExists(extractRoot);
@@ -245,11 +258,16 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
         return res.status(400).json({ error: "missing_css" });
       }
 
-      const id = crypto.randomUUID();
+      const existingId = findExistingSkinIdByName(dir, name);
+      if (!existingId && countUuidSkinDirs(dir) >= MAX_SKINS) {
+        fs.rmSync(extractRoot, { recursive: true, force: true });
+        return res.status(400).json({ error: "too_many_skins" });
+      }
+
+      const id = existingId || crypto.randomUUID();
       const finalDir = path.join(dir, id);
       if (fs.existsSync(finalDir)) {
-        fs.rmSync(extractRoot, { recursive: true, force: true });
-        return res.status(500).json({ error: "id_collision" });
+        fs.rmSync(finalDir, { recursive: true, force: true });
       }
 
       fs.mkdirSync(finalDir, { recursive: true });

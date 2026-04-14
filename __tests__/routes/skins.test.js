@@ -71,6 +71,35 @@ describe("skins routes", () => {
     expect(after.body.skins).toEqual([]);
   });
 
+  test("POST /skins with same display name replaces existing skin (same id)", async () => {
+    const zip1 = new AdmZip();
+    zip1.addFile("skin.json", Buffer.from(JSON.stringify({ name: "Dup Theme" }), "utf8"));
+    zip1.addFile("bundle.css", Buffer.from("body { --v: 1; }", "utf8"));
+    const res1 = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip1.toBuffer(), "a.zip");
+    expect(res1.status).toBe(201);
+    const id1 = res1.body.id;
+
+    const zip2 = new AdmZip();
+    zip2.addFile("skin.json", Buffer.from(JSON.stringify({ name: "Dup Theme" }), "utf8"));
+    zip2.addFile("bundle.css", Buffer.from("body { --v: 2; }", "utf8"));
+    const res2 = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip2.toBuffer(), "b.zip");
+    expect(res2.status).toBe(201);
+    expect(res2.body.id).toBe(id1);
+
+    const list = await request(app).get("/skins");
+    expect(list.body.skins.length).toBe(1);
+    const css = await request(app).get(`/skins/${id1}/bundle.css`);
+    expect(css.text).toContain("--v: 2");
+
+    await request(app).delete(`/skins/${id1}`).set("X-Auth-Token", token);
+  });
+
   test("POST /skins without token returns 401 when auth required", async () => {
     const zip = new AdmZip();
     zip.addFile("skin.json", Buffer.from(JSON.stringify({ name: "X" }), "utf8"));
