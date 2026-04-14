@@ -17,6 +17,28 @@ function isUuidSkinId(id) {
   return typeof id === "string" && UUID_RE.test(id);
 }
 
+function resolveSkinSnapshotPath(skinDir, meta) {
+  const candidates = [];
+  if (meta && typeof meta.snapshot === "string" && meta.snapshot.trim()) {
+    const raw = meta.snapshot.trim();
+    if (!raw.includes("..") && !path.isAbsolute(raw) && !raw.includes("\\")) {
+      candidates.push(raw);
+    }
+  }
+  candidates.push("snapshot.svg", "snapshot.png", "snapshot.jpg", "snapshot.jpeg", "snapshot.webp");
+
+  for (const rel of candidates) {
+    const abs = path.join(skinDir, rel);
+    const resolved = path.resolve(abs);
+    const resolvedBase = path.resolve(skinDir);
+    if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) continue;
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      return abs;
+    }
+  }
+  return null;
+}
+
 /**
  * Reject zip slip and absolute paths. Returns normalized posix-style relative path or null.
  */
@@ -114,7 +136,11 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
         const meta = readJsonFile(path.join(skinDir, "skin.json"), null);
         const name =
           meta && typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : ent.name;
-        skins.push({ id: ent.name, name });
+        skins.push({
+          id: ent.name,
+          name,
+          snapshotUrl: `/skins/${encodeURIComponent(ent.name)}/snapshot`,
+        });
       }
       skins.sort((a, b) => a.name.localeCompare(b.name));
       return res.json({ skins });
@@ -143,6 +169,29 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     } catch (e) {
       console.error("GET bundle.css", e);
       return res.status(500).type("text/css").send("/* read error */");
+    }
+  });
+
+  app.get("/skins/:skinId/snapshot", (req, res) => {
+    const skinId = req.params.skinId;
+    if (!isUuidSkinId(skinId)) {
+      return res.status(400).send("invalid skin id");
+    }
+    const skinDir = path.join(root(), skinId);
+    if (!fs.existsSync(skinDir) || !fs.statSync(skinDir).isDirectory()) {
+      return res.status(404).send("skin not found");
+    }
+    try {
+      const meta = readJsonFile(path.join(skinDir, "skin.json"), null);
+      const snapshotPath = resolveSkinSnapshotPath(skinDir, meta);
+      if (!snapshotPath) {
+        return res.status(404).send("snapshot not found");
+      }
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.sendFile(snapshotPath);
+    } catch (e) {
+      console.error("GET snapshot", e);
+      return res.status(500).send("snapshot read error");
     }
   });
 

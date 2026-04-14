@@ -55,10 +55,14 @@ describe("skins routes", () => {
     expect(list.body.skins.length).toBe(1);
     expect(list.body.skins[0].id).toBe(res.body.id);
     expect(list.body.skins[0].name).toBe("Override Name");
+    expect(list.body.skins[0].snapshotUrl).toBe(`/skins/${res.body.id}/snapshot`);
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
     expect(css.status).toBe(200);
     expect(css.text).toContain("mhg-skin-test");
+
+    const snapshot = await request(app).get(`/skins/${res.body.id}/snapshot`);
+    expect(snapshot.status).toBe(404);
 
     const del = await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
     expect(del.status).toBe(204);
