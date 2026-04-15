@@ -56,6 +56,12 @@ describe("skins routes", () => {
     expect(list.body.skins[0].id).toBe(res.body.id);
     expect(list.body.skins[0].name).toBe("Override Name");
     expect(list.body.skins[0].snapshotUrl).toBe(`/skins/${res.body.id}/snapshot`);
+    expect(list.body.skins[0].web).toEqual({
+      persistentLibraryShell: false,
+      collectionsShortcutList: false,
+      detailLibrariesToolbar: false,
+      libraryPagesVerticalList: false,
+    });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
     expect(css.status).toBe(200);
@@ -98,6 +104,44 @@ describe("skins routes", () => {
     expect(css.text).toContain("--v: 2");
 
     await request(app).delete(`/skins/${id1}`).set("X-Auth-Token", token);
+  });
+
+  test("GET /skins exposes skin.json web flags", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(
+        JSON.stringify({
+          name: "Web Flags Theme",
+          web: {
+            persistentLibraryShell: true,
+            collectionsShortcutList: true,
+            detailLibrariesToolbar: false,
+            libraryPagesVerticalList: true,
+            extraIgnored: "x",
+          },
+        }),
+        "utf8"
+      )
+    );
+    zip.addFile("bundle.css", Buffer.from("body {}", "utf8"));
+    const res = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip.toBuffer(), "w.zip");
+    expect(res.status).toBe(201);
+
+    const list = await request(app).get("/skins");
+    expect(list.status).toBe(200);
+    const row = list.body.skins.find((s) => s.id === res.body.id);
+    expect(row.web).toEqual({
+      persistentLibraryShell: true,
+      collectionsShortcutList: true,
+      detailLibrariesToolbar: false,
+      libraryPagesVerticalList: true,
+    });
+
+    await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
   });
 
   test("POST /skins without token returns 401 when auth required", async () => {

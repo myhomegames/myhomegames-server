@@ -95,6 +95,29 @@ function countUuidSkinDirs(root) {
 }
 
 /** Same display name as an installed skin → replace that folder (keeps UUID / activeSkinId). */
+/**
+ * Optional skin.json → `web` booleans for the SPA (no skin names in the client).
+ * @param {unknown} meta
+ * @returns {{ persistentLibraryShell: boolean, collectionsShortcutList: boolean, detailLibrariesToolbar: boolean, libraryPagesVerticalList: boolean }}
+ */
+function extractWebManifest(meta) {
+  const base = {
+    persistentLibraryShell: false,
+    collectionsShortcutList: false,
+    detailLibrariesToolbar: false,
+    libraryPagesVerticalList: false,
+  };
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return base;
+  const w = meta.web;
+  if (!w || typeof w !== "object" || Array.isArray(w)) return base;
+  return {
+    persistentLibraryShell: w.persistentLibraryShell === true,
+    collectionsShortcutList: w.collectionsShortcutList === true,
+    detailLibrariesToolbar: w.detailLibrariesToolbar === true,
+    libraryPagesVerticalList: w.libraryPagesVerticalList === true,
+  };
+}
+
 function findExistingSkinIdByName(skinsDir, displayName) {
   const target = typeof displayName === "string" ? displayName.trim() : "";
   if (!target || !fs.existsSync(skinsDir)) return null;
@@ -156,6 +179,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
           id: ent.name,
           name,
           snapshotUrl: `/skins/${encodeURIComponent(ent.name)}/snapshot`,
+          web: extractWebManifest(meta),
         });
       }
       skins.sort((a, b) => a.name.localeCompare(b.name));
