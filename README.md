@@ -112,7 +112,7 @@ ${METADATA_PATH}/
 ├── settings.json                    # Application settings (language, etc.)
 ├── skins/                           # Web UI themes (zip-installed or manual)
 │   └── ${uuid}/                     # id folder name is the skin id
-│       ├── skin.json                # { "name", ... }
+│       ├── skin.json                # { "name", "web": { persistentLibraryShell, collectionsShortcutList, detailLibrariesToolbar, libraryPagesVerticalList } }
 │       └── bundle.css               # Full theme CSS (or multiple .css files; see SKINS.md in myhomegames-skins)
 └── content/                         # Game and library content metadata
     ├── games/
