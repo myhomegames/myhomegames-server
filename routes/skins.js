@@ -98,13 +98,12 @@ function countUuidSkinDirs(root) {
 /**
  * Optional skin.json → `web` booleans for the SPA (no skin names in the client).
  * @param {unknown} meta
- * @returns {{ persistentLibraryShell: boolean, collectionsShortcutList: boolean, detailLibrariesToolbar: boolean, libraryPagesVerticalList: boolean }}
+ * @returns {{ persistentLibraryShell: boolean, collectionsShortcutList: boolean, libraryPagesVerticalList: boolean }}
  */
 function extractWebManifest(meta) {
   const base = {
     persistentLibraryShell: false,
     collectionsShortcutList: false,
-    detailLibrariesToolbar: false,
     libraryPagesVerticalList: false,
   };
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return base;
@@ -113,7 +112,6 @@ function extractWebManifest(meta) {
   return {
     persistentLibraryShell: w.persistentLibraryShell === true,
     collectionsShortcutList: w.collectionsShortcutList === true,
-    detailLibrariesToolbar: w.detailLibrariesToolbar === true,
     libraryPagesVerticalList: w.libraryPagesVerticalList === true,
   };
 }

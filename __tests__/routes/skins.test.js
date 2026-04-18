@@ -59,7 +59,6 @@ describe("skins routes", () => {
     expect(list.body.skins[0].web).toEqual({
       persistentLibraryShell: false,
       collectionsShortcutList: false,
-      detailLibrariesToolbar: false,
       libraryPagesVerticalList: false,
     });
 
@@ -116,7 +115,6 @@ describe("skins routes", () => {
           web: {
             persistentLibraryShell: true,
             collectionsShortcutList: true,
-            detailLibrariesToolbar: false,
             libraryPagesVerticalList: true,
             extraIgnored: "x",
           },
@@ -137,7 +135,6 @@ describe("skins routes", () => {
     expect(row.web).toEqual({
       persistentLibraryShell: true,
       collectionsShortcutList: true,
-      detailLibrariesToolbar: false,
       libraryPagesVerticalList: true,
     });
 
