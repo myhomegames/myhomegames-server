@@ -60,6 +60,8 @@ describe("skins routes", () => {
       persistentLibraryShell: false,
       collectionsShortcutList: false,
       libraryPagesVerticalList: false,
+      headerTitleFilter: false,
+      disableAlphabetNavigator: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -116,6 +118,8 @@ describe("skins routes", () => {
             persistentLibraryShell: true,
             collectionsShortcutList: true,
             libraryPagesVerticalList: true,
+            headerTitleFilter: true,
+            disableAlphabetNavigator: true,
             extraIgnored: "x",
           },
         }),
@@ -136,6 +140,8 @@ describe("skins routes", () => {
       persistentLibraryShell: true,
       collectionsShortcutList: true,
       libraryPagesVerticalList: true,
+      headerTitleFilter: true,
+      disableAlphabetNavigator: true,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
