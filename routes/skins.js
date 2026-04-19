@@ -97,27 +97,41 @@ function countUuidSkinDirs(root) {
 /** Same display name as an installed skin → replace that folder (keeps UUID / activeSkinId). */
 /**
  * Optional skin.json → `web` booleans for the SPA (no skin names in the client).
+ * Keep keys in sync with myhomegames-web `skinWebManifest.ts` (WEB_KEYS + sidebarSearchPopup default).
  * @param {unknown} meta
- * @returns {{ persistentLibraryShell: boolean, collectionsShortcutList: boolean, libraryPagesVerticalList: boolean, headerTitleFilter: boolean, disableAlphabetNavigator: boolean }}
  */
 function extractWebManifest(meta) {
-  const base = {
+  const out = {
     persistentLibraryShell: false,
     collectionsShortcutList: false,
     libraryPagesVerticalList: false,
     headerTitleFilter: false,
     disableAlphabetNavigator: false,
+    sidebarSearchPopup: false,
+    ownedGamesFirstInGamesSidebar: false,
   };
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return base;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return out;
   const w = meta.web;
-  if (!w || typeof w !== "object" || Array.isArray(w)) return base;
-  return {
-    persistentLibraryShell: w.persistentLibraryShell === true,
-    collectionsShortcutList: w.collectionsShortcutList === true,
-    libraryPagesVerticalList: w.libraryPagesVerticalList === true,
-    headerTitleFilter: w.headerTitleFilter === true,
-    disableAlphabetNavigator: w.disableAlphabetNavigator === true,
-  };
+  if (!w || typeof w !== "object" || Array.isArray(w)) return out;
+
+  out.persistentLibraryShell = w.persistentLibraryShell === true;
+  out.collectionsShortcutList = w.collectionsShortcutList === true;
+  out.libraryPagesVerticalList = w.libraryPagesVerticalList === true;
+  out.headerTitleFilter = w.headerTitleFilter === true;
+  out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
+  out.ownedGamesFirstInGamesSidebar = w.ownedGamesFirstInGamesSidebar === true;
+
+  if (out.headerTitleFilter) {
+    if (!("sidebarSearchPopup" in w)) {
+      out.sidebarSearchPopup = true;
+    } else {
+      out.sidebarSearchPopup = w.sidebarSearchPopup === true;
+    }
+  } else {
+    out.sidebarSearchPopup = w.sidebarSearchPopup === true;
+  }
+
+  return out;
 }
 
 function findExistingSkinIdByName(skinsDir, displayName) {

@@ -62,6 +62,8 @@ describe("skins routes", () => {
       libraryPagesVerticalList: false,
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
+      sidebarSearchPopup: false,
+      ownedGamesFirstInGamesSidebar: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -142,6 +144,8 @@ describe("skins routes", () => {
       libraryPagesVerticalList: true,
       headerTitleFilter: true,
       disableAlphabetNavigator: true,
+      sidebarSearchPopup: true,
+      ownedGamesFirstInGamesSidebar: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
