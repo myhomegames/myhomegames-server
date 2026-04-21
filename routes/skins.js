@@ -94,23 +94,31 @@ function countUuidSkinDirs(root) {
     .length;
 }
 
+/*
+ * Default shape of the SPA skin web manifest. All flags are opt-in (false by default).
+ * Keep keys in sync with myhomegames-web `skinWebManifest.ts` (WEB_KEYS + sidebarSearchPopup default).
+ * Exported so server.js can reuse it when hydrating `settings.skinWeb` from the active skin.
+ */
+const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
+  persistentLibraryShell: false,
+  collectionsShortcutList: false,
+  libraryPagesVerticalList: false,
+  headerTitleFilter: false,
+  disableAlphabetNavigator: false,
+  sidebarSearchPopup: false,
+  ownedGamesFirstInGamesSidebar: false,
+  compactCollectionLikeDetail: false,
+});
+
+const SKIN_WEB_KEYS = Object.freeze(Object.keys(DEFAULT_SKIN_WEB_MANIFEST));
+
 /** Same display name as an installed skin → replace that folder (keeps UUID / activeSkinId). */
 /**
  * Optional skin.json → `web` booleans for the SPA (no skin names in the client).
- * Keep keys in sync with myhomegames-web `skinWebManifest.ts` (WEB_KEYS + sidebarSearchPopup default).
  * @param {unknown} meta
  */
 function extractWebManifest(meta) {
-  const out = {
-    persistentLibraryShell: false,
-    collectionsShortcutList: false,
-    libraryPagesVerticalList: false,
-    headerTitleFilter: false,
-    disableAlphabetNavigator: false,
-    sidebarSearchPopup: false,
-    ownedGamesFirstInGamesSidebar: false,
-    compactCollectionLikeDetail: false,
-  };
+  const out = { ...DEFAULT_SKIN_WEB_MANIFEST };
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return out;
   const w = meta.web;
   if (!w || typeof w !== "object" || Array.isArray(w)) return out;
@@ -355,9 +363,28 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
   });
 }
 
+/**
+ * Reads `web` flags directly from the on-disk skin.json of an installed skin.
+ * Returns the default manifest (all false) when the skin is missing/invalid.
+ * Used by server.js to hydrate `settings.skinWeb` when the user activates a skin.
+ */
+function readInstalledSkinWebFlags(metadataPath, skinId) {
+  const normalizedId = typeof skinId === "string" ? skinId.trim() : "";
+  if (!normalizedId || !isUuidSkinId(normalizedId)) {
+    return { ...DEFAULT_SKIN_WEB_MANIFEST };
+  }
+  const skinDir = path.join(skinsRoot(metadataPath), normalizedId);
+  const meta = readJsonFile(path.join(skinDir, "skin.json"), null);
+  return extractWebManifest(meta);
+}
+
 module.exports = {
   registerSkinsRoutes,
   skinsRoot,
   readBundleCssFromSkinDir,
   isUuidSkinId,
+  extractWebManifest,
+  readInstalledSkinWebFlags,
+  DEFAULT_SKIN_WEB_MANIFEST,
+  SKIN_WEB_KEYS,
 };

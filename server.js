@@ -321,9 +321,15 @@ async function ensureDefaultSkinInstalled() {
       currentSettings && typeof currentSettings === "object" && !Array.isArray(currentSettings)
         ? currentSettings
         : {};
+    /*
+     * Hydrate settings.skinWeb from the just-installed default skin: same rule as PUT /settings
+     * when activeSkinId changes. Keeps the invariant "settings mirror the active skin's flags
+     * until the user tweaks them" also on first boot (when no one calls PUT /settings yet).
+     */
     writeJsonFile(SETTINGS_FILE, {
       ...safeSettings,
       activeSkinId: installed.id,
+      skinWeb: skinsRoutes.readInstalledSkinWebFlags(METADATA_PATH, installed.id),
     });
     console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${DEFAULT_SKIN_URL}`);
     console.log(`Selected default skin "${installed.name}" (${installed.id})`);
@@ -761,6 +767,29 @@ app.post("/reload-games", requireToken, (req, res) => {
   });
 });
 
+/*
+ * Sanitize an arbitrary value so it becomes a full skin web manifest: every known flag is
+ * present and strictly boolean. Unknown keys are dropped. `sidebarSearchPopup` inherits
+ * `headerTitleFilter` when not explicitly provided, mirroring `normalizeSkinWebManifest`
+ * on the client so a skin that only ships `headerTitleFilter: true` still gets the sidebar
+ * search popup enabled by default.
+ */
+function normalizeSkinWebManifestValue(raw) {
+  const out = { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const key of skinsRoutes.SKIN_WEB_KEYS) {
+    if (raw[key] === true) out[key] = true;
+  }
+  if (out.headerTitleFilter) {
+    if (!("sidebarSearchPopup" in raw)) {
+      out.sidebarSearchPopup = true;
+    } else {
+      out.sidebarSearchPopup = raw.sidebarSearchPopup === true;
+    }
+  }
+  return out;
+}
+
 // Helper function to read settings
 function readSettings() {
   const defaultSettings = {
@@ -770,13 +799,25 @@ function readSettings() {
     activeSkinId: "",
     twitchClientId: "",
     twitchClientSecret: "",
+    skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object and merge with defaults for missing keys
   if (typeof settings !== 'object' || settings === null) {
     return defaultSettings;
   }
-  return { ...defaultSettings, ...settings };
+  /*
+   * `skinWeb` is a nested object: a simple spread would let a persisted partial (e.g. settings
+   * files written before this key existed) bypass the default shape. Normalize it so callers
+   * always see a full boolean manifest with the known keys.
+   */
+  return {
+    ...defaultSettings,
+    ...settings,
+    skinWeb: normalizeSkinWebManifestValue(
+      settings && typeof settings === "object" ? settings.skinWeb : undefined
+    ),
+  };
 }
 
 // Helper function to write settings
@@ -845,9 +886,36 @@ app.put("/settings", (req, res) => {
     }
   }
 
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? { ...req.body }
+    : {};
+
+  /*
+   * Skin flag behaviour:
+   *   - when the caller changes `activeSkinId`, the newly activated skin "establishes" the
+   *     settings.skinWeb: we overwrite it with the values declared in that skin.json's `web`
+   *     block, discarding any partial skinWeb the caller may have sent in the same request.
+   *   - when the caller sends only `skinWeb` (without activeSkinId), we validate it to a full
+   *     boolean manifest merged over the current settings.skinWeb so clients can toggle
+   *     individual flags without having to repeat the rest.
+   *   - any other path (neither field present) leaves skinWeb untouched.
+   */
+  if (typeof body.activeSkinId === "string") {
+    body.skinWeb = skinsRoutes.readInstalledSkinWebFlags(METADATA_PATH, body.activeSkinId);
+  } else if (body.skinWeb !== undefined) {
+    const partial = body.skinWeb && typeof body.skinWeb === "object" && !Array.isArray(body.skinWeb)
+      ? body.skinWeb
+      : {};
+    const merged = { ...currentSettings.skinWeb };
+    for (const key of skinsRoutes.SKIN_WEB_KEYS) {
+      if (key in partial) merged[key] = partial[key] === true;
+    }
+    body.skinWeb = normalizeSkinWebManifestValue(merged);
+  }
+
   const updatedSettings = {
     ...currentSettings,
-    ...req.body,
+    ...body,
   };
 
   const ok = writeSettings(updatedSettings);

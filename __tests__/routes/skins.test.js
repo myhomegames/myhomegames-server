@@ -160,4 +160,56 @@ describe("skins routes", () => {
     const res = await request(app).post("/skins").attach("archive", zip.toBuffer(), "x.zip");
     expect(res.status).toBe(401);
   });
+
+  test("PUT /settings with activeSkinId hydrates settings.skinWeb from skin.json", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(
+        JSON.stringify({
+          name: "Settings Hydration Theme",
+          web: {
+            persistentLibraryShell: true,
+            collectionsShortcutList: true,
+            compactCollectionLikeDetail: true,
+          },
+        }),
+        "utf8"
+      )
+    );
+    zip.addFile("bundle.css", Buffer.from("body {}", "utf8"));
+    const uploaded = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip.toBuffer(), "sh.zip");
+    expect(uploaded.status).toBe(201);
+
+    const putRes = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ activeSkinId: uploaded.body.id });
+    expect(putRes.status).toBe(200);
+    expect(putRes.body.settings.activeSkinId).toBe(uploaded.body.id);
+    expect(putRes.body.settings.skinWeb).toEqual({
+      persistentLibraryShell: true,
+      collectionsShortcutList: true,
+      libraryPagesVerticalList: false,
+      headerTitleFilter: false,
+      disableAlphabetNavigator: false,
+      sidebarSearchPopup: false,
+      ownedGamesFirstInGamesSidebar: false,
+      compactCollectionLikeDetail: true,
+    });
+
+    // A subsequent partial update only touches the requested flag.
+    const tweak = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ skinWeb: { compactCollectionLikeDetail: false } });
+    expect(tweak.status).toBe(200);
+    expect(tweak.body.settings.skinWeb.compactCollectionLikeDetail).toBe(false);
+    expect(tweak.body.settings.skinWeb.persistentLibraryShell).toBe(true);
+
+    await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
+  });
 });
