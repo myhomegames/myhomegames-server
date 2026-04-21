@@ -109,6 +109,7 @@ function extractWebManifest(meta) {
     disableAlphabetNavigator: false,
     sidebarSearchPopup: false,
     ownedGamesFirstInGamesSidebar: false,
+    compactCollectionLikeDetail: false,
   };
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) return out;
   const w = meta.web;
@@ -120,6 +121,7 @@ function extractWebManifest(meta) {
   out.headerTitleFilter = w.headerTitleFilter === true;
   out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
   out.ownedGamesFirstInGamesSidebar = w.ownedGamesFirstInGamesSidebar === true;
+  out.compactCollectionLikeDetail = w.compactCollectionLikeDetail === true;
 
   if (out.headerTitleFilter) {
     if (!("sidebarSearchPopup" in w)) {
