@@ -133,17 +133,16 @@ describe('GET /launcher', () => {
       const path = require('path');
       const { testMetadataPath } = require('./setup');
       
-      // Create game directory if it doesn't exist
       const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      fs.mkdirSync(gameDir, { recursive: true });
+      const scriptsDir = path.join(gameDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create two executable files
       const script1Content = '#!/bin/bash\necho "Script 1"';
       const script2Content = '#!/bin/bash\necho "Script 2"';
-      fs.writeFileSync(path.join(gameDir, 'script1.sh'), script1Content);
-      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
-      fs.writeFileSync(path.join(gameDir, 'script2.sh'), script2Content);
-      fs.chmodSync(path.join(gameDir, 'script2.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script1.sh'), script1Content);
+      fs.chmodSync(path.join(scriptsDir, 'script1.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script2.sh'), script2Content);
+      fs.chmodSync(path.join(scriptsDir, 'script2.sh'), 0o755);
       
       // Update game metadata to include both executables
       const metadataPath = path.join(gameDir, 'metadata.json');
@@ -189,14 +188,13 @@ describe('GET /launcher', () => {
       const path = require('path');
       const { testMetadataPath } = require('./setup');
       
-      // Create game directory if it doesn't exist
       const gameDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      fs.mkdirSync(gameDir, { recursive: true });
+      const scriptsDir = path.join(gameDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create an executable file
       const scriptContent = '#!/bin/bash\necho "Script 1"';
-      fs.writeFileSync(path.join(gameDir, 'script1.sh'), scriptContent);
-      fs.chmodSync(path.join(gameDir, 'script1.sh'), 0o755);
+      fs.writeFileSync(path.join(scriptsDir, 'script1.sh'), scriptContent);
+      fs.chmodSync(path.join(scriptsDir, 'script1.sh'), 0o755);
       
       // Update game metadata to include only script1
       const metadataPath = path.join(gameDir, 'metadata.json');
@@ -263,6 +261,26 @@ describe('POST /reload-games', () => {
   });
 });
 
+describe('GET /version', () => {
+  test('should return version without token (public endpoint)', async () => {
+    const response = await request(app)
+      .get('/version')
+      .expect(200);
+    expect(response.body).toHaveProperty('version');
+    expect(typeof response.body.version).toBe('string');
+    expect(response.body.version).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test('should return version matching server package.json', async () => {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const response = await request(app)
+      .get('/version')
+      .expect(200);
+    expect(response.body.version).toBe(pkg.version);
+  });
+});
+
 describe('GET /settings', () => {
   test('should return settings', async () => {
     const response = await request(app)
@@ -271,6 +289,15 @@ describe('GET /settings', () => {
       .expect(200);
     
     expect(response.body).toHaveProperty('language');
+  });
+
+  test('should return settings without token (public endpoint)', async () => {
+    const response = await request(app)
+      .get('/settings')
+      .expect(200);
+    
+    expect(response.body).toHaveProperty('language');
+    expect(response.body).toHaveProperty('twitchLoginEnabled');
   });
 
   test('should return default settings if file does not exist', async () => {
@@ -284,23 +311,15 @@ describe('GET /settings', () => {
     
     const response = await request(app)
       .get('/settings')
-      .set('X-Auth-Token', 'test-token')
       .expect(200);
     
     expect(response.body).toHaveProperty('language', 'en');
+    expect(response.body).toHaveProperty('twitchLoginEnabled', false);
     
     // Restore settings file
     if (fs.existsSync(backupPath)) {
       fs.renameSync(backupPath, settingsPath);
     }
-  });
-
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/settings')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 });
 
@@ -343,13 +362,36 @@ describe('PUT /settings', () => {
     expect(response.body.settings).toHaveProperty('language');
   });
 
-  test('should require authentication', async () => {
+  test('should require authentication when twitchLoginEnabled is true', async () => {
     const response = await request(app)
       .put('/settings')
       .send({ language: 'en' })
       .expect(401);
     
     expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+});
+
+describe('When twitchLoginEnabled is false', () => {
+  test('should allow GET /libraries/library/games without token', async () => {
+    const settingsPath = path.join(testMetadataPath, 'settings.json');
+    const backupPath = settingsPath + '.backup';
+    
+    if (fs.existsSync(settingsPath)) {
+      fs.copyFileSync(settingsPath, backupPath);
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify({ language: 'en', twitchLoginEnabled: false }, null, 2));
+    
+    const response = await request(app)
+      .get('/libraries/library/games')
+      .expect(200);
+    
+    expect(response.body).toHaveProperty('games');
+    
+    if (fs.existsSync(backupPath)) {
+      fs.copyFileSync(backupPath, settingsPath);
+      fs.unlinkSync(backupPath);
+    }
   });
 });
 

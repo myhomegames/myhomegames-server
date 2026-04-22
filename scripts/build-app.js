@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { buildWindowsUnifiedExe } = require('./windows-release-assets');
 
 const APP_NAME = 'MyHomeGames';
 const APP_BUNDLE = `${APP_NAME}.app`;
@@ -574,6 +575,19 @@ img.save(sys.argv[1], 'PNG')
     }
   }
   
+  // PNG for Windows tray launcher — same pixels as macOS AppIcon (from iconset)
+  if (iconCreated) {
+    const trayDest = path.join(BUILD_DIR, 'MyHomeGames-Tray.png');
+    const traySrc =
+      ['icon_32x32.png', 'icon_64x64.png', 'icon_16x16.png']
+        .map((name) => path.join(iconSetPath, name))
+        .find((p) => fs.existsSync(p));
+    if (traySrc) {
+      fs.copyFileSync(traySrc, trayDest);
+      console.log('✅ Windows tray icon: MyHomeGames-Tray.png (same asset as macOS AppIcon)');
+    }
+  }
+
   // Convert iconset to .icns if icon was created
   if (iconCreated) {
     const icnsPath = path.join(RESOURCES_PATH, 'AppIcon.icns');
@@ -724,7 +738,7 @@ function keepOnlyFinalArtifacts() {
   const keepPatterns = [
     /\.pkg$/,
     /-linux-x64\.tar\.gz$/,
-    /-win-x64\.zip$/,
+    /^MyHomeGames-.*-win-x64\.zip$/,
     /^myhomegames-server_.*_amd64\.deb$/,
     /^myhomegames-server-.*\.x86_64\.rpm$/,
   ];
@@ -758,19 +772,10 @@ if (linuxExe || winExe) {
   }
 
   if (winExe) {
-    if (!fs.existsSync(path.join(BUILD_DIR, '.env'))) {
-      fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
-    }
-    if (!fs.existsSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME))) {
-      fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
-    }
-    const zipName = `MyHomeGames-${version}-win-x64.zip`;
-    const zipPath = path.join(BUILD_DIR, zipName);
     try {
-      execSync(`cd "${BUILD_DIR}" && zip -q "${zipPath}" "${winExe}" ".env" "${SERVER_INFO_FILENAME}"`, { stdio: 'inherit' });
-      console.log(`✅ Windows: ${zipName}`);
+      buildWindowsUnifiedExe();
     } catch (e) {
-      console.log('⚠️  Windows zip failed:', e.message);
+      console.log('⚠️  Windows packaging failed:', e.message);
     }
   }
 

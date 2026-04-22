@@ -36,7 +36,7 @@ For HTTPS support, the server can run both HTTP and HTTPS simultaneously.
 
 ### SSL Certificates
 
-**Automatic Certificate Generation**: SSL certificates are automatically generated in the `metadata_path/certs/` directory on first startup when HTTPS is enabled. The server will create self-signed certificates (`key.pem` and `cert.pem`) if they don't already exist.
+**Automatic Certificate Generation**: SSL certificates are automatically generated in the `metadata_path/certs/` directory on first startup when HTTPS is enabled. The server will create self-signed certificates (`key.pem` and `cert.pem`) if they don't already exist. On systems without `openssl` in `PATH` (typical on Windows), certificates are generated with Node.js via the `selfsigned` package—no OpenSSL install required.
 
 **Manual Certificate Generation** (optional): If you need to manually generate certificates, you can do so:
 
@@ -124,6 +124,9 @@ For development, the server uses the following environment variables:
 - `API_BASE` - Base URL of the API server (optional for development)
 - `METADATA_PATH` - Path where game metadata are stored
   - Default: `$HOME/Library/Application Support/MyHomeGames`
+- `DEFAULT_SKIN_URL` - Optional zip URL for first-run default skin installation
+  - Default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`
+  - Applied only when `METADATA_PATH/skins` has no installed skins; the installed skin is also selected as active
 
 ## Development Authentication
 
@@ -190,7 +193,11 @@ The full build (`npm run build`) produces packages for multiple platforms. Requi
 - **Linux (.tar.gz):** No extra tools; Node and npm only.
 - **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
 - **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
-- **Windows (.zip):** No extra tools; Node and npm only.
+- **Windows:** Node and npm; **`npm run build:win-unified`** and the full **`npm run build`** need **Go 1.21+** on `PATH`. The Windows release artifact is **`MyHomeGames-<ver>-win-x64.zip`**, a zip containing **`MyHomeGames-<ver>-win-x64.exe`**: a single executable that **embeds** the `pkg` server binary, tray PowerShell script, `.env`, `server-info.json`, optional `MyHomeGames-Tray.png`, and `README-WINDOWS.txt`. On first run it extracts to `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\` and starts the tray. **`npm run build:win-unified`** runs **`pkg`** if the Windows server exe is missing from `build/`. Full **`npm run build`** produces the `.exe` and `.zip` after the macOS icon step so `MyHomeGames-Tray.png` can be included in the embedded payload when the icon is generated.
+
+**Windows releases (unsigned binaries):** End users may see **SmartScreen** (e.g. *Consenti sull'app* / Run anyway) or **Defender** prompts on first run. This is expected for unsigned `.exe` files; **`scripts/README-WINDOWS.txt`** explains **Allow on device** / **Run anyway** so users can proceed safely when installing from official releases.
+
+**Windows tray script (`windows-tray-launcher.ps1`):** Saved as **UTF-8 with BOM** so **Windows PowerShell 5.1** parses strings correctly. Prefer **ASCII** in quoted strings (e.g. `-` not em dash `—`) to avoid parser errors if the BOM is ever stripped.
 
 Temporary build files (including RPM working directory) are created under `build/` and removed at the end; only the final packages remain in `build/`.
 

@@ -8,7 +8,7 @@
 
 const request = require("supertest");
 
-function runCollectionLikeTests(config) {
+function runCollectionLikeTests(config, parentApp = null) {
   const {
     routeBase,
     listKey,
@@ -17,15 +17,25 @@ function runCollectionLikeTests(config) {
     coverPrefix,
     contentFolder,
     gameField,
+    expectedCreateStatus = 201,
+    skipEnsureBatchTest = false,
+    skipDeleteAfterRemovingFromGame = false,
   } = config;
 
   require("../setup");
 
-  let app;
+  let app = parentApp;
 
   beforeAll(() => {
-    delete require.cache[require.resolve("../../server.js")];
-    app = require("../../server.js");
+    if (typeof parentApp === "function") {
+      app = parentApp();
+    } else if (parentApp) {
+      app = parentApp;
+    }
+    if (!app) {
+      delete require.cache[require.resolve("../../server.js")];
+      app = require("../../server.js");
+    }
   });
 
   afterAll(async () => {
@@ -47,7 +57,7 @@ function runCollectionLikeTests(config) {
       .set("X-Auth-Token", "test-token")
       .send({ title: uniqueTitle, summary: "Test summary" });
 
-    if (postRes.status === 201 && postRes.body[singleResponseKey]) {
+    if (postRes.status === expectedCreateStatus && postRes.body[singleResponseKey]) {
       const created = postRes.body[singleResponseKey];
       sharedItem = { id: created.id, name: created.title };
     }
@@ -74,13 +84,13 @@ function runCollectionLikeTests(config) {
       expect(response.body).toHaveProperty("error", "Title is required");
     });
 
-    test(`should create ${humanNameLower} and return 201 with body`, async () => {
+    test(`should create ${humanNameLower} and return ${expectedCreateStatus} with body`, async () => {
       const title = `New ${humanName} ${Date.now()}`;
       const response = await request(app)
         .post(normalizedRouteBase)
         .set("X-Auth-Token", "test-token")
         .send({ title, summary: "A summary" })
-        .expect(201);
+        .expect(expectedCreateStatus);
 
       expect(response.body).toHaveProperty("status", "success");
       expect(response.body).toHaveProperty(singleResponseKey);
@@ -109,6 +119,7 @@ function runCollectionLikeTests(config) {
 
   describe("ensureBatch skips negative ids", () => {
     test(`PUT game with negative ${gameField} id should not create new ${humanNameLower}`, async () => {
+      if (skipEnsureBatchTest) return;
       const listBefore = await request(app)
         .get(normalizedRouteBase)
         .set("X-Auth-Token", "test-token")
@@ -282,6 +293,7 @@ function runCollectionLikeTests(config) {
 
   describe(`DELETE ${normalizedRouteBase}/:id`, () => {
     test(`should delete ${humanNameLower} after removing from game`, async () => {
+      if (skipDeleteAfterRemovingFromGame) return;
       const created = getItem();
       if (!created) return;
 

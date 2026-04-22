@@ -28,7 +28,9 @@ function readJsonFile(filePath, defaultValue = null) {
       return JSON.parse(txt);
     }
   } catch (e) {
-    console.error(`Failed to load ${filePath}:`, e.message);
+    if (process.env.NODE_ENV !== 'test') {
+      console.error(`Failed to load ${filePath}:`, e.message);
+    }
   }
   return defaultValue;
 }

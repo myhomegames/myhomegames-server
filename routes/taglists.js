@@ -3,6 +3,7 @@ const path = require("path");
 const multer = require("multer");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { deleteMediaFile } = require("../utils/gameMediaUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
 
 function normalizeRouteBase(routeBase) {
   if (!routeBase.startsWith("/")) {
@@ -71,18 +72,21 @@ function createTagRoutes(config) {
           title: metadata.title,
           showTitle: metadata.showTitle,
         };
-        // Same pattern as library (games): local file or fallback. Library fallback = IGDB; tags fallback = this URL (redirects to FRONTEND_URL)
         const coverPath = path.join(tagsDir, folderName, "cover.webp");
-        if (fs.existsSync(coverPath)) {
+        const hasCover = fs.existsSync(coverPath); // true only when cover.webp exists on disk
+        if (hasCover) {
           tagData.cover = `/${coverPrefix}/${encodeURIComponent(metadata.title)}`;
         } else {
           tagData.cover = `${normalizedRouteBase}/${tagId}/cover.webp`;
         }
+        tagData.hasCover = hasCover;
         tags.push(tagData);
       }
     });
 
-    tags.sort((a, b) => a.title.localeCompare(b.title));
+    tags.sort((a, b) =>
+      getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+    );
 
     return tags;
   }
@@ -395,6 +399,9 @@ function createTagRoutes(config) {
           if (tag.cover) {
             tagData.cover = tag.cover;
           }
+          if (tag.hasCover !== undefined) {
+            tagData.hasCover = tag.hasCover;
+          }
           if (tag.showTitle !== undefined) {
             tagData.showTitle = tag.showTitle;
           }
@@ -467,7 +474,9 @@ function createTagRoutes(config) {
         if (updatedTag && updatedTag.cover) {
           tagData.cover = updatedTag.cover;
         }
-
+        if (updatedTag && updatedTag.hasCover !== undefined) {
+          tagData.hasCover = updatedTag.hasCover;
+        }
         res.json({
           status: "success",
           [responseKey]: tagData,
@@ -542,6 +551,7 @@ function createTagRoutes(config) {
             id: tag.id,
             title: tag.title,
             cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
+            hasCover: true, // file was just written
           },
         });
       } catch (error) {
@@ -564,15 +574,13 @@ function createTagRoutes(config) {
           mediaType: "cover",
         });
 
+        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
         const tagData = {
           id: tag.id,
           title: tag.title,
+          cover: `${normalizedRouteBase}/${tag.id}/cover.webp`,
+          hasCover: fs.existsSync(coverPath),
         };
-        const coverPath = path.join(metadataPath, "content", contentFolder, String(tag.id), "cover.webp");
-        if (fs.existsSync(coverPath)) {
-          tagData.cover = `${normalizedRouteBase}/${tag.id}/cover.webp`;
-        }
-
         res.json({
           status: "success",
           [responseKey]: tagData,
@@ -611,13 +619,8 @@ function createTagRoutes(config) {
       return false;
     }
 
-    // Only delete if the tag has no cover (user may want to keep tags that have a custom cover)
-    const tagDir = getTagDir(metadataPath, tagId);
-    const coverPath = path.join(tagDir, "cover.webp");
-    if (fs.existsSync(coverPath)) {
-      return false;
-    }
-
+    // Safe delete: remove tag metadata when no games reference it.
+    // Covers (cover.webp) do NOT block deletion; they remain on disk if present.
     deleteTag(metadataPath, tag.title);
 
     return true;

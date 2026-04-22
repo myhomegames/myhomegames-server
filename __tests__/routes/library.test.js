@@ -47,6 +47,7 @@ describe('GET /libraries/library/games', () => {
       expect(game).toHaveProperty('summary');
       expect(game).toHaveProperty('cover');
       expect(game.cover).toContain('/covers/');
+      expect(game).toHaveProperty('type');
     }
   });
 
@@ -156,6 +157,7 @@ describe('GET /games/:gameId', () => {
       expect(game).toHaveProperty('genre');
       expect(game).toHaveProperty('criticratings');
       expect(game).toHaveProperty('userratings');
+      expect(game).toHaveProperty('type');
     }
   });
 
@@ -335,6 +337,178 @@ describe('PUT /games/:gameId', () => {
     }
   });
 
+  test('should update screenshots and videos', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const screenshots = [`/games/${gameId}/screenshots/one.png`, `/games/${gameId}/screenshots/two.jpg`];
+      const videos = ['https://www.youtube.com/embed/abc123', 'https://www.youtube-nocookie.com/embed/def456'];
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ screenshots, videos })
+        .expect(200);
+
+      expect(updateResponse.body).toHaveProperty('status', 'success');
+      expect(updateResponse.body.game).toHaveProperty('screenshots');
+      expect(updateResponse.body.game.screenshots).toEqual(screenshots);
+      expect(updateResponse.body.game).toHaveProperty('videos');
+      expect(updateResponse.body.game.videos).toEqual(videos);
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.screenshots).toEqual(screenshots);
+      expect(verifyResponse.body.videos).toEqual(videos);
+    }
+  });
+
+  test('should update alternativeNames and websites', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const alternativeNames = ['Alt Name 1', 'Alt Name 2'];
+      const websites = [
+        { url: 'https://store.steampowered.com/app/123' },
+        { url: 'https://www.gog.com/game/foo', category: 1 },
+      ];
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ alternativeNames, websites })
+        .expect(200);
+
+      expect(updateResponse.body).toHaveProperty('status', 'success');
+      expect(updateResponse.body.game).toHaveProperty('alternativeNames');
+      expect(updateResponse.body.game.alternativeNames).toEqual(alternativeNames);
+      expect(updateResponse.body.game).toHaveProperty('websites');
+      expect(updateResponse.body.game.websites).toHaveLength(2);
+      expect(updateResponse.body.game.websites[0]).toMatchObject({ url: 'https://store.steampowered.com/app/123' });
+      expect(updateResponse.body.game.websites[1]).toMatchObject({ url: 'https://www.gog.com/game/foo' });
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.alternativeNames).toEqual(alternativeNames);
+      expect(verifyResponse.body.websites).toHaveLength(2);
+      expect(verifyResponse.body.websites[0].url).toBe('https://store.steampowered.com/app/123');
+      expect(verifyResponse.body.websites[1].url).toBe('https://www.gog.com/game/foo');
+    }
+  });
+
+  test('should update IGDB game type', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 1 })
+        .expect(200);
+
+      expect(updateResponse.body.game).toHaveProperty('type', 1);
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.type).toBe(1);
+    }
+  });
+
+  test('should accept legacy game type as object with id', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: { id: 2 } })
+        .expect(200);
+
+      expect(updateResponse.body.game).toHaveProperty('type', 2);
+    }
+  });
+
+  test('should clear game type with null', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 5 })
+        .expect(200);
+
+      const clearResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: null })
+        .expect(200);
+
+      expect(clearResponse.body.game.type).toBeNull();
+
+      const verifyResponse = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(verifyResponse.body.type).toBeNull();
+    }
+  });
+
+  test('should return 400 for invalid game type', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ type: 'not-a-valid-type' })
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error');
+      expect(String(response.body.error)).toContain('type');
+    }
+  });
+
   test('should return 400 when no valid fields provided', async () => {
     // First get a game ID from the library
     const libraryResponse = await request(app)
@@ -466,6 +640,44 @@ describe('PUT /games/:gameId', () => {
     }
   });
 
+  test('should update criticRating and userRating via PUT', async () => {
+    const igdbId = 888881;
+    const addRes = await request(app)
+      .post('/games/add-from-igdb')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        igdbId,
+        name: 'Test Game for Rating Update',
+        summary: 'Test',
+        releaseDate: 1609459200,
+        criticRating: 70,
+        userRating: 65
+      })
+      .expect(200);
+    const gameId = addRes.body.gameId;
+
+    const updateRes = await request(app)
+      .put(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .send({ criticRating: 85, userRating: 78 })
+      .expect(200);
+
+    expect(updateRes.body.game.criticratings).toBe(8.5);
+    expect(updateRes.body.game.userratings).toBe(7.8);
+
+    const getRes = await request(app)
+      .get(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(getRes.body.criticratings).toBe(8.5);
+    expect(getRes.body.userratings).toBe(7.8);
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
   test('should delete orphaned franchise when removing from game via PUT', async () => {
     const franchiseId = 66666;
     const igdbId = 999990;
@@ -560,7 +772,9 @@ describe('POST /games/:gameId/reload', () => {
       expect(game).toHaveProperty('title');
       expect(game).toHaveProperty('summary');
       expect(game).toHaveProperty('cover');
-      expect(game.cover).toContain('/covers/');
+      if (game.cover != null) {
+        expect(game.cover).toContain('/covers/');
+      }
       expect(game).toHaveProperty('day');
       expect(game).toHaveProperty('month');
       expect(game).toHaveProperty('year');
@@ -626,10 +840,11 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
-      expect(fs.existsSync(scriptPath)).toBe(true);
-      
-      // Verify file content
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const files = fs.readdirSync(scriptsDir);
+      const scriptFile = files.find(f => f.startsWith('01-') && f.endsWith('script.sh'));
+      expect(scriptFile).toBeTruthy();
+      const scriptPath = path.join(scriptsDir, scriptFile);
       const savedContent = fs.readFileSync(scriptPath);
       expect(savedContent.toString()).toBe(fileContent.toString());
       
@@ -639,7 +854,6 @@ describe('POST /games/:gameId/upload-executable', () => {
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      // Verify executables contains 'script'
       expect(gameResponse.body).toHaveProperty('executables');
       expect(Array.isArray(gameResponse.body.executables)).toBe(true);
       expect(gameResponse.body.executables).toContain('script');
@@ -673,12 +887,47 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.bat');
-      expect(fs.existsSync(scriptPath)).toBe(true);
-      
-      // Verify file content
-      const savedContent = fs.readFileSync(scriptPath);
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const batFile = fs.readdirSync(scriptsDir).find(f => f.endsWith('script.bat'));
+      expect(batFile).toBeTruthy();
+      const savedContent = fs.readFileSync(path.join(scriptsDir, batFile));
       expect(savedContent.toString()).toBe(fileContent.toString());
+    }
+  });
+
+  test('should overwrite existing script when replaceFileName is sent (no new 02- file)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const oldContent = Buffer.from('#!/bin/bash\necho "old"');
+      fs.writeFileSync(path.join(scriptsDir, '01-Play-99.sh'), oldContent);
+
+      const newContent = Buffer.from('#!/bin/bash\necho "new"');
+      await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('label', 'Play')
+        .field('platformId', '99')
+        .field('replaceFileName', '01-Play-99.sh')
+        .attach('file', newContent, 'replacement.sh')
+        .expect(200);
+
+      const disk = fs.readFileSync(path.join(scriptsDir, '01-Play-99.sh'));
+      expect(disk.toString()).toBe(newContent.toString());
+      const names = fs.readdirSync(scriptsDir);
+      expect(names.some((f) => /^02-.*Play.*99/.test(f))).toBe(false);
+      try {
+        fs.unlinkSync(path.join(scriptsDir, '01-Play-99.sh'));
+      } catch (_) {}
     }
   });
 
@@ -774,15 +1023,15 @@ describe('POST /games/:gameId/upload-executable', () => {
       
       expect(response.body).toHaveProperty('status', 'success');
       
-      // Verify the file was saved as script.sh (not my-custom-name.sh)
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my-custom-name.sh');
-      
-      expect(fs.existsSync(scriptPath)).toBe(true);
-      expect(fs.existsSync(customPath)).toBe(false);
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const files = fs.readdirSync(scriptsDir);
+      const scriptFile = files.find(f => f.endsWith('script.sh'));
+      expect(scriptFile).toBeTruthy();
+      expect(scriptFile).toMatch(/^\d+-script\.sh$/);
+      expect(files.some(f => f === 'my-custom-name.sh')).toBe(false);
     }
   });
 
@@ -804,16 +1053,13 @@ describe('POST /games/:gameId/upload-executable', () => {
         .expect(200);
       
       expect(response.body).toHaveProperty('status', 'success');
-      
-      // Verify the file was saved as script.bat (not my-custom-name.bat)
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.bat');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my-custom-name.bat');
-      
-      expect(fs.existsSync(scriptPath)).toBe(true);
-      expect(fs.existsSync(customPath)).toBe(false);
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const files = fs.readdirSync(scriptsDir);
+      expect(files.some(f => f.endsWith('script.bat') && /^\d+-/.test(f))).toBe(true);
+      expect(files.some(f => f === 'my-custom-name.bat')).toBe(false);
     }
   });
 
@@ -897,16 +1143,13 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(Array.isArray(response.body.game.executables)).toBe(true);
       expect(response.body.game.executables).toContain('play');
       
-      // Verify the file was saved as play.sh (not script.sh)
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const customPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'play.sh');
-      
-      expect(fs.existsSync(customPath)).toBe(true);
-      
-      // Verify file content
-      const savedContent = fs.readFileSync(customPath);
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const playFile = fs.readdirSync(scriptsDir).find(f => /^\d+-play\.sh$/.test(f));
+      expect(playFile).toBeTruthy();
+      const savedContent = fs.readFileSync(path.join(scriptsDir, playFile));
       expect(savedContent.toString()).toBe(fileContent.toString());
     }
   });
@@ -935,12 +1178,13 @@ describe('POST /games/:gameId/upload-executable', () => {
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const sanitizedPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'my_custom_label_.sh');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const sanitizedFile = fs.readdirSync(scriptsDir).find(f => f.includes('my_custom_label_') && f.endsWith('.sh'));
+      expect(sanitizedFile).toBeTruthy();
+      expect(sanitizedFile).toMatch(/^\d+-my_custom_label_\.sh$/);
       
-      expect(fs.existsSync(sanitizedPath)).toBe(true);
-      
-      // Verify executables contains original label (not sanitized) - this is what users see
-      expect(response.body.game.executables).toContain('my custom label!');
+      // Label in response is derived from filename (N- stripped), so sanitized form
+      expect(response.body.game.executables).toContain('my_custom_label_');
     }
   });
 
@@ -966,22 +1210,18 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(Array.isArray(response.body.game.executables)).toBe(true);
       expect(response.body.game.executables).toContain('script');
       
-      // Verify the file was saved as script.sh (default behavior)
       const { testMetadataPath } = require('../setup');
       const fs = require('fs');
       const path = require('path');
-      const scriptPath = path.join(testMetadataPath, 'content', 'games', String(gameId), 'script.sh');
-      
-      expect(fs.existsSync(scriptPath)).toBe(true);
-      
-      // Verify file content
-      const savedContent = fs.readFileSync(scriptPath);
-      expect(savedContent.toString()).toBe(fileContent.toString());
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      const scriptFiles = fs.readdirSync(scriptsDir).filter(f => /^\d+-script\.sh$/.test(f));
+      expect(scriptFiles.length).toBeGreaterThan(0);
+      const savedContent = fs.readFileSync(path.join(scriptsDir, scriptFiles[scriptFiles.length - 1]), 'utf8');
+      expect(savedContent).toContain('Default name test');
     }
   });
 
-  test('should preserve executables order from metadata.json', async () => {
-    // First get a game ID from the library
+  test('should preserve executables order from N- prefix in filename', async () => {
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
       .set('X-Auth-Token', 'test-token')
@@ -993,47 +1233,41 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      const metadataPath = path.join(gameContentDir, 'metadata.json');
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const existing = fs.readdirSync(scriptsDir);
+      existing.forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
       
-      // Create multiple executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
       const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      fs.writeFileSync(path.join(scriptsDir, '01-third.sh'), file3Content);
+      fs.writeFileSync(path.join(scriptsDir, '02-first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, '03-second.sh'), file2Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
-      
-      // Set a specific order in metadata.json (different from alphabetical)
-      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-      metadata.executables = ['third', 'first', 'second'];
-      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-      
-      // Reload the game to refresh cache
       await request(app)
         .post(`/games/${gameId}/reload`)
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      // Get the game and verify order is preserved
       const gameResponse = await request(app)
         .get(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      // Verify executables are in the order from metadata.json
       expect(gameResponse.body).toHaveProperty('executables');
       expect(gameResponse.body.executables).toEqual(['third', 'first', 'second']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '01-third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '02-first.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '03-second.sh'));
     }
   });
 
   test('should maintain executables order when updating via PUT', async () => {
-    // First get a game ID from the library
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
       .set('X-Auth-Token', 'test-token')
@@ -1045,28 +1279,25 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create multiple executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
       const file3Content = Buffer.from('#!/bin/bash\necho "third"');
+      fs.writeFileSync(path.join(scriptsDir, '01-first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, '02-second.sh'), file2Content);
+      fs.writeFileSync(path.join(scriptsDir, '03-third.sh'), file3Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      fs.writeFileSync(path.join(gameContentDir, 'third.sh'), file3Content);
-      
-      // Update executables with a specific order
       const updateResponse = await request(app)
         .put(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
         .send({ executables: ['second', 'third', 'first'] })
         .expect(200);
       
-      // Verify order is preserved in response
       expect(updateResponse.body.game).toHaveProperty('executables');
       expect(updateResponse.body.game.executables).toEqual(['second', 'third', 'first']);
       
-      // Reload the game and verify order is still preserved
       const gameResponse = await request(app)
         .get(`/games/${gameId}`)
         .set('X-Auth-Token', 'test-token')
@@ -1074,15 +1305,226 @@ describe('POST /games/:gameId/upload-executable', () => {
       
       expect(gameResponse.body.executables).toEqual(['second', 'third', 'first']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '01-second.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '02-third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '03-first.sh'));
+    }
+  });
+
+  test('should preserve file content when reordering executables via PUT (match by label+platformId)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const existing = fs.readdirSync(scriptsDir);
+      existing.forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      const contentColeco = Buffer.from('#!/bin/bash\necho "coleco"');
+      const contentFamily = Buffer.from('#!/bin/bash\necho "family"');
+      const contentVSmile = Buffer.from('#!/bin/bash\necho "vsmile"');
+      const contentSuperFamicom = Buffer.from('#!/bin/bash\necho "superfamicom"');
+      fs.writeFileSync(path.join(scriptsDir, '01-ColecoVision-35217721.sh'), contentColeco);
+      fs.writeFileSync(path.join(scriptsDir, '02-Family_Computer-1004170153.sh'), contentFamily);
+      fs.writeFileSync(path.join(scriptsDir, '03-V_Smile-1222250608.sh'), contentVSmile);
+      fs.writeFileSync(path.join(scriptsDir, '04-Super_Famicom-265924891.sh'), contentSuperFamicom);
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      // Reorder: move 03-V_Smile below 04-Super_Famicom (so new order: Coleco, Family, Super_Famicom, V_Smile)
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['ColecoVision', 'Family_Computer', 'Super_Famicom', 'V_Smile'],
+          executablePlatformIds: ['35217721', '1004170153', '265924891', '1222250608'],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['ColecoVision', 'Family_Computer', 'Super_Famicom', 'V_Smile']);
+      expect(updateResponse.body.game.executableFileNames).toContain('03-Super_Famicom-265924891.sh');
+      expect(updateResponse.body.game.executableFileNames).toContain('04-V_Smile-1222250608.sh');
+
+      // Content must follow the script identity, not position: 03-Super_Famicom must have Super_Famicom content, 04-V_Smile must have V_Smile content
+      const content03 = fs.readFileSync(path.join(scriptsDir, '03-Super_Famicom-265924891.sh'));
+      const content04 = fs.readFileSync(path.join(scriptsDir, '04-V_Smile-1222250608.sh'));
+      expect(content03.toString()).toBe(contentSuperFamicom.toString());
+      expect(content04.toString()).toBe(contentVSmile.toString());
+
+      const content01 = fs.readFileSync(path.join(scriptsDir, '01-ColecoVision-35217721.sh'));
+      const content02 = fs.readFileSync(path.join(scriptsDir, '02-Family_Computer-1004170153.sh'));
+      expect(content01.toString()).toBe(contentColeco.toString());
+      expect(content02.toString()).toBe(contentFamily.toString());
+
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) {
+          fs.unlinkSync(p);
+        }
+      });
+    }
+  });
+
+  test('should preserve content when all labels removed and reordered (executablePreviousFileNames)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      const contentA = Buffer.from('#!/bin/bash\necho "a"');
+      const contentB = Buffer.from('#!/bin/bash\necho "b"');
+      const contentC = Buffer.from('#!/bin/bash\necho "c"');
+      const contentD = Buffer.from('#!/bin/bash\necho "d"');
+      fs.writeFileSync(path.join(scriptsDir, '01-first.sh'), contentA);
+      fs.writeFileSync(path.join(scriptsDir, '02-second.sh'), contentB);
+      fs.writeFileSync(path.join(scriptsDir, '03-third.sh'), contentC);
+      fs.writeFileSync(path.join(scriptsDir, '04-fourth.sh'), contentD);
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      // Simulate: user removes all labels (all "script") and reorders to 04, 01, 03, 02
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['script', 'script', 'script', 'script'],
+          executablePlatformIds: ['', '', '', ''],
+          executablePreviousFileNames: ['04-fourth.sh', '01-first.sh', '03-third.sh', '02-second.sh'],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['script', 'script', 'script', 'script']);
+      expect(updateResponse.body.game.executableFileNames).toEqual(['01-script.sh', '02-script.sh', '03-script.sh', '04-script.sh']);
+
+      // Content must follow executablePreviousFileNames: slot 0 was 04-fourth → 01-script has "d", etc.
+      expect(fs.readFileSync(path.join(scriptsDir, '01-script.sh')).toString()).toBe(contentD.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '02-script.sh')).toString()).toBe(contentA.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '03-script.sh')).toString()).toBe(contentC.toString());
+      expect(fs.readFileSync(path.join(scriptsDir, '04-script.sh')).toString()).toBe(contentB.toString());
+
+      fs.readdirSync(scriptsDir).forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+    }
+  });
+
+  test('should rename existing file when only label changes (sync by position)', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const existing = fs.readdirSync(scriptsDir);
+      existing.forEach(f => {
+        const p = path.join(scriptsDir, f);
+        if (fs.statSync(p).isFile() && (f.endsWith('.sh') || f.endsWith('.bat'))) fs.unlinkSync(p);
+      });
+
+      fs.writeFileSync(path.join(scriptsDir, '01-script.sh'), Buffer.from('#!/bin/bash\necho "script"'));
+      fs.writeFileSync(path.join(scriptsDir, '02-ZX_Spectrum-1091661902.sh'), Buffer.from('#!/bin/bash\necho "zx"'));
+      fs.writeFileSync(path.join(scriptsDir, '03-bub.sh'), Buffer.from('#!/bin/bash\necho "bub"'));
+      fs.writeFileSync(path.join(scriptsDir, '04-scripta.sh'), Buffer.from('#!/bin/bash\necho "scripta"'));
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({
+          executables: ['script', 'ZX_Spectrum', 'bub', 'scriptaz'],
+          executablePlatformIds: ['', '1091661902', '', ''],
+        })
+        .expect(200);
+
+      expect(updateResponse.body.game.executables).toEqual(['script', 'ZX_Spectrum', 'bub', 'scriptaz']);
+      expect(updateResponse.body.game.executableFileNames).toContain('04-scriptaz.sh');
+
+      expect(fs.existsSync(path.join(scriptsDir, '04-scripta.sh'))).toBe(false);
+      expect(fs.existsSync(path.join(scriptsDir, '04-scriptaz.sh'))).toBe(true);
+      const content = fs.readFileSync(path.join(scriptsDir, '04-scriptaz.sh'), 'utf8');
+      expect(content).toContain('scripta');
+
+      fs.unlinkSync(path.join(scriptsDir, '01-script.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '02-ZX_Spectrum-1091661902.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '03-bub.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '04-scriptaz.sh'));
+    }
+  });
+
+  test('should delete all executables and remove scripts directory when PUT executables is null', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.writeFileSync(path.join(scriptsDir, '01-script.sh'), Buffer.from('#!/bin/bash\necho "x"'));
+
+      await request(app)
+        .post(`/games/${gameId}/reload`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      const updateResponse = await request(app)
+        .put(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .send({ executables: null })
+        .expect(200);
+
+      expect(updateResponse.body.game).toBeDefined();
+      expect(updateResponse.body.game.executables).toBeNull();
+
+      expect(fs.existsSync(scriptsDir)).toBe(false);
     }
   });
 
   test('should maintain existing order when uploading new executable', async () => {
-    // First get a game ID from the library
     const libraryResponse = await request(app)
       .get('/libraries/library/games')
       .set('X-Auth-Token', 'test-token')
@@ -1094,21 +1536,14 @@ describe('POST /games/:gameId/upload-executable', () => {
       const fs = require('fs');
       const path = require('path');
       const gameContentDir = path.join(testMetadataPath, 'content', 'games', String(gameId));
-      const metadataPath = path.join(gameContentDir, 'metadata.json');
+      const scriptsDir = path.join(gameContentDir, 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
       
-      // Create initial executable files
       const file1Content = Buffer.from('#!/bin/bash\necho "first"');
       const file2Content = Buffer.from('#!/bin/bash\necho "second"');
+      fs.writeFileSync(path.join(scriptsDir, '01-first.sh'), file1Content);
+      fs.writeFileSync(path.join(scriptsDir, '02-second.sh'), file2Content);
       
-      fs.writeFileSync(path.join(gameContentDir, 'first.sh'), file1Content);
-      fs.writeFileSync(path.join(gameContentDir, 'second.sh'), file2Content);
-      
-      // Set initial order in metadata.json
-      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-      metadata.executables = ['first', 'second'];
-      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-      
-      // Upload a new executable with label 'third'
       const newFileContent = Buffer.from('#!/bin/bash\necho "third"');
       const uploadResponse = await request(app)
         .post(`/games/${gameId}/upload-executable`)
@@ -1117,14 +1552,106 @@ describe('POST /games/:gameId/upload-executable', () => {
         .attach('file', newFileContent, 'test-script.sh')
         .expect(200);
       
-      // Verify existing order is maintained and new executable is added
       expect(uploadResponse.body.game).toHaveProperty('executables');
       expect(uploadResponse.body.game.executables).toEqual(['first', 'second', 'third']);
       
-      // Clean up
-      fs.unlinkSync(path.join(gameContentDir, 'first.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'second.sh'));
-      fs.unlinkSync(path.join(gameContentDir, 'third.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '01-first.sh'));
+      fs.unlinkSync(path.join(scriptsDir, '02-second.sh'));
+      const thirdFile = fs.readdirSync(scriptsDir).find(f => f.includes('third'));
+      if (thirdFile) fs.unlinkSync(path.join(scriptsDir, thirdFile));
+    }
+  });
+});
+
+describe('POST /games/:gameId/upload-screenshot', () => {
+  const testImageBuffer = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64'
+  );
+
+  test('should upload screenshot and return url', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .attach('file', testImageBuffer, 'screenshot.png')
+        .expect(200);
+
+      expect(response.body).toHaveProperty('status', 'success');
+      expect(response.body).toHaveProperty('url');
+      expect(response.body.url).toMatch(new RegExp(`^/games/${gameId}/screenshots/screenshot-\\d+\\.(png|jpg|webp|gif)$`));
+    }
+  });
+
+  test('should return 400 when no file uploaded', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'No file uploaded');
+    }
+  });
+
+  test('should return 400 when file is not an image', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .set('X-Auth-Token', 'test-token')
+        .attach('file', Buffer.from('not an image'), 'file.txt')
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'File must be an image');
+    }
+  });
+
+  test('should return 404 for non-existent game', async () => {
+    const response = await request(app)
+      .post('/games/99999/upload-screenshot')
+      .set('X-Auth-Token', 'test-token')
+      .attach('file', testImageBuffer, 'screenshot.png')
+      .expect(404);
+
+    expect(response.body).toHaveProperty('error', 'Game not found');
+  });
+
+  test('should return 401 without token', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+
+      const response = await request(app)
+        .post(`/games/${gameId}/upload-screenshot`)
+        .attach('file', testImageBuffer, 'screenshot.png')
+        .expect(401);
+
+      expect(response.body).toHaveProperty('error', 'Unauthorized');
     }
   });
 });
@@ -1245,7 +1772,7 @@ describe('DELETE /games/:gameId', () => {
     }
   });
 
-  test('should delete orphan collection (no games, no cover) when deleting last game', async () => {
+  test('should keep empty collection when deleting last game (no auto-delete)', async () => {
     const { testMetadataPath } = require('../setup');
     const fs = require('fs');
     const path = require('path');
@@ -1281,8 +1808,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
 
-    expect(fs.existsSync(collectionMetadataPath)).toBe(false);
-    expect(fs.existsSync(collectionDir)).toBe(false);
+    // Empty collectionlike is no longer auto-deleted when the last game is removed
+    expect(fs.existsSync(collectionMetadataPath)).toBe(true);
+    expect(fs.existsSync(collectionDir)).toBe(true);
   });
 
   test('should handle game not found in library file gracefully', async () => {
@@ -2001,6 +2529,73 @@ describe('POST /games/add-from-igdb', () => {
       .delete(`/games/${999995}`)
       .set('X-Auth-Token', 'test-token')
       .expect(200);
+  });
+});
+
+describe('POST /games/create', () => {
+  test('should create game from scratch and return game with timestamp-based id', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: 'Test Game From Scratch' })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body).toHaveProperty('game');
+    expect(response.body).toHaveProperty('gameId');
+    expect(typeof response.body.gameId).toBe('number');
+    expect(response.body.game).toHaveProperty('id', response.body.gameId);
+    expect(response.body.game).toHaveProperty('title', 'Test Game From Scratch');
+    expect(response.body.game).toHaveProperty('summary', '');
+    expect(response.body.game.genre).toBeNull();
+    expect(response.body.game.year).toBeNull();
+    expect(response.body.game.month).toBeNull();
+    expect(response.body.game.day).toBeNull();
+
+    const gameId = response.body.gameId;
+    const getResponse = await request(app)
+      .get(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(getResponse.body.title).toBe('Test Game From Scratch');
+
+    await request(app)
+      .delete(`/games/${gameId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
+  test('should return 400 if title is missing', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({})
+      .expect(400);
+    expect(response.body).toHaveProperty('error', 'Missing required field: title');
+  });
+
+  test('should return 400 if title is empty or whitespace', async () => {
+    const res1 = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: '' })
+      .expect(400);
+    expect(res1.body).toHaveProperty('error', 'Missing required field: title');
+
+    const res2 = await request(app)
+      .post('/games/create')
+      .set('X-Auth-Token', 'test-token')
+      .send({ title: '   ' })
+      .expect(400);
+    expect(res2.body).toHaveProperty('error', 'Missing required field: title');
+  });
+
+  test('should require authentication', async () => {
+    const response = await request(app)
+      .post('/games/create')
+      .send({ title: 'Unauthorized Game' })
+      .expect(401);
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 });
 

@@ -313,7 +313,9 @@ function registerAuthRoutes(app, metadataPath) {
         isDev: false,
       });
     } catch (err) {
-      console.error("Auth validation error:", err);
+      if (process.env.NODE_ENV !== 'test') {
+        console.error("Auth validation error:", err);
+      }
       res.status(401).json({ error: "Invalid token" });
     }
   });

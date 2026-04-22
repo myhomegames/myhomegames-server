@@ -17,8 +17,22 @@ const {
   findIndexById,
   normalizeId,
   removeGameFromAll,
+  computeFinalGameIdsForOrder,
+  addChildToItem,
+  removeChildFromItem,
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
+
+function storedExternalCoverUrl(entry) {
+  const u = entry && entry.externalCoverUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
+function storedExternalBackgroundUrl(entry) {
+  const u = entry && entry.externalBackgroundUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
 
 function createCollectionLikeRoutes(config) {
   const {
@@ -67,8 +81,9 @@ function createCollectionLikeRoutes(config) {
           id: numId,
           title: name.trim(),
           games: [],
+          childs: [],
           summary: description || "",
-          igdbCover: logo || null,
+          externalCoverUrl: logo || null,
         };
         saveItem(metadataPath, contentFolder, entry);
         byId.set(numId, entry);
@@ -167,6 +182,7 @@ function createCollectionLikeRoutes(config) {
         summary: (summary && typeof summary === "string") ? summary.trim() : "",
         showTitle: true,
         games: [],
+        childs: [],
       };
       try {
         saveItem(metadataPath, contentFolder, newItem);
@@ -197,7 +213,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
       });
-      if (background) data.background = background;
+      data.background = background || null;
+      data.externalBackgroundUrl = null;
       res.status(201).json({ status: "success", [singleResponseKey]: data });
     });
 
@@ -208,7 +225,13 @@ function createCollectionLikeRoutes(config) {
         [listResponseKey]: list.map((d) => {
           const gameIds = d.games || [];
           const actualCount = gameIds.filter((g) => allGames[g]).length;
-          const data = { id: d.id, title: d.title, gameCount: actualCount, showTitle: d.showTitle !== false };
+          const data = {
+            id: d.id,
+            title: d.title,
+            gameCount: actualCount,
+            showTitle: d.showTitle !== false,
+            childs: Array.isArray(d.childs) ? d.childs : [],
+          };
           const cover = getLocalMediaPath({
             metadataPath,
             resourceId: d.id,
@@ -216,7 +239,7 @@ function createCollectionLikeRoutes(config) {
             mediaType: "cover",
             urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
           });
-          data.cover = cover || d.igdbCover || null;
+          data.cover = cover || storedExternalCoverUrl(d) || null;
           const background = getLocalMediaPath({
             metadataPath,
             resourceId: d.id,
@@ -224,7 +247,8 @@ function createCollectionLikeRoutes(config) {
             mediaType: "background",
             urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
           });
-          if (background) data.background = background;
+          data.background = background || storedExternalBackgroundUrl(d) || null;
+          data.externalBackgroundUrl = storedExternalBackgroundUrl(d);
           if (d.summary) data.summary = d.summary;
           return data;
         }),
@@ -247,6 +271,7 @@ function createCollectionLikeRoutes(config) {
         summary: entry.summary || "",
         showTitle: entry.showTitle !== false,
         gameCount: (entry.games || []).filter((g) => allGames[g]).length,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
       };
       const cover = getLocalMediaPath({
         metadataPath,
@@ -255,7 +280,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      data.cover = cover || entry.igdbCover || null;
+      data.cover = cover || storedExternalCoverUrl(entry) || null;
+      data.externalCoverUrl = storedExternalCoverUrl(entry);
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -263,7 +289,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) data.background = background;
+      data.background = background || storedExternalBackgroundUrl(entry) || null;
+      data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json(data);
     });
 
@@ -278,29 +305,66 @@ function createCollectionLikeRoutes(config) {
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const games = (entry.games || [])
-        .map((gId) => allGames[gId])
+        .map((gId) => {
+          const key = normalizeId(gId);
+          return allGames[key] || allGames[gId];
+        })
         .filter(Boolean)
-        .map((g) => ({
-          id: g.id,
-          title: g.title,
-          summary: g.summary || "",
-          cover: getCoverUrl(g, metadataPath),
-          day: g.day,
-          month: g.month,
-          year: g.year,
-          stars: g.stars,
-          developers: g.developers || null,
-          publishers: g.publishers || null,
-          executables: g.executables || null,
-        }));
+        .map((g) => {
+          const executables = g.executables;
+          const execArray =
+            Array.isArray(executables) && executables.length > 0
+              ? executables
+              : executables != null
+                ? [].concat(executables)
+                : null;
+          const typeId = coerceToGameTypeId(g.type);
+          return {
+            id: g.id,
+            title: g.title,
+            summary: g.summary || "",
+            cover: getCoverUrl(g, metadataPath),
+            day: g.day,
+            month: g.month,
+            year: g.year,
+            stars: g.stars,
+            developers: g.developers || null,
+            publishers: g.publishers || null,
+            executables: execArray,
+            ...(typeId != null ? { type: typeId } : {}),
+          };
+        });
       res.json({ games });
+    });
+
+    app.put(`${normalizedRouteBase}/:id/games/order`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const { gameIds } = req.body;
+      if (!Array.isArray(gameIds)) {
+        return res.status(400).json({ error: "gameIds must be an array" });
+      }
+      updateCache();
+      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const entry = findById(list, id);
+      if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const currentGameIds = entry.games || [];
+      const finalGameIds = computeFinalGameIdsForOrder(currentGameIds, gameIds, allGames);
+      entry.games = finalGameIds;
+      try {
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+        res.json({ status: "success" });
+      } catch (e) {
+        console.error(`Failed to save ${humanName} games order:`, e.message);
+        res.status(500).json({ error: "Failed to save games order" });
+      }
     });
 
     app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle } = req.body;
+      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         saveItem(metadataPath, contentFolder, entry);
@@ -316,14 +380,77 @@ function createCollectionLikeRoutes(config) {
         saveItem(metadataPath, contentFolder, entry);
         updateCache();
       }
+      if (externalCoverUrl !== undefined) {
+        if (externalCoverUrl == null || externalCoverUrl === "") {
+          entry.externalCoverUrl = null;
+        } else if (typeof externalCoverUrl !== "string") {
+          return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+        } else {
+          const t = externalCoverUrl.trim();
+          entry.externalCoverUrl = t.length > 0 ? t : null;
+        }
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
+      if (externalBackgroundUrl !== undefined) {
+        if (externalBackgroundUrl == null || externalBackgroundUrl === "") {
+          entry.externalBackgroundUrl = null;
+        } else if (typeof externalBackgroundUrl !== "string") {
+          return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+        } else {
+          const t = externalBackgroundUrl.trim();
+          entry.externalBackgroundUrl = t.length > 0 ? t : null;
+        }
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
+      if (childs !== undefined) {
+        if (!Array.isArray(childs)) {
+          return res.status(400).json({ error: "childs must be an array of ids" });
+        }
+        const normalizedChilds = [];
+        const seen = new Set();
+        for (const raw of childs) {
+          const id = normalizeId(raw);
+          if (id == null) continue;
+          if (String(id) === String(entry.id)) continue;
+          const key = String(id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          normalizedChilds.push(id);
+        }
+        entry.childs = normalizedChilds;
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
+      const cover = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "cover",
+        urlPrefix: `/${coverPrefix}`,
+      });
+      const responsePayload = {
+        id: entry.id,
+        title: entry.title,
+        summary: entry.summary || "",
+        showTitle: entry.showTitle !== false,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
+        cover: cover || storedExternalCoverUrl(entry) || null,
+        externalCoverUrl: storedExternalCoverUrl(entry),
+      };
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "background",
+        urlPrefix: `/${backgroundPrefix}`,
+      });
+      responsePayload.background = background || storedExternalBackgroundUrl(entry) || null;
+      responsePayload.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({
         status: "success",
-        [singleResponseKey]: {
-          id: entry.id,
-          title: entry.title,
-          summary: entry.summary || "",
-          showTitle: entry.showTitle !== false,
-        },
+        [singleResponseKey]: responsePayload,
       });
     });
 
@@ -338,6 +465,28 @@ function createCollectionLikeRoutes(config) {
       deleteItem(metadataPath, contentFolder, id);
       cache.splice(idx, 1);
       res.json({ status: "success" });
+    });
+
+    app.post(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const childId = normalizeId(req.params.childId);
+      const added = addChildToItem(metadataPath, contentFolder, id, childId);
+      if (!added) {
+        return res.status(404).json({ error: `${humanName} parent or child not found, or child already linked` });
+      }
+      updateCache();
+      return res.json({ status: "success" });
+    });
+
+    app.delete(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      const childId = normalizeId(req.params.childId);
+      const removed = removeChildFromItem(metadataPath, contentFolder, id, childId);
+      if (!removed) {
+        return res.status(404).json({ error: `${humanName} parent or child link not found` });
+      }
+      updateCache();
+      return res.json({ status: "success" });
     });
 
     app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {
@@ -364,7 +513,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 
@@ -390,7 +540,7 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      const response = { id: entry.id, title: entry.title, cover: cover || entry.igdbCover || null };
+      const response = { id: entry.id, title: entry.title, cover: cover || storedExternalCoverUrl(entry) || null };
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: id,
@@ -398,7 +548,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 
@@ -424,8 +575,9 @@ function createCollectionLikeRoutes(config) {
       const response = {
         id: entry.id,
         title: entry.title,
-        cover: cover || entry.igdbCover || null,
+        cover: cover || storedExternalCoverUrl(entry) || null,
         background: `/${backgroundPrefix}/${encodeURIComponent(entry.id)}`,
+        externalBackgroundUrl: storedExternalBackgroundUrl(entry),
       };
       res.json({ status: "success", [singleResponseKey]: response });
     });
@@ -452,7 +604,7 @@ function createCollectionLikeRoutes(config) {
         mediaType: "cover",
         urlPrefix: `/${coverPrefix}`,
       });
-      const response = { id: entry.id, title: entry.title, cover: cover || entry.igdbCover || null };
+      const response = { id: entry.id, title: entry.title, cover: cover || storedExternalCoverUrl(entry) || null };
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: id,
@@ -460,7 +612,8 @@ function createCollectionLikeRoutes(config) {
         mediaType: "background",
         urlPrefix: `/${backgroundPrefix}`,
       });
-      if (background) response.background = background;
+      response.background = background || storedExternalBackgroundUrl(entry) || null;
+      response.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       res.json({ status: "success", [singleResponseKey]: response });
     });
 

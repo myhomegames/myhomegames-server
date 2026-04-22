@@ -3,6 +3,7 @@ const path = require("path");
 const multer = require("multer");
 const { getCoverUrl, getBackgroundUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
 const {
   loadItems,
   saveItem,
@@ -12,10 +13,24 @@ const {
   normalizeId,
   removeGameFromAll,
   addGameToItem,
+  addChildToItem,
+  removeChildFromItem,
   getResourceToGameIdsMap,
+  computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 const CONTENT_FOLDER = "collections";
+
+function externalCoverUrlFromCollectionEntry(c) {
+  const u = c && c.externalCoverUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
+function externalBackgroundUrlFromCollectionEntry(c) {
+  const u = c && c.externalBackgroundUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
 
 /**
  * Collections routes module
@@ -82,104 +97,6 @@ function createCacheUpdater(collectionsCache) {
   };
 }
 
-// Helper function to compare two games by a specific field
-function compareGamesByField(gameA, gameB, field = 'releaseDate', ascending = true) {
-  let compareResult = 0;
-
-  switch (field) {
-    case 'releaseDate':
-      // Games not found or without release date go to the end
-      if (!gameA || (!gameA.year && !gameA.month && !gameA.day)) return 1;
-      if (!gameB || (!gameB.year && !gameB.month && !gameB.day)) return -1;
-
-      // Compare by year
-      if (gameA.year !== gameB.year) {
-        compareResult = (gameA.year || 0) - (gameB.year || 0);
-      } else if (gameA.month !== gameB.month) {
-        // If years are equal, compare by month
-        compareResult = (gameA.month || 0) - (gameB.month || 0);
-      } else {
-        // If months are equal, compare by day
-        compareResult = (gameA.day || 0) - (gameB.day || 0);
-      }
-      break;
-    case 'year':
-      const yearA = gameA?.year ?? 0;
-      const yearB = gameB?.year ?? 0;
-      if (yearA === 0 && yearB === 0) compareResult = 0;
-      else if (yearA === 0) compareResult = 1;
-      else if (yearB === 0) compareResult = -1;
-      else compareResult = yearA - yearB;
-      break;
-    case 'title':
-      const titleA = (gameA?.title || '').toLowerCase();
-      const titleB = (gameB?.title || '').toLowerCase();
-      compareResult = titleA.localeCompare(titleB);
-      break;
-    case 'stars':
-      const starsA = gameA?.stars ?? 0;
-      const starsB = gameB?.stars ?? 0;
-      compareResult = starsA - starsB;
-      break;
-    case 'criticRating':
-      const criticA = gameA?.criticratings ?? 0;
-      const criticB = gameB?.criticratings ?? 0;
-      compareResult = criticA - criticB;
-      break;
-    case 'userRating':
-      const userA = gameA?.userratings ?? 0;
-      const userB = gameB?.userratings ?? 0;
-      compareResult = userA - userB;
-      break;
-    default:
-      compareResult = 0;
-  }
-
-  return ascending ? compareResult : -compareResult;
-}
-
-// Helper function to sort game IDs by a specific field
-function sortGameIdsByField(gameIds, allGames, field = 'releaseDate', ascending = true) {
-  return [...gameIds].sort((idA, idB) => {
-    const gameA = allGames[idA];
-    const gameB = allGames[idB];
-    return compareGamesByField(gameA, gameB, field, ascending);
-  });
-}
-
-// Helper function to insert a game ID into an array at the correct position based on release date
-// Finds the first element with release date greater than the new game and inserts before it
-function insertGameIdInSortedPosition(gameIds, newGameId, allGames) {
-  // Check if game already exists
-  const normalizedNewId = normalizeId(newGameId);
-  const exists = gameIds.some(id => normalizeId(id) === normalizedNewId);
-  
-  if (exists) {
-    return gameIds; // Game already exists, return original array
-  }
-
-  const newGame = allGames[newGameId];
-  if (!newGame) {
-    // Game not found in allGames, append to end
-    return [...gameIds, newGameId];
-  }
-
-  // Find the first element with release date greater than the new game
-  for (let i = 0; i < gameIds.length; i++) {
-    const existingGame = allGames[gameIds[i]];
-    if (existingGame && compareGamesByField(newGame, existingGame, 'releaseDate', true) < 0) {
-      // Insert before this element
-      const result = [...gameIds];
-      result.splice(i, 0, newGameId);
-      return result;
-    }
-  }
-
-  // No element found with greater release date, append to end
-  return [...gameIds, newGameId];
-}
-
-
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
 
@@ -201,6 +118,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           summary: c.summary || "",
           showTitle: c.showTitle,
           gameCount: actualGameCount,
+          childs: Array.isArray(c.childs) ? c.childs : [],
         };
         // Check if cover exists locally
         const localCover = getLocalMediaPath({
@@ -210,9 +128,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           mediaType: 'cover',
           urlPrefix: '/collection-covers'
         });
-        if (localCover) {
-          collectionData.cover = localCover;
-        }
+        const extCover = externalCoverUrlFromCollectionEntry(c);
+        collectionData.cover = localCover || extCover || undefined;
+        collectionData.externalCoverUrl = extCover;
         const background = getLocalMediaPath({
           metadataPath,
           resourceId: c.id,
@@ -266,13 +184,17 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       summary: (summary && typeof summary === "string") ? summary.trim() : "",
       showTitle: true,
       games: [],
+      childs: [],
     };
 
     // Save collection to its own folder
     try {
       saveItem(metadataPath, CONTENT_FOLDER, newCollection);
-      // Add to cache
+      // Add to cache and keep sorted by title (ignore leading The/A)
       collectionsCache.push(newCollection);
+      collectionsCache.sort((a, b) =>
+        getTitleForSort(a.title).localeCompare(getTitleForSort(b.title))
+      );
       
       // Note: Collection content directory is not created during collection creation.
       // It will be created only when uploading cover/background via edit endpoints.
@@ -286,6 +208,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
+        childs: [],
       };
       const background = getLocalMediaPath({
         metadataPath,
@@ -294,9 +217,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      collectionData.background = background || undefined;
+      collectionData.externalBackgroundUrl = null;
       
       res.json({ status: "success", collection: collectionData });
     } catch (e) {
@@ -319,6 +241,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       summary: collection.summary || "",
       showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
+      childs: Array.isArray(collection.childs) ? collection.childs : [],
     };
     const localCover = getLocalMediaPath({
       metadataPath,
@@ -327,19 +250,19 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'cover',
       urlPrefix: '/collection-covers'
     });
-    if (localCover) {
-      collectionData.cover = localCover;
-    }
+    const extCover = externalCoverUrlFromCollectionEntry(collection);
+    collectionData.cover = localCover || extCover || undefined;
+    collectionData.externalCoverUrl = extCover;
     const background = getLocalMediaPath({
-      metadataPath,
-      resourceId: collection.id,
-      resourceType: 'collections',
-      mediaType: 'background',
-      urlPrefix: '/collection-backgrounds'
-    });
-    if (background) {
-      collectionData.background = background;
-    }
+        metadataPath,
+        resourceId: collection.id,
+        resourceType: 'collections',
+        mediaType: 'background',
+        urlPrefix: '/collection-backgrounds'
+      });
+    const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+    collectionData.background = background || extBg || undefined;
+    collectionData.externalBackgroundUrl = extBg;
     
     res.json(collectionData);
   });
@@ -361,7 +284,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     gameIds.forEach((gameId) => {
       const game = allGames[gameId];
       if (game) {
-        collectionGames.push({
+        const similarGamesResolved = (game.similarGames && Array.isArray(game.similarGames) && game.similarGames.length > 0)
+          ? game.similarGames.map((id) => ({ id: Number(id), name: (allGames[id] && allGames[id].title) ? String(allGames[id].title) : String(id) }))
+          : null;
+        const websitesResolved = (game.websites && Array.isArray(game.websites) && game.websites.length > 0)
+          ? game.websites.map((u) => (typeof u === "string" ? { url: u } : (u && u.url ? { url: String(u.url) } : null))).filter(Boolean)
+          : null;
+        const typeId = coerceToGameTypeId(game.type);
+        const row = {
           id: game.id,
           title: game.title,
           summary: game.summary || "",
@@ -375,7 +305,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           platforms: game.platforms || null,
           gameModes: game.gameModes || null,
           playerPerspectives: game.playerPerspectives || null,
-          websites: game.websites || null,
+          websites: websitesResolved,
           ageRatings: game.ageRatings || null,
           developers: game.developers || null,
           publishers: game.publishers || null,
@@ -386,8 +316,10 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           gameEngines: game.gameEngines || null,
           keywords: game.keywords || null,
           alternativeNames: game.alternativeNames || null,
-          similarGames: game.similarGames || null,
-        });
+          similarGames: similarGamesResolved,
+        };
+        if (typeId != null) row.type = typeId;
+        collectionGames.push(row);
         const background = getBackgroundUrl(game, metadataPath);
         if (background) {
           collectionGames[collectionGames.length - 1].background = background;
@@ -429,31 +361,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       console.log(`Removed ${duplicateCount} duplicate game ID(s) from collection ${collectionId}`);
     }
 
-    // Get the current games in the collection (before update)
     const collection = collectionsCache[collectionIndex];
     const currentGameIds = collection.games || [];
-    
-    // Check if this is likely an addition (one new game added) vs a reorder
-    const isAddition = uniqueGameIds.length === currentGameIds.length + 1;
-    
-    let finalGameIds;
-    if (isAddition) {
-      // Find the new game and insert it in the correct position
-      const newGameId = uniqueGameIds.find(id =>
-        !currentGameIds.some(currentId => normalizeId(currentId) === normalizeId(id))
-      );
-      
-      if (newGameId) {
-        // Insert the new game in the correct position
-        finalGameIds = insertGameIdInSortedPosition(currentGameIds, newGameId, allGames);
-      } else {
-        // Fallback: full sort if we can't identify the new game
-        finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
-      }
-    } else {
-      // Full reorder: sort all games by release date
-      finalGameIds = sortGameIdsByField(uniqueGameIds, allGames, 'releaseDate', true);
-    }
+    const finalGameIds = computeFinalGameIdsForOrder(currentGameIds, uniqueGameIds, allGames);
 
     // Update the games array
     collection.games = finalGameIds;
@@ -479,7 +389,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     }
     
     // Define allowed fields that can be updated
-    const allowedFields = ['title', 'summary', 'showTitle'];
+    const allowedFields = ['title', 'summary', 'showTitle', 'externalCoverUrl', 'externalBackgroundUrl', 'childs'];
     
     // Filter updates to only include allowed fields
     const filteredUpdates = Object.keys(updates)
@@ -495,6 +405,46 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     
     // Load current collection and update it
     const collection = collectionsCache[collectionIndex];
+    if ("externalCoverUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalCoverUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalCoverUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalCoverUrl = t.length > 0 ? t : null;
+      }
+    }
+    if ("externalBackgroundUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalBackgroundUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalBackgroundUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
+      }
+    }
+    if ("childs" in filteredUpdates) {
+      const rawChilds = filteredUpdates.childs;
+      if (!Array.isArray(rawChilds)) {
+        return res.status(400).json({ error: "childs must be an array of ids" });
+      }
+      const normalizedChilds = [];
+      const seen = new Set();
+      for (const raw of rawChilds) {
+        const id = normalizeId(raw);
+        if (id == null) continue;
+        if (String(id) === String(collection.id)) continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalizedChilds.push(id);
+      }
+      filteredUpdates.childs = normalizedChilds;
+    }
     Object.assign(collection, filteredUpdates);
     
     // Save updated collection
@@ -506,8 +456,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         summary: collection.summary || "",
         showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
+        childs: Array.isArray(collection.childs) ? collection.childs : [],
       };
-      // Only include cover/background if they exist (like GET and developers)
       const localCover = getLocalMediaPath({
         metadataPath,
         resourceId: collection.id,
@@ -515,9 +465,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'cover',
         urlPrefix: '/collection-covers'
       });
-      if (localCover) {
-        collectionData.cover = localCover;
-      }
+      const extCover = externalCoverUrlFromCollectionEntry(collection);
+      collectionData.cover = localCover || extCover || undefined;
+      collectionData.externalCoverUrl = extCover;
       const background = getLocalMediaPath({
         metadataPath,
         resourceId: collection.id,
@@ -525,9 +475,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ status: "success", collection: collectionData });
     } catch (e) {
@@ -621,9 +571,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'background',
       urlPrefix: '/collection-backgrounds'
     });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -679,9 +629,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       mediaType: 'background',
       urlPrefix: '/collection-backgrounds'
     });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -733,9 +683,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -787,9 +737,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       res.json({ 
         status: "success",
@@ -822,6 +772,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
         gameCount: (collection.games || []).length,
+        childs: Array.isArray(collection.childs) ? collection.childs : [],
       };
       // Check if cover exists locally
       const localCover = getLocalMediaPath({
@@ -841,9 +792,9 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      if (background) {
-        collectionData.background = background;
-      }
+      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      collectionData.background = background || extBg || undefined;
+      collectionData.externalBackgroundUrl = extBg;
       
       // Return updated collection data
       res.json({ status: "reloaded", collection: collectionData });
@@ -851,6 +802,28 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       console.error(`Failed to reload collection ${collectionId}:`, e.message);
       res.status(500).json({ error: "Failed to reload collection metadata" });
     }
+  });
+
+  app.post("/collections/:id/childs/:childId", requireToken, (req, res) => {
+    const id = normalizeId(req.params.id);
+    const childId = normalizeId(req.params.childId);
+    const added = addChildToItem(metadataPath, CONTENT_FOLDER, id, childId);
+    if (!added) {
+      return res.status(404).json({ error: "Collection parent or child not found, or child already linked" });
+    }
+    collectionsCache = loadCollections(metadataPath);
+    return res.json({ status: "success" });
+  });
+
+  app.delete("/collections/:id/childs/:childId", requireToken, (req, res) => {
+    const id = normalizeId(req.params.id);
+    const childId = normalizeId(req.params.childId);
+    const removed = removeChildFromItem(metadataPath, CONTENT_FOLDER, id, childId);
+    if (!removed) {
+      return res.status(404).json({ error: "Collection parent or child link not found" });
+    }
+    collectionsCache = loadCollections(metadataPath);
+    return res.json({ status: "success" });
   });
 
   // Return reload function

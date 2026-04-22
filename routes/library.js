@@ -53,13 +53,10 @@ const { removeGameFromRecommended } = require("./recommended");
 const {
   removeGameFromAllCollections,
   addGameToCollection,
-  getCollectionToGameIdsMap,
-  deleteCollectionIfUnused,
 } = require("./collections");
 const {
   ensureDevelopersExistBatch,
   removeGameFromAllDevelopers,
-  deleteDeveloperIfUnused,
   removeGameFromDeveloper,
   addGameToDeveloper,
   getDeveloperToGameIdsMap,
@@ -67,7 +64,6 @@ const {
 const {
   ensurePublishersExistBatch,
   removeGameFromAllPublishers,
-  deletePublisherIfUnused,
   removeGameFromPublisher,
   addGameToPublisher,
   getPublisherToGameIdsMap,
@@ -88,6 +84,8 @@ const {
 } = require("./series");
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const { getTitleForSort } = require("../utils/sortUtils");
+const { coerceToGameTypeId } = require("../utils/igdbGameType");
 
 
 /**
@@ -98,6 +96,11 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmp
 // Helper function to get game metadata file path
 function getGameMetadataPath(metadataPath, gameId) {
   return path.join(metadataPath, "content", "games", String(gameId), "metadata.json");
+}
+
+// Helper: directory where executable scripts (.sh/.bat) are stored for a game
+function getGameScriptsDir(metadataPath, gameId) {
+  return path.join(metadataPath, "content", "games", String(gameId), "scripts");
 }
 
 /** Normalize tag-like field to array of numeric ids only. Accepts only numbers (no objects). */
@@ -116,6 +119,12 @@ function toIdsOnlyArray(val) {
   return result;
 }
 
+/** Return array of numeric ids or null for franchise/collection fields. */
+function validateIdArray(val) {
+  const arr = toIdsOnlyArray(val);
+  return arr.length > 0 ? arr : null;
+}
+
 // Helper function to save a single game. Tag fields (genre, themes, platforms, etc.) are stored only in tag blocks, not in game metadata.
 function saveGame(metadataPath, game) {
   const gameId = game.id;
@@ -124,6 +133,7 @@ function saveGame(metadataPath, game) {
   const filePath = getGameMetadataPath(metadataPath, gameId);
   const gameToSave = { ...game };
   delete gameToSave.id;
+  delete gameToSave.executables; // order from disk (N- prefix), not stored in metadata
   // Do not write tag/relation fields to game file; they live in their blocks (gameIds)
   delete gameToSave.genre;
   delete gameToSave.themes;
@@ -135,6 +145,17 @@ function saveGame(metadataPath, game) {
   delete gameToSave.publishers;
   delete gameToSave.franchise;
   delete gameToSave.collection;
+  // metadata.json stores game type as numeric id only (legacy { id, name } → number on write)
+  if (Object.prototype.hasOwnProperty.call(gameToSave, "type")) {
+    const tid = coerceToGameTypeId(gameToSave.type);
+    if (tid == null) {
+      delete gameToSave.type;
+      delete game.type;
+    } else {
+      gameToSave.type = tid;
+      game.type = tid;
+    }
+  }
   writeJsonFile(filePath, gameToSave);
 }
 
@@ -267,9 +288,43 @@ function resolveDeveloperPublisherNames(ids, list) {
   });
 }
 
-/** Build game response: tag fields are id arrays; developers/publishers can be enriched to [{ id, name }] if lists passed. */
-function buildGameResponse(metadataPath, game, developersList = null, publishersList = null) {
-  const executables = getExecutablesWithOrder(metadataPath, game.id, game);
+/** Resolve websites (stored as url[] in metadata) to [{ url }] for API. Accepts legacy [{ url, category? }] too. */
+function resolveWebsitesForResponse(websitesField) {
+  if (websitesField == null || !Array.isArray(websitesField)) return null;
+  if (websitesField.length === 0) return null;
+  const result = websitesField
+    .map((x) => (typeof x === "string" && x.trim() ? { url: x.trim() } : (x && typeof x === "object" && x.url ? { url: String(x.url).trim() } : null)))
+    .filter((o) => o && o.url);
+  return result.length > 0 ? result : null;
+}
+
+/** Resolve similarGames (stored as id[] in metadata) to [{ id, name }] using allGames. Accepts legacy [{ id, name }] too. */
+function resolveSimilarGamesForResponse(similarGamesField, allGames) {
+  if (similarGamesField == null || !Array.isArray(similarGamesField)) return null;
+  if (similarGamesField.length === 0) return null;
+  const ids = similarGamesField.map((x) => {
+    if (typeof x === "number" && !Number.isNaN(x)) return x;
+    if (typeof x === "object" && x != null && x.id != null) return Number(x.id);
+    return null;
+  }).filter((id) => id != null && !Number.isNaN(id));
+  if (ids.length === 0) return null;
+  const seen = new Set();
+  const result = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const g = allGames && allGames[id];
+    result.push({ id, name: (g && g.title) ? String(g.title).trim() : String(id) });
+  }
+  return result.length > 0 ? result : null;
+}
+
+/** Build game response: tag fields are id arrays; developers/publishers/similarGames enriched when lists/allGames passed. */
+function buildGameResponse(metadataPath, game, developersList = null, publishersList = null, allGames = null) {
+  const executables = getExecutablesWithOrder(metadataPath, game.id);
+  const executableFileNames = executables.length > 0
+    ? getExecutableFileBasenamesInOrder(metadataPath, game.id)
+    : [];
   const devIds = game.developers && Array.isArray(game.developers) ? game.developers : [];
   const pubIds = game.publishers && Array.isArray(game.publishers) ? game.publishers : [];
   const developersResolved = resolveDeveloperPublisherNames(devIds, developersList);
@@ -287,11 +342,12 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     criticratings: game.criticratings || null,
     userratings: game.userratings || null,
     executables: executables.length > 0 ? executables : null,
+    executableFileNames: executableFileNames.length > 0 ? executableFileNames : null,
     themes: game.themes && game.themes.length ? game.themes : null,
     platforms: game.platforms && game.platforms.length ? game.platforms : null,
     gameModes: game.gameModes && game.gameModes.length ? game.gameModes : null,
     playerPerspectives: game.playerPerspectives && game.playerPerspectives.length ? game.playerPerspectives : null,
-    websites: game.websites || null,
+    websites: resolveWebsitesForResponse(game.websites),
     ageRatings: game.ageRatings || null,
     developers: developersResolved && developersResolved.length > 0 ? developersResolved : (devIds.length > 0 ? devIds : null),
     publishers: publishersResolved && publishersResolved.length > 0 ? publishersResolved : (pubIds.length > 0 ? pubIds : null),
@@ -303,59 +359,52 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     gameEngines: game.gameEngines && game.gameEngines.length ? game.gameEngines : null,
     keywords: game.keywords || null,
     alternativeNames: game.alternativeNames || null,
-    similarGames: game.similarGames || null,
+    similarGames: resolveSimilarGamesForResponse(game.similarGames, allGames),
     showTitle: game.showTitle,
+    type: coerceToGameTypeId(game.type),
   };
+  const extCover =
+    game.externalCoverUrl != null && typeof game.externalCoverUrl === "string" && game.externalCoverUrl.trim()
+      ? game.externalCoverUrl.trim()
+      : null;
+  const extBg =
+    game.externalBackgroundUrl != null && typeof game.externalBackgroundUrl === "string" && game.externalBackgroundUrl.trim()
+      ? game.externalBackgroundUrl.trim()
+      : null;
+  gameData.externalCoverUrl = extCover;
+  gameData.externalBackgroundUrl = extBg;
   const backgroundUrl = getBackgroundUrl(game, metadataPath);
   if (backgroundUrl) gameData.background = backgroundUrl;
   return gameData;
 }
 
-// Helper function to get executable names from game directory
-// Returns array of names (without extension) from .sh and .bat files
+// Helper function to get executable labels from game scripts directory (order by N- prefix)
+// Returns array of display labels (strip "N-" and optional "-platformId" from basename)
 function getExecutableNames(metadataPath, gameId) {
-  const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-  const executableNames = [];
-  
-  if (!fs.existsSync(gameContentDir)) {
-    return executableNames;
-  }
-  
-  // Read all .sh and .bat files in the game directory
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+  if (!fs.existsSync(scriptsDir)) return [];
   let files;
   try {
-    files = fs.readdirSync(gameContentDir);
+    files = fs.readdirSync(scriptsDir);
   } catch (err) {
-    console.warn(`Failed to read game directory ${gameContentDir}:`, err.message);
-    return executableNames;
+    console.warn(`Failed to read scripts directory ${scriptsDir}:`, err.message);
+    return [];
   }
-  
   const executableFiles = files.filter(file => {
-    // Only include files, not directories
-    const filePath = path.join(gameContentDir, file);
-    if (!fs.statSync(filePath).isFile()) {
-      return false;
-    }
+    const filePath = path.join(scriptsDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
     const ext = path.extname(file).toLowerCase();
     return ext === '.sh' || ext === '.bat';
   });
-  
-  // Sort files: script.sh/script.bat first (for backward compatibility), then others alphabetically
   executableFiles.sort((a, b) => {
-    const aIsScript = a.startsWith('script.');
-    const bIsScript = b.startsWith('script.');
-    if (aIsScript && !bIsScript) return -1;
-    if (!aIsScript && bIsScript) return 1;
-    return a.localeCompare(b);
+    const aBase = path.basename(a, path.extname(a));
+    const bBase = path.basename(b, path.extname(b));
+    const [aNum, aRest] = sortKeyForExecutableBasename(aBase);
+    const [bNum, bRest] = sortKeyForExecutableBasename(bBase);
+    if (aNum !== bNum) return aNum - bNum;
+    return aRest.localeCompare(bRest);
   });
-  
-  // Extract names (without extension)
-  executableFiles.forEach((file) => {
-    const name = path.basename(file, path.extname(file));
-    executableNames.push(name);
-  });
-  
-  return executableNames;
+  return executableFiles.map(f => labelFromBasename(path.basename(f, path.extname(f))));
 }
 
 // Helper function to sanitize executable name for filesystem (convert invalid chars to underscore)
@@ -364,44 +413,96 @@ function sanitizeExecutableName(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// Helper function to get executables respecting order from metadata.json
-// If metadata.json has executables, use that order (and verify files exist)
-// Otherwise, read from directory
-function getExecutablesWithOrder(metadataPath, gameId, gameMetadata = null) {
-  // Load game metadata if not provided
-  if (!gameMetadata) {
-    gameMetadata = loadGame(metadataPath, gameId);
+// Number-prefix format: "01-label.sh", "02-bub-1.sh". Order is by N then by name.
+const NUMBER_PREFIX_RE = /^(\d+)-(.+)$/;
+function parseNumberPrefix(basenameNoExt) {
+  const m = String(basenameNoExt).match(NUMBER_PREFIX_RE);
+  if (m) return { num: parseInt(m[1], 10), rest: m[2] };
+  return { num: Number.MAX_SAFE_INTEGER, rest: basenameNoExt };
+}
+
+/** Extract display label from basename (no ext): strip "N-" then optional "-platformId" suffix. */
+function labelFromBasename(basenameNoExt) {
+  const { rest } = parseNumberPrefix(basenameNoExt);
+  const dashLast = rest.lastIndexOf('-');
+  if (dashLast > 0) {
+    const suffix = rest.slice(dashLast + 1);
+    if (/^\d+$/.test(suffix)) return rest.slice(0, dashLast);
   }
-  
-  // If metadata.json has executables array, use it (respecting order)
-  if (gameMetadata && gameMetadata.executables && Array.isArray(gameMetadata.executables) && gameMetadata.executables.length > 0) {
-    // Verify that all executables in metadata exist as files
-    const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-    const validExecutables = [];
-    
-    for (const execName of gameMetadata.executables) {
-      if (typeof execName !== 'string' || !execName.trim()) continue;
-      
-      // Sanitize name for filesystem lookup (files are saved with sanitized names)
-      const sanitizedExecName = sanitizeExecutableName(execName);
-      
-      // Check if file exists (.sh or .bat) using sanitized name
-      const shPath = path.join(gameContentDir, `${sanitizedExecName}.sh`);
-      const batPath = path.join(gameContentDir, `${sanitizedExecName}.bat`);
-      
-      if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
-        // Return original name (from metadata) not sanitized name
-        validExecutables.push(execName);
-      }
-    }
-    
-    // If we have valid executables, return them in the order from metadata
-    if (validExecutables.length > 0) {
-      return validExecutables;
-    }
+  return rest;
+}
+
+/** Extract platform id from basename (no ext): the numeric suffix after the last hyphen, or "". */
+function platformIdFromBasename(basenameNoExt) {
+  const { rest } = parseNumberPrefix(basenameNoExt);
+  const dashLast = rest.lastIndexOf('-');
+  if (dashLast > 0) {
+    const suffix = rest.slice(dashLast + 1);
+    if (/^\d+$/.test(suffix)) return suffix;
   }
-  
-  // Fallback: read from directory (for backward compatibility or if metadata is missing)
+  return '';
+}
+
+function sortKeyForExecutableBasename(basenameNoExt) {
+  const { num, rest } = parseNumberPrefix(basenameNoExt);
+  return [num, rest];
+}
+
+// Helper: list executable files in game scripts dir (basename without extension, sorted by N- prefix)
+function getExecutableFileBasenames(metadataPath, gameId) {
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+  if (!fs.existsSync(scriptsDir)) return [];
+  let files;
+  try {
+    files = fs.readdirSync(scriptsDir);
+  } catch (err) {
+    return [];
+  }
+  const executableFiles = files.filter(file => {
+    const filePath = path.join(scriptsDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.sh' || ext === '.bat';
+  });
+  return executableFiles
+    .map(f => path.basename(f, path.extname(f)))
+    .sort((a, b) => {
+      const [aNum, aRest] = sortKeyForExecutableBasename(a);
+      const [bNum, bRest] = sortKeyForExecutableBasename(b);
+      if (aNum !== bNum) return aNum - bNum;
+      return aRest.localeCompare(bRest);
+    });
+}
+
+// Helper: return full file names in scripts dir (with extension), sorted by N- prefix
+function getExecutableFileBasenamesInOrder(metadataPath, gameId) {
+  const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+  if (!fs.existsSync(scriptsDir)) return [];
+  let files;
+  try {
+    files = fs.readdirSync(scriptsDir);
+  } catch (err) {
+    return [];
+  }
+  const executableFiles = files.filter(file => {
+    const filePath = path.join(scriptsDir, file);
+    if (!fs.statSync(filePath).isFile()) return false;
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.sh' || ext === '.bat';
+  });
+  executableFiles.sort((a, b) => {
+    const aBase = path.basename(a, path.extname(a));
+    const bBase = path.basename(b, path.extname(b));
+    const [aNum, aRest] = sortKeyForExecutableBasename(aBase);
+    const [bNum, bRest] = sortKeyForExecutableBasename(bBase);
+    if (aNum !== bNum) return aNum - bNum;
+    return aRest.localeCompare(bRest);
+  });
+  return executableFiles.map(f => path.basename(f));
+}
+
+// Executables order comes from disk (N- prefix); no metadata field
+function getExecutablesWithOrder(metadataPath, gameId) {
   return getExecutableNames(metadataPath, gameId);
 }
 
@@ -535,8 +636,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             return (a.userratings ?? 0) - (b.userratings ?? 0);
           case "title":
           default: {
-            const ta = (a.title || "").trim();
-            const tb = (b.title || "").trim();
+            const ta = getTitleForSort(a.title);
+            const tb = getTitleForSort(b.title);
             return ta.localeCompare(tb, undefined, { sensitivity: "base" });
           }
         }
@@ -545,13 +646,33 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
       const responsePayload = {
-        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs)),
+        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs, allGames)),
       };
 
       if (fromCache) {
         libraryGamesResponseCache[cacheKey] = responsePayload;
       }
       res.json(responsePayload);
+  });
+
+  // Serve game screenshot image (must be before GET /games/:gameId)
+  app.get("/games/:gameId/screenshots/:filename", (req, res) => {
+    const gameId = decodeURIComponent(req.params.gameId);
+    const filename = decodeURIComponent(req.params.filename);
+    if (!/^[a-zA-Z0-9_.-]+\.(webp|jpg|jpeg|png|gif)$/.test(filename)) {
+      return res.status(400).json({ error: "Invalid filename" });
+    }
+    const screenshotPath = path.join(metadataPath, "content", "games", gameId, "screenshots", filename);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET");
+    if (!fs.existsSync(screenshotPath)) {
+      res.setHeader("Content-Type", "image/webp");
+      return res.status(404).end();
+    }
+    const ext = path.extname(filename).toLowerCase();
+    const mime = { ".webp": "image/webp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif" }[ext] || "image/webp";
+    res.type(mime);
+    res.sendFile(screenshotPath);
   });
 
   // Endpoint: get single game by ID
@@ -563,7 +684,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
     const devs = getDevelopersCache ? getDevelopersCache() : null;
     const pubs = getPublishersCache ? getPublishersCache() : null;
-    res.json(buildGameResponse(metadataPath, game, devs, pubs));
+    res.json(buildGameResponse(metadataPath, game, devs, pubs, allGames));
   });
 
   // Endpoint: update game fields
@@ -605,18 +726,30 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "month",
       "day",
       "stars",
+      "criticRating",
+      "userRating",
       "genre",
       "themes",
       "platforms",
       "gameEngines",
       "gameModes",
       "playerPerspectives",
+      "ageRatings",
       "developers",
       "publishers",
       "franchise",
       "collection",
+      "keywords",
       "executables",
       "showTitle",
+      "screenshots",
+      "videos",
+      "alternativeNames",
+      "websites",
+      "similarGames",
+      "externalCoverUrl",
+      "externalBackgroundUrl",
+      "type",
     ];
     
     // Filter updates to only include allowed fields
@@ -626,6 +759,155 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         obj[key] = updates[key];
         return obj;
       }, {});
+
+    // Screenshots and videos: must be null or array of non-empty strings (URLs)
+    if ("screenshots" in filteredUpdates) {
+      const v = filteredUpdates.screenshots;
+      if (v == null) {
+        filteredUpdates.screenshots = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "screenshots must be an array of URL strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.screenshots = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("videos" in filteredUpdates) {
+      const v = filteredUpdates.videos;
+      if (v == null) {
+        filteredUpdates.videos = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "videos must be an array of URL strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.videos = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("alternativeNames" in filteredUpdates) {
+      const v = filteredUpdates.alternativeNames;
+      if (v == null) {
+        filteredUpdates.alternativeNames = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "alternativeNames must be an array of strings or null" });
+      } else {
+        const arr = v.filter((s) => typeof s === "string" && s.trim());
+        filteredUpdates.alternativeNames = arr.length > 0 ? arr : null;
+      }
+    }
+    if ("websites" in filteredUpdates) {
+      const v = filteredUpdates.websites;
+      if (v == null) {
+        filteredUpdates.websites = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "websites must be an array of objects or null" });
+      } else {
+        const arr = v
+          .filter((item) => item && typeof item === "object" && typeof item.url === "string" && item.url.trim())
+          .map((item) => String(item.url).trim())
+          .filter((url) => url);
+        const seen = new Set();
+        const deduped = arr.filter((url) => {
+          if (seen.has(url)) return false;
+          seen.add(url);
+          return true;
+        });
+        // Persist only URLs as string[] in metadata (category not stored)
+        filteredUpdates.websites = deduped.length > 0 ? deduped : null;
+      }
+    }
+    if ("externalCoverUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalCoverUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalCoverUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalCoverUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalCoverUrl = t.length > 0 ? t : null;
+      }
+    }
+    if ("externalBackgroundUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalBackgroundUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalBackgroundUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalBackgroundUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
+      }
+    }
+    // Critic/user ratings: 0-100 from client, convert to 0-10 for storage
+    if ("criticRating" in filteredUpdates) {
+      const v = filteredUpdates.criticRating;
+      if (v == null || v === "") {
+        filteredUpdates.criticratings = null;
+      } else {
+        const num = Number(v);
+        if (Number.isNaN(num) || num < 0 || num > 100) {
+          return res.status(400).json({ error: "criticRating must be a number between 0 and 100 or null" });
+        }
+        filteredUpdates.criticratings = num / 10;
+      }
+      delete filteredUpdates.criticRating;
+    }
+    if ("userRating" in filteredUpdates) {
+      const v = filteredUpdates.userRating;
+      if (v == null || v === "") {
+        filteredUpdates.userratings = null;
+      } else {
+        const num = Number(v);
+        if (Number.isNaN(num) || num < 0 || num > 100) {
+          return res.status(400).json({ error: "userRating must be a number between 0 and 100 or null" });
+        }
+        filteredUpdates.userratings = num / 10;
+      }
+      delete filteredUpdates.userRating;
+    }
+
+    // Age ratings: array of { category, rating } or null (category/rating can be number or string)
+    if ("ageRatings" in filteredUpdates) {
+      const v = filteredUpdates.ageRatings;
+      if (v == null) {
+        filteredUpdates.ageRatings = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "ageRatings must be an array of { category, rating } or null" });
+      } else {
+        const valid = v
+          .filter((item) => item && typeof item === "object" && item.category != null && item.rating != null)
+          .map((item) => ({
+            category: Number(item.category),
+            rating: Number(item.rating),
+          }))
+          .filter((item) => !Number.isNaN(item.category) && !Number.isNaN(item.rating));
+        filteredUpdates.ageRatings = valid.length > 0 ? valid : null;
+      }
+    }
+
+    if ("similarGames" in filteredUpdates) {
+      const v = filteredUpdates.similarGames;
+      if (v == null) {
+        filteredUpdates.similarGames = null;
+      } else if (!Array.isArray(v)) {
+        return res.status(400).json({ error: "similarGames must be an array of objects or null" });
+      } else {
+        const arr = v
+          .filter((item) => item && typeof item === "object" && item.id != null)
+          .map((item) => ({
+            id: Number(item.id),
+            name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : String(item.id),
+          }))
+          .filter((o) => !Number.isNaN(o.id));
+        const seen = new Set();
+        const deduped = arr.filter((o) => {
+          if (seen.has(o.id)) return false;
+          seen.add(o.id);
+          return true;
+        });
+        // Persist only ids in metadata (names resolved at response time from allGames)
+        filteredUpdates.similarGames = deduped.length > 0 ? deduped.map((o) => o.id) : null;
+      }
+    }
     
     // Normalize tag fields to ids (accept titles or ids from client; store ids)
     if ("genre" in filteredUpdates) {
@@ -697,17 +979,66 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       if (newPubItems.length > 0) ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
       filteredUpdates.publishers = newPubIds.length > 0 ? newPubIds : null;
     }
-    // Franchise and collection (series): only array of numeric ids; ensure blocks exist and link game
+    // Franchise and collection (series): accept [{ id, name }] or number[]; ensure blocks exist and link game
+    const normalizeFranchiseSeriesFromClient = (val) => {
+      if (val == null) return { ids: [], items: [] };
+      const arr = Array.isArray(val) ? val : [val];
+      const seen = new Set();
+      const ids = [];
+      const items = [];
+      for (const raw of arr) {
+        if (raw == null) continue;
+        let id = null;
+        let name = null;
+        if (typeof raw === "number" && !Number.isNaN(raw)) {
+          id = raw;
+          name = String(raw);
+        } else if (typeof raw === "object" && raw && raw.id != null) {
+          id = Number(raw.id);
+          if (Number.isNaN(id)) continue;
+          name = raw.name != null ? String(raw.name).trim() : (raw.title != null ? String(raw.title).trim() : String(id));
+        }
+        if (id == null || seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+        items.push({ id, name: name || String(id) });
+      }
+      return { ids, items };
+    };
     if ("franchise" in filteredUpdates) {
-      filteredUpdates.franchise = validateIdArray(filteredUpdates.franchise) || null;
-      if (filteredUpdates.franchise && filteredUpdates.franchise.length > 0) {
-        ensureFranchiseExistBatch(metadataPath, filteredUpdates.franchise, gameId);
+      const { ids, items } = normalizeFranchiseSeriesFromClient(filteredUpdates.franchise);
+      filteredUpdates.franchise = ids.length > 0 ? ids : null;
+      if (items.length > 0) {
+        ensureFranchiseExistBatch(metadataPath, items, gameId);
       }
     }
     if ("collection" in filteredUpdates) {
-      filteredUpdates.collection = validateIdArray(filteredUpdates.collection) || null;
-      if (filteredUpdates.collection && filteredUpdates.collection.length > 0) {
-        ensureSeriesExistBatch(metadataPath, filteredUpdates.collection, gameId);
+      const { ids, items } = normalizeFranchiseSeriesFromClient(filteredUpdates.collection);
+      filteredUpdates.collection = ids.length > 0 ? ids : null;
+      if (items.length > 0) {
+        ensureSeriesExistBatch(metadataPath, items, gameId);
+      }
+    }
+    // Keywords: array of strings, stored in game metadata
+    if ("keywords" in filteredUpdates) {
+      const raw = filteredUpdates.keywords;
+      if (!raw || !Array.isArray(raw)) {
+        filteredUpdates.keywords = null;
+      } else {
+        const filtered = raw.filter((x) => typeof x === "string" && x.trim());
+        filteredUpdates.keywords = filtered.length > 0 ? filtered : null;
+      }
+    }
+    if ("type" in filteredUpdates) {
+      const raw = filteredUpdates.type;
+      if (raw == null) {
+        filteredUpdates.type = null;
+      } else {
+        const id = coerceToGameTypeId(raw);
+        if (id === null) {
+          return res.status(400).json({ error: "type must be null, a number, or { id: number }" });
+        }
+        filteredUpdates.type = id;
       }
     }
 
@@ -813,110 +1144,183 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       currentGame.id = gameId;
       Object.assign(currentGame, getGameTagIdsFromBlocks(metadataPath, gameId));
       
-      // Update game with new values
+      // Delete local screenshot files that were removed from the list
+      if ("screenshots" in filteredUpdates) {
+        const oldList = Array.isArray(currentGame.screenshots) ? currentGame.screenshots : [];
+        const newList = Array.isArray(filteredUpdates.screenshots) ? filteredUpdates.screenshots : [];
+        const newSet = new Set(newList);
+        const localScreenshotRe = /^\/games\/(\d+)\/screenshots\/([a-zA-Z0-9_.-]+\.(webp|jpg|jpeg|png|gif))$/;
+        const gameIdStr = String(gameId);
+        for (const url of oldList) {
+          if (typeof url !== "string" || newSet.has(url)) continue;
+          const m = (url.trim()).match(localScreenshotRe);
+          if (!m || m[1] !== gameIdStr) continue;
+          const filename = m[2];
+          const screenshotsDir = path.join(metadataPath, "content", "games", gameIdStr, "screenshots");
+          const filePath = path.join(screenshotsDir, filename);
+          try {
+            if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+              fs.unlinkSync(filePath);
+              removeDirectoryIfEmpty(screenshotsDir);
+            }
+          } catch (err) {
+            console.warn(`Failed to delete screenshot file ${filePath}:`, err.message);
+          }
+        }
+      }
+
+      // Update game with new values (executables not persisted; order from disk N- prefix)
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(currentGame, filteredUpdates);
       }
-      
+
       // If we need to delete executables (executables was set to null)
       if (shouldDeleteExecutables) {
-        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-        if (fs.existsSync(gameContentDir)) {
+        const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+        if (fs.existsSync(scriptsDir)) {
           try {
-            const files = fs.readdirSync(gameContentDir);
-            // Delete all .sh and .bat files
+            const files = fs.readdirSync(scriptsDir);
             for (const file of files) {
-              const filePath = path.join(gameContentDir, file);
+              const filePath = path.join(scriptsDir, file);
               const ext = path.extname(file).toLowerCase();
               if ((ext === '.sh' || ext === '.bat') && fs.statSync(filePath).isFile()) {
                 fs.unlinkSync(filePath);
               }
             }
+            removeDirectoryIfEmpty(scriptsDir);
           } catch (err) {
             console.error(`Failed to delete executables for game ${gameId}:`, err.message);
           }
         }
-        // Remove executables field from metadata
         delete currentGame.executables;
       }
       
-      // If executables was updated (but not deleted), sync files with the provided array
+      // If executables was updated (but not deleted), sync filenames to N- prefix order
       if ('executables' in filteredUpdates && !shouldDeleteExecutables) {
         const requestedExecutables = filteredUpdates.executables;
-        const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-        
-        if (fs.existsSync(gameContentDir)) {
+        const requestedPlatformIds = Array.isArray(updates.executablePlatformIds) ? updates.executablePlatformIds : [];
+        const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+        ensureDirectoryExists(scriptsDir);
+
+        try {
+          const basenames = getExecutableFileBasenames(metadataPath, gameId);
+          let files = [];
           try {
-            // Get all existing executable files
-            const files = fs.readdirSync(gameContentDir);
-            const executableFiles = files.filter(file => {
-              const filePath = path.join(gameContentDir, file);
+            files = fs.readdirSync(scriptsDir);
+          } catch (_) {}
+          const currentFiles = files
+            .filter(file => {
+              const filePath = path.join(scriptsDir, file);
               if (!fs.statSync(filePath).isFile()) return false;
               const ext = path.extname(file).toLowerCase();
               return ext === '.sh' || ext === '.bat';
+            })
+            .map(file => {
+              const baseNoExt = path.basename(file, path.extname(file));
+              return {
+                fullName: file,
+                basenameNoExt: baseNoExt,
+                ext: path.extname(file),
+                label: labelFromBasename(baseNoExt),
+                platformId: platformIdFromBasename(baseNoExt),
+              };
+            })
+            .sort((a, b) => {
+              const [aNum, aRest] = sortKeyForExecutableBasename(a.basenameNoExt);
+              const [bNum, bRest] = sortKeyForExecutableBasename(b.basenameNoExt);
+              if (aNum !== bNum) return aNum - bNum;
+              return aRest.localeCompare(bRest);
             });
-            
-            // Delete files that are not in the requested executables array
-            // Compare using sanitized names (files are saved with sanitized names)
-            for (const file of executableFiles) {
-              const fileNameWithoutExt = path.basename(file, path.extname(file));
-              // Check if this file's sanitized name matches any requested executable's sanitized name
-              const fileMatches = requestedExecutables.some(reqExec => {
-                const sanitizedReqExec = sanitizeExecutableName(reqExec);
-                return sanitizedReqExec === fileNameWithoutExt;
-              });
-              if (!fileMatches) {
-                const filePath = path.join(gameContentDir, file);
-                try {
-                  fs.unlinkSync(filePath);
-                } catch (err) {
-                  console.warn(`Failed to delete executable file ${filePath}:`, err.message);
-                }
+
+          const pad = n => String(n).padStart(2, '0');
+          const used = new Set();
+          /** slotIndex -> currentFile assigned to that slot (so content follows the correct script after reorder) */
+          const slotAssignments = [];
+          // Match by label+platformId first so reorder preserves file content; fallback by position for renamed labels.
+          for (let i = 0; i < requestedExecutables.length; i++) {
+            const label = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
+            if (!label) continue;
+            const sanitizedLabel = sanitizeExecutableName(label);
+            const platformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : '';
+            let cf = null;
+            const idx = currentFiles.findIndex(
+              f => !used.has(f.fullName) && sanitizeExecutableName(f.label) === sanitizedLabel && f.platformId === platformId
+            );
+            if (idx !== -1) {
+              cf = currentFiles[idx];
+              used.add(cf.fullName);
+            }
+            slotAssignments[i] = cf;
+          }
+          const unmatchedSlots = slotAssignments.map((cf, i) => (cf ? null : i)).filter(i => i !== null);
+          const unmatchedFiles = currentFiles.filter(f => !used.has(f.fullName));
+          const previousFileNames = Array.isArray(updates.executablePreviousFileNames) ? updates.executablePreviousFileNames : [];
+          // When labels are removed/reordered, match unmatched slots by previous filename so content stays correct
+          for (const slotIndex of unmatchedSlots) {
+            const prevName = previousFileNames[slotIndex];
+            if (prevName && typeof prevName === 'string' && prevName.trim() !== '') {
+              const cf = currentFiles.find(f => f.fullName === prevName.trim() && !used.has(f.fullName));
+              if (cf) {
+                slotAssignments[slotIndex] = cf;
+                used.add(cf.fullName);
               }
             }
-          } catch (err) {
-            console.error(`Failed to sync executables for game ${gameId}:`, err.message);
           }
-        }
-        
-        // Update executables in metadata.json with the requested array
-        // Verify which files actually exist and maintain the requested order
-        const finalExecutables = [];
-        
-        // Keep executables in the requested order, but only if the file exists
-        for (const execName of requestedExecutables) {
-          if (typeof execName !== 'string' || !execName.trim()) continue;
-          
-          // Sanitize name for filesystem lookup (files are saved with sanitized names)
-          const sanitizedExecName = sanitizeExecutableName(execName);
-          
-          // Check if file exists (.sh or .bat) using sanitized name
-          const shPath = path.join(gameContentDir, `${sanitizedExecName}.sh`);
-          const batPath = path.join(gameContentDir, `${sanitizedExecName}.bat`);
-          
-          if (fs.existsSync(shPath) || fs.existsSync(batPath)) {
-            // Return original name (from metadata) not sanitized name
-            finalExecutables.push(execName);
+          // Any still-unmatched slots get remaining files by disk order (fallback)
+          const stillUnmatched = slotAssignments.map((cf, i) => (cf ? null : i)).filter(i => i !== null);
+          const stillUnmatchedFiles = currentFiles.filter(f => !used.has(f.fullName));
+          for (let k = 0; k < stillUnmatched.length && k < stillUnmatchedFiles.length; k++) {
+            slotAssignments[stillUnmatched[k]] = stillUnmatchedFiles[k];
+            used.add(stillUnmatchedFiles[k].fullName);
           }
+
+          const renames = [];
+          for (let i = 0; i < requestedExecutables.length; i++) {
+            const label = typeof requestedExecutables[i] === 'string' ? requestedExecutables[i].trim() : '';
+            if (!label) continue;
+            const cf = slotAssignments[i];
+            if (!cf) continue; // New slot (file uploaded via POST)
+            const sanitizedLabel = sanitizeExecutableName(label);
+            const platformId = (requestedPlatformIds[i] != null && String(requestedPlatformIds[i]).trim() !== '') ? String(requestedPlatformIds[i]).trim() : '';
+            const targetBasenameNoExt = pad(i + 1) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
+            const targetFull = targetBasenameNoExt + cf.ext;
+            if (cf.fullName !== targetFull) renames.push({ from: cf.fullName, to: targetFull });
+          }
+
+          for (let i = 0; i < renames.length; i++) {
+            const oldPath = path.join(scriptsDir, renames[i].from);
+            const tempPath = path.join(scriptsDir, `__temp_${i}${path.extname(renames[i].from)}`);
+            if (fs.existsSync(oldPath)) fs.renameSync(oldPath, tempPath);
+          }
+          for (let i = 0; i < renames.length; i++) {
+            const tempPath = path.join(scriptsDir, `__temp_${i}${path.extname(renames[i].from)}`);
+            const newPath = path.join(scriptsDir, renames[i].to);
+            if (fs.existsSync(tempPath)) fs.renameSync(tempPath, newPath);
+          }
+
+          for (const cf of currentFiles) {
+            if (used.has(cf.fullName)) continue;
+            const filePath = path.join(scriptsDir, cf.fullName);
+            if (fs.existsSync(filePath)) {
+              try {
+                fs.unlinkSync(filePath);
+              } catch (err) {
+                console.warn(`Failed to delete executable file ${cf.fullName}:`, err.message);
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to sync executables for game ${gameId}:`, err.message);
         }
-        
-        if (finalExecutables.length > 0) {
-          currentGame.executables = finalExecutables;
-        } else {
-          // If no files exist, remove executables field
-          delete currentGame.executables;
-        }
+        delete currentGame.executables;
       }
       
-      // Save updated game
       saveGame(metadataPath, currentGame);
       
-      // Update allGames cache to ensure it's in sync
       if (Object.keys(filteredUpdates).length > 0) {
         Object.assign(allGames[gameId], filteredUpdates);
         invalidateLibraryGamesResponseCache();
       }
-      // Remove tags that are no longer used by any game (and have no cover)
       for (const { id, deleteFn } of tagCleanup) {
         deleteFn(metadataPath, metadataPath, id, allGames);
       }
@@ -927,9 +1331,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           deleteSeriesIfUnused(metadataPath, id, allGames);
         }
       }
-      // Sync executables in cache with metadata (respecting order)
       if (shouldDeleteExecutables || 'executables' in filteredUpdates) {
-        const orderedExecutables = getExecutablesWithOrder(metadataPath, gameId, currentGame);
+        const orderedExecutables = getExecutablesWithOrder(metadataPath, gameId);
         if (orderedExecutables.length > 0) {
           allGames[gameId].executables = orderedExecutables;
         } else {
@@ -941,7 +1344,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const updatedGame = currentGame;
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to save ${fileName}:`, e.message);
       res.status(500).json({ error: "Failed to save game updates" });
@@ -964,7 +1367,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs) });
+      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to reload game ${gameId}:`, e.message);
       res.status(500).json({ error: "Failed to reload game metadata" });
@@ -1004,7 +1407,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const coverPath = path.join(gameContentDir, "cover.webp");
       fs.writeFileSync(coverPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save cover image" });
@@ -1041,10 +1444,41 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const backgroundPath = path.join(gameContentDir, "background.webp");
       fs.writeFileSync(backgroundPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save background image" });
+    }
+  });
+
+  // Endpoint: upload screenshot image for a game
+  app.post("/games/:gameId/upload-screenshot", requireToken, upload.single("file"), (req, res) => {
+    const gameId = Number(req.params.gameId);
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    if (!file.mimetype.startsWith("image/")) {
+      return res.status(400).json({ error: "File must be an image" });
+    }
+    const game = allGames[gameId];
+    if (!game) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+    try {
+      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+      ensureDirectoryExists(gameContentDir);
+      const screenshotsDir = path.join(gameContentDir, "screenshots");
+      ensureDirectoryExists(screenshotsDir);
+      const ext = (file.mimetype === "image/webp" && "webp") || (file.mimetype === "image/png" && "png") || (file.mimetype === "image/gif" && "gif") || "jpg";
+      const baseName = `screenshot-${Date.now()}.${ext}`;
+      const screenshotPath = path.join(screenshotsDir, baseName);
+      fs.writeFileSync(screenshotPath, file.buffer);
+      const url = `/games/${gameId}/screenshots/${baseName}`;
+      return res.json({ status: "success", url });
+    } catch (error) {
+      console.error(`Failed to save screenshot for game ${gameId}:`, error);
+      return res.status(500).json({ error: "Failed to save screenshot" });
     }
   });
 
@@ -1091,7 +1525,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'cover'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete cover image" });
@@ -1141,7 +1575,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'background'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game) });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete background image" });
@@ -1152,11 +1586,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   app.post("/games/:gameId/upload-executable", requireToken, upload.single('file'), (req, res) => {
     const gameId = Number(req.params.gameId);
     const file = req.file;
-    
+
     if (!file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
-    
+
     // Validate file extension (only .sh or .bat allowed)
     const originalName = file.originalname || '';
     const fileExtension = path.extname(originalName).toLowerCase();
@@ -1165,90 +1599,80 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       return res.status(400).json({ error: "Only .sh and .bat files are allowed" });
     }
     
-    // Get optional label from body (FormData field)
+    // Get optional label, platform and platformId from body (FormData).
+    // Filename and metadata name: label + platformId (same format as frontend PUT executables).
     const label = req.body.label ? req.body.label.trim() : null;
-    
+    const platform = req.body.platform ? req.body.platform.trim() : null;
+    const platformId = (req.body.platformId != null && req.body.platformId !== '') ? String(req.body.platformId).trim() : '';
+    /** When replacing an existing script from Manage Installation, client sends the current on-disk basename so we overwrite instead of allocating the next N- slot (which left the old file and confused PUT matching). */
+    const replaceFileNameRaw = req.body.replaceFileName != null ? String(req.body.replaceFileName).trim() : '';
+
     // Validate game exists
     const game = allGames[gameId];
     if (!game) {
       return res.status(404).json({ error: "Game not found" });
     }
-    
+
     try {
-      // Create game content directory if it doesn't exist
-      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
-      // Ensure parent directories exist (important for macOS filesystem)
-      ensureDirectoryExists(gameContentDir);
-      
-      // Use label if provided, otherwise default to "script"
+      const scriptsDir = getGameScriptsDir(metadataPath, gameId);
+      ensureDirectoryExists(scriptsDir);
+      const resolvedScriptsDir = path.resolve(scriptsDir);
+
       let scriptName;
-      if (label) {
-        // Sanitize label (remove invalid characters for filename)
-        const sanitizedLabel = label.replace(/[^a-zA-Z0-9_-]/g, '_');
-        scriptName = `${sanitizedLabel}${fileExtension}`;
+      let executablePath;
+
+      if (replaceFileNameRaw) {
+        const safeBase = path.basename(replaceFileNameRaw);
+        if (safeBase !== replaceFileNameRaw || safeBase.includes("..") || !/^[\w.-]+\.(sh|bat)$/i.test(safeBase)) {
+          return res.status(400).json({ error: "Invalid replaceFileName" });
+        }
+        const baseNoExt = safeBase.replace(/\.(sh|bat)$/i, "");
+        scriptName = baseNoExt + fileExtension;
+        executablePath = path.resolve(path.join(scriptsDir, scriptName));
+        if (!executablePath.startsWith(resolvedScriptsDir + path.sep)) {
+          return res.status(400).json({ error: "Invalid replaceFileName path" });
+        }
+        const oldPathSameSlot = path.join(scriptsDir, safeBase);
+        if (oldPathSameSlot !== executablePath && fs.existsSync(oldPathSameSlot)) {
+          try {
+            fs.unlinkSync(oldPathSameSlot);
+          } catch (unlinkErr) {
+            console.warn(`Could not remove previous script ${safeBase}:`, unlinkErr.message);
+          }
+        }
       } else {
-        // Default behavior: script.sh or script.bat
-        scriptName = fileExtension === '.bat' ? 'script.bat' : 'script.sh';
+        const labelPart = (label || platform || 'script').trim();
+        const sanitizedLabel = labelPart.replace(/[^a-zA-Z0-9_-]/g, '_');
+        let nextNum = 1;
+        if (fs.existsSync(scriptsDir)) {
+          const files = fs.readdirSync(scriptsDir);
+          for (const file of files) {
+            const baseNoExt = path.basename(file, path.extname(file));
+            const parsed = parseNumberPrefix(baseNoExt);
+            if (parsed.num !== Number.MAX_SAFE_INTEGER && parsed.num >= nextNum) nextNum = parsed.num + 1;
+          }
+        }
+        const pad = n => String(n).padStart(2, '0');
+        const scriptBasenameNoExt = pad(nextNum) + '-' + sanitizedLabel + (platformId ? '-' + platformId : '');
+        scriptName = scriptBasenameNoExt + fileExtension;
+        executablePath = path.join(scriptsDir, scriptName);
       }
-      const executablePath = path.join(gameContentDir, scriptName);
-      
-      // Write file to disk
+
       fs.writeFileSync(executablePath, file.buffer);
-      
-      // Make file executable (Unix-like systems, only for .sh files)
+
       if (fileExtension === '.sh') {
         try {
           fs.chmodSync(executablePath, 0o755);
         } catch (chmodError) {
-          // Ignore chmod errors on Windows
           console.warn('Could not set executable permissions:', chmodError.message);
         }
       }
-      
-      // Update executables array: maintain existing order and add new one if not present
-      // Save the original label (not sanitized) in metadata.json
-      const currentGame = loadGame(metadataPath, gameId);
-      let executableNames;
-      
-      // Use original label for metadata.json (not sanitized filename)
-      const metadataExecutableName = label || 'script';
-      
-      if (currentGame && currentGame.executables && Array.isArray(currentGame.executables) && currentGame.executables.length > 0) {
-        // Maintain existing order, add new executable if not already present
-        executableNames = [...currentGame.executables];
-        if (!executableNames.includes(metadataExecutableName)) {
-          executableNames.push(metadataExecutableName);
-        }
-      } else {
-        // No existing order, read from directory and merge with new one
-        executableNames = getExecutableNames(metadataPath, gameId);
-        // Remove the sanitized name if present and add the original label
-        const sanitizedExecutableName = scriptName.replace(/\.(sh|bat)$/, '');
-        executableNames = executableNames.filter(name => name !== sanitizedExecutableName);
-        if (!executableNames.includes(metadataExecutableName)) {
-          executableNames.push(metadataExecutableName);
-        }
-      }
-      
-      game.executables = executableNames;
-      
-      // Update the game in its own metadata.json file
-      try {
-        if (currentGame) {
-          currentGame.id = gameId; // Set id before saving (id is not stored in metadata.json)
-          currentGame.executables = executableNames;
-          saveGame(metadataPath, currentGame);
-        }
-        // Update allGames cache
-        allGames[gameId].executables = executableNames;
-      } catch (saveError) {
-        console.warn(`Failed to save executables field for game ${gameId}:`, saveError.message);
-        // Continue anyway, the file was uploaded successfully
-      }
-      
+
+      allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
+
       res.json({
         status: "success",
-        game: buildGameResponse(metadataPath, game),
+        game: buildGameResponse(metadataPath, allGames[gameId], null, null, allGames),
       });
     } catch (error) {
       console.error(`Failed to save executable for game ${gameId}:`, error);
@@ -1258,7 +1682,36 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
   // Endpoint: add game from IGDB to library
   app.post("/games/add-from-igdb", requireToken, async (req, res) => {
-    const { igdbId, name, summary, cover, background, releaseDate, genres, criticRating, userRating, stars, themes, platforms, gameModes, playerPerspectives, websites, ageRatings, developers, publishers, franchise, collection, series, screenshots, videos, gameEngines, keywords, alternativeNames, similarGames } = req.body;
+    const {
+      igdbId,
+      name,
+      summary,
+      cover,
+      background,
+      releaseDate,
+      genres,
+      criticRating,
+      userRating,
+      stars,
+      themes,
+      platforms,
+      gameModes,
+      playerPerspectives,
+      websites,
+      ageRatings,
+      developers,
+      publishers,
+      franchise,
+      collection,
+      series,
+      screenshots,
+      videos,
+      gameEngines,
+      keywords,
+      alternativeNames,
+      similarGames,
+      type: gameTypeFromClient,
+    } = req.body;
     
     if (!igdbId || !name) {
       return res.status(400).json({ error: "Missing required fields: igdbId and name" });
@@ -1338,6 +1791,17 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return null;
       };
 
+      // Normalize tag field from IGDB: client may send string[] or [{ id, name }]; return string[] of names for library tag resolution
+      const normalizeTagNamesFromIgdb = (arr) => {
+        if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
+        const names = [];
+        for (const item of arr) {
+          if (typeof item === "string" && item.trim()) names.push(item.trim());
+          else if (item && typeof item === "object" && typeof item.name === "string" && item.name.trim()) names.push(item.name.trim());
+        }
+        return names.length > 0 ? names : null;
+      };
+
       const validateObjectArray = (arr) => {
         if (arr && Array.isArray(arr) && arr.length > 0) {
           return arr.filter((item) => item && typeof item === "object");
@@ -1346,10 +1810,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       let validScreenshots = validateStringArray(screenshots);
-      let validThemes = validateStringArray(themes);
-      let validPlatforms = validateStringArray(platforms);
-      let validGameModes = validateStringArray(gameModes);
-      let validPlayerPerspectives = validateStringArray(playerPerspectives);
+      let validThemes = normalizeTagNamesFromIgdb(themes) || validateStringArray(themes);
+      let validPlatforms = normalizeTagNamesFromIgdb(platforms) || validateStringArray(platforms);
+      let validGameModes = normalizeTagNamesFromIgdb(gameModes) || validateStringArray(gameModes);
+      let validPlayerPerspectives = normalizeTagNamesFromIgdb(playerPerspectives) || validateStringArray(playerPerspectives);
       let validWebsites = validateObjectArray(websites);
       let validAgeRatings = validateObjectArray(ageRatings);
       // Developers and publishers: [{ id, name, logo?, description? }] from IGDB
@@ -1361,7 +1825,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const rawDevelopers = validateDeveloperPublisherArray(developers);
       const rawPublishers = validateDeveloperPublisherArray(publishers);
       let validVideos = validateStringArray(videos);
-      let validGameEngines = validateStringArray(gameEngines);
+      let validGameEngines = normalizeTagNamesFromIgdb(gameEngines) || validateStringArray(gameEngines);
       let validKeywords = validateStringArray(keywords);
       let validAlternativeNames = validateStringArray(alternativeNames);
       let validSimilarGames = validateObjectArray(similarGames);
@@ -1383,6 +1847,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
       const franchiseForEnsure = normalizeFranchiseOrCollectionToArray(franchise);
       const collectionForEnsure = normalizeFranchiseOrCollectionToArray(collection ?? series);
+
+      const storedGameTypeId = coerceToGameTypeId(gameTypeFromClient);
 
       // Resolve tag titles to ids (creates missing tags)
       const genreIds = normalizeCategoryFieldToIds(metadataPath, validGenres);
@@ -1407,7 +1873,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         platforms: platformIds,
         gameModes: gameModeIds,
         playerPerspectives: playerPerspectiveIds,
-        websites: validWebsites,
+        websites: (validWebsites && validWebsites.length)
+          ? validWebsites.map((w) => (w && typeof w.url === "string" && w.url.trim() ? w.url.trim() : null)).filter(Boolean)
+          : null,
         ageRatings: validAgeRatings,
         developers: rawDevelopers ? rawDevelopers.map((d) => d.id) : null,
         publishers: rawPublishers ? rawPublishers.map((p) => p.id) : null,
@@ -1418,10 +1886,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         gameEngines: gameEngineIds,
         keywords: validKeywords,
         alternativeNames: validAlternativeNames,
-        similarGames: validSimilarGames,
-        igdbCover: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
-        igdbBackground: background && typeof background === "string" && background.trim() ? background.trim() : null,
+        similarGames: (validSimilarGames && validSimilarGames.length)
+          ? [...new Set(validSimilarGames.map((s) => Number(s.id)).filter((id) => !Number.isNaN(id)))]
+          : null,
+        externalCoverUrl: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
+        externalBackgroundUrl: background && typeof background === "string" && background.trim() ? background.trim() : null,
         showTitle: true,
+        ...(storedGameTypeId != null ? { type: storedGameTypeId } : {}),
       };
 
       if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
@@ -1451,10 +1922,74 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs), gameId: newGame.id });
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
       console.error(`Failed to add game from IGDB:`, error);
       res.status(500).json({ error: "Failed to add game to library", detail: error.message });
+    }
+  });
+
+  // Endpoint: create a new game from scratch (no IGDB). ID = creation timestamp.
+  app.post("/games/create", requireToken, async (req, res) => {
+    const { title } = req.body;
+    const name = typeof title === "string" ? title.trim() : "";
+    if (!name) {
+      return res.status(400).json({ error: "Missing required field: title" });
+    }
+
+    try {
+      let gameId = Date.now();
+      const gameDirBase = path.join(metadataPath, "content", "games");
+      while (allGames[gameId] || fs.existsSync(path.join(gameDirBase, String(gameId)))) {
+        gameId += 1;
+      }
+
+      const newGame = {
+        id: gameId,
+        title: name,
+        summary: "",
+        year: null,
+        month: null,
+        day: null,
+        genre: null,
+        criticratings: null,
+        userratings: null,
+        stars: null,
+        themes: null,
+        platforms: null,
+        gameModes: null,
+        playerPerspectives: null,
+        websites: null,
+        ageRatings: null,
+        developers: null,
+        publishers: null,
+        franchise: null,
+        collection: null,
+        screenshots: null,
+        videos: null,
+        gameEngines: null,
+        keywords: null,
+        alternativeNames: null,
+        similarGames: null,
+        externalCoverUrl: null,
+        externalBackgroundUrl: null,
+        showTitle: true,
+      };
+
+      saveGame(metadataPath, newGame);
+      allGames[gameId] = newGame;
+      invalidateLibraryGamesResponseCache();
+
+      if (updateRecommendedSections && typeof updateRecommendedSections === "function") {
+        updateRecommendedSections(metadataPath, allGames);
+      }
+
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
+    } catch (error) {
+      console.error("Failed to create game:", error);
+      res.status(500).json({ error: "Failed to create game", detail: error.message });
     }
   });
 
@@ -1480,14 +2015,6 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         : [];
       const gameFranchiseIds = Array.isArray(game.franchise) ? game.franchise : game.franchise != null ? [game.franchise] : [];
       const gameCollectionIds = Array.isArray(game.collection) ? game.collection : game.collection != null ? [game.collection] : [];
-      const gameDeveloperIds = (game.developers && Array.isArray(game.developers)
-        ? game.developers
-        : game.developers != null ? [game.developers] : []
-      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
-      const gamePublisherIds = (game.publishers && Array.isArray(game.publishers)
-        ? game.publishers
-        : game.publishers != null ? [game.publishers] : []
-      ).map((x) => (typeof x === "object" && x != null && x.id != null ? x.id : x));
 
       // Remove game from all tag blocks (genre, themes, platforms, etc.) and franchise/series blocks before deleting
       removeGameFromAllTagBlocks(metadataPath, gameId);
@@ -1508,27 +2035,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       
       // Remove game from all collections (use in-memory cache when available)
       const collectionsCache = getCollectionsCache && typeof getCollectionsCache === "function" ? getCollectionsCache() : null;
-      const collectionToGames = getCollectionToGameIdsMap(metadataPath);
-      const collectionIdsContainingGame = [];
-      for (const [collectionId, gameIds] of collectionToGames) {
-        if (gameIds.some((g) => Number(g) === Number(gameId))) collectionIdsContainingGame.push(collectionId);
-      }
       removeGameFromAllCollections(metadataPath, gameId, updateCollectionsCache, collectionsCache);
-      for (const id of collectionIdsContainingGame) {
-        if (id != null) deleteCollectionIfUnused(metadataPath, id);
-      }
-      // Remove game from all developers and publishers
-      const developersCache = getDevelopersCache && typeof getDevelopersCache === "function" ? getDevelopersCache() : null;
-      const publishersCache = getPublishersCache && typeof getPublishersCache === "function" ? getPublishersCache() : null;
-      removeGameFromAllDevelopers(metadataPath, gameId, null, developersCache);
-      removeGameFromAllPublishers(metadataPath, gameId, null, publishersCache);
-
-      for (const id of gameDeveloperIds) {
-        if (id != null) deleteDeveloperIfUnused(metadataPath, id);
-      }
-      for (const id of gamePublisherIds) {
-        if (id != null) deletePublisherIfUnused(metadataPath, id);
-      }
+      // Remove game from all developers and publishers (pass null cache to load fresh from disk,
+      // so we include developers/publishers created when the game was added)
+      removeGameFromAllDevelopers(metadataPath, gameId, null, null);
+      removeGameFromAllPublishers(metadataPath, gameId, null, null);
 
       // Remove from in-memory cache
       delete allGames[gameId];

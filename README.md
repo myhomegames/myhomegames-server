@@ -84,12 +84,17 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
 - `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
 - **Note:** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are no longer required in `.env`. They are now provided by users during login through the frontend.
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
+- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive installed on first startup when no skins are present (default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`)
 
 ### Metadata Path
 
 The `METADATA_PATH` environment variable specifies the directory where all persistent data files are stored. This includes game metadata, cover images, settings, and game library data.
 
-**Default value**: `$HOME/Library/Application Support/MyHomeGames`
+**Default values** (when `METADATA_PATH` is unset):
+
+- **macOS**: `~/Library/Application Support/MyHomeGames`
+- **Windows**: `%APPDATA%\MyHomeGames` (e.g. `C:\Users\<you>\AppData\Roaming\MyHomeGames`)
+- **Linux**: `$XDG_DATA_HOME/MyHomeGames` or `~/.local/share/MyHomeGames`
 
 **Example configuration in `.env` file**:
 ```
@@ -105,13 +110,18 @@ The server expects the following directory structure under `METADATA_PATH`:
 ```
 ${METADATA_PATH}/
 ├── settings.json                    # Application settings (language, etc.)
-└── content/                         # All content and metadata
+├── skins/                           # Web UI themes (zip-installed or manual)
+│   └── ${uuid}/                     # id folder name is the skin id
+│       ├── skin.json                # { "name", "web": { persistentLibraryShell, collectionsShortcutList, libraryPagesVerticalList, headerTitleFilter, disableAlphabetNavigator } }
+│       └── bundle.css               # Full theme CSS (or multiple .css files; see SKINS.md in myhomegames-skins)
+└── content/                         # Game and library content metadata
     ├── games/
     │   └── ${gameId}/              # Per-game content directories
     │       ├── metadata.json       # Game metadata (without id field)
     │       ├── cover.webp          # Game cover image
     │       ├── background.webp     # Game background image
-    │       └── script.sh           # Game launcher script (optional)
+    │       └── scripts/            # Executable scripts (.sh / .bat)
+    │           └── *.sh, *.bat     # Game launcher script(s) (optional)
     ├── collections/
     │   └── ${collectionId}/        # Per-collection content directories
     │       ├── metadata.json       # Collection metadata (without id field)
@@ -131,10 +141,11 @@ ${METADATA_PATH}/
 All JSON files and settings are stored outside the codebase in the metadata path. These files are not part of the repository and should be managed separately:
 
 - **`settings.json`**: Application settings (language preference, etc.)
-- **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name).
+- **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name). Optional fallback image URLs when no local `cover.webp` / `background.webp` exist: `externalCoverUrl`, `externalBackgroundUrl`. Executable scripts are stored in **`content/games/${gameId}/scripts/`** as `.sh` or `.bat` files. Script order is defined by a numeric prefix in the filename: `01-label.sh`, `02-another-1.sh` (the number followed by a hyphen; the optional `-1` is the platform id).
 - **`content/collections/${collectionId}/metadata.json`**: Collection metadata files. Each collection has its own folder with a metadata.json file containing collection properties like `title`, `summary`, `games` array, etc. (the `id` field is derived from the folder name).
 - **`content/categories/${categoryId}/metadata.json`**: Category metadata files. Each category has its own folder (named with a numeric ID derived from the title) with a metadata.json file containing a `title` field.
 - **`content/recommended/${sectionId}/metadata.json`**: Recommended section metadata files. Each section has its own folder with a metadata.json file containing a `games` array (the `id` field is derived from the folder name).
+- **`skins/${uuid}/`**: Optional web UI skins. Installed via the web app (Settings) as a zip, or placed manually. Uploading a zip whose resolved display name matches an existing skin’s `skin.json` **name** replaces that folder in place (same UUID, so the active theme stays valid). See **`SKINS.md`** in the **myhomegames-skins** repository for archive format and API.
 
 #### Initial Setup
 
@@ -145,9 +156,12 @@ mkdir -p "${METADATA_PATH}/content/games"
 mkdir -p "${METADATA_PATH}/content/collections"
 mkdir -p "${METADATA_PATH}/content/categories"
 mkdir -p "${METADATA_PATH}/content/recommended"
+mkdir -p "${METADATA_PATH}/skins"
 ```
 
 Then create the required JSON files or copy them from a backup. The server will create default settings if `settings.json` doesn't exist.
+
+On first run, if `METADATA_PATH/skins` has no installed skins, the server automatically installs the archive from `DEFAULT_SKIN_URL` (Plex by default) and sets it as `activeSkinId` in `settings.json`.
 
 **Note**: If you're migrating from an older version, you'll need to migrate from the old monolithic JSON files (`games-library.json`, `games-collections.json`, etc.) to the new directory-per-item structure. Each game, collection, category, and recommended section should have its own directory under the appropriate `content/` subdirectory.
 
@@ -244,10 +258,12 @@ If you see errors like `ERR_CERT_AUTHORITY_INVALID` or "Your connection is not p
 2. Follow the steps in the [First Time Setup](#first-time-setup-for-end-users) section above to accept the certificate
 3. You only need to do this once per browser
 
+If the server logs `"openssl" is not recognized` on Windows: current builds generate certificates with Node.js when `openssl` is not installed—rebuild from the latest server sources, or install OpenSSL / Git for Windows and add it to `PATH`, or set `HTTPS_ENABLED=false` to use HTTP only (see `.env.example`).
+
 ### Application Won't Start
 
 - Check that ports 4000 (HTTP) and 41440 (HTTPS) are available
-- Verify that the application has proper permissions to create files in `~/Library/Application Support/MyHomeGames`
+- Verify that the application has proper permissions to create files in the metadata directory (see [Metadata Path](#metadata-path) for defaults per OS)
 - Check the console logs for error messages
 
 ### Authentication Issues
