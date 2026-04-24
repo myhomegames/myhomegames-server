@@ -426,6 +426,7 @@ HTTPS_ENABLED=true
 HTTPS_PORT=41440
 API_BASE=https://localhost:41440
 FRONTEND_URL=https://myhomegames.vige.it/app/
+COVER_TAG_URL=https://myhomegames.vige.it
 `;
 fs.writeFileSync(path.join(RESOURCES_PATH, '.env'), envContent);
 fs.writeFileSync(path.join(RESOURCES_PATH, SERVER_INFO_FILENAME), serverInfoJson);
@@ -730,6 +731,7 @@ HTTPS_ENABLED=true
 HTTPS_PORT=41440
 API_BASE=https://localhost:41440
 FRONTEND_URL=https://myhomegames.vige.it/app/
+COVER_TAG_URL=https://myhomegames.vige.it
 `;
 const linuxExe = ['myhomegames-server-linux-x64', 'myhomegames-server-node18-linux-x64'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
 const winExe = ['myhomegames-server-win-x64.exe', 'myhomegames-server-node18-win-x64.exe'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));

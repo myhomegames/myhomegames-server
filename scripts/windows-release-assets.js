@@ -13,6 +13,7 @@ HTTPS_ENABLED=true
 HTTPS_PORT=41440
 API_BASE=https://localhost:41440
 FRONTEND_URL=https://myhomegames.vige.it/app/
+COVER_TAG_URL=https://myhomegames.vige.it
 `;
 
 const SERVER_INFO_FILENAME = "server-info.json";

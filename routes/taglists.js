@@ -377,9 +377,9 @@ function createTagRoutes(config) {
         return res.sendFile(coverPath);
       }
 
-      const frontendUrl = process.env.FRONTEND_URL;
-      if (frontendUrl) {
-        const baseUrl = frontendUrl.replace(/\/app\/?$/, "");
+      const coverTagUrl = process.env.COVER_TAG_URL;
+      if (coverTagUrl) {
+        const baseUrl = coverTagUrl.replace(/\/$/, "");
         const remoteUrl = `${baseUrl}${normalizedRouteBase}/${tagId}/cover.webp`;
         return res.redirect(remoteUrl);
       }

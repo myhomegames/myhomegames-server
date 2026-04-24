@@ -81,6 +81,9 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
     - If a proxy/CDN filters or modifies the `Origin` header
     - In production, only if you have a specific infrastructure setup that requires it
   - **Fallback behavior:** If not set and `Origin` is missing, the server will attempt to derive the frontend URL from `API_BASE` (replacing port 4000 with 5173 for development)
+- `COVER_TAG_URL` - Base URL used for tag cover failover redirects (optional)
+  - Used by tag cover endpoint (`/:tagId/cover.webp`) when no local `cover.webp` exists
+  - Example: `https://myhomegames.vige.it` (without `/app`)
 - `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
 - **Note:** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are no longer required in `.env`. They are now provided by users during login through the frontend.
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
