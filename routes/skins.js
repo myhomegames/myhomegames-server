@@ -103,6 +103,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   persistentLibraryShell: false,
   collectionsShortcutList: false,
   libraryPagesVerticalList: false,
+  libraryHoverSelect: false,
   headerTitleFilter: false,
   disableAlphabetNavigator: false,
   sidebarSearchPopup: false,
@@ -126,6 +127,7 @@ function extractWebManifest(meta) {
   out.persistentLibraryShell = w.persistentLibraryShell === true;
   out.collectionsShortcutList = w.collectionsShortcutList === true;
   out.libraryPagesVerticalList = w.libraryPagesVerticalList === true;
+  out.libraryHoverSelect = w.libraryHoverSelect === true;
   out.headerTitleFilter = w.headerTitleFilter === true;
   out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
   out.ownedGamesFirstInGamesSidebar = w.ownedGamesFirstInGamesSidebar === true;
