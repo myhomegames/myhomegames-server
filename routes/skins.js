@@ -110,6 +110,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   sidebarSearchPopup: false,
   ownedGamesFirstInGamesSidebar: false,
   compactCollectionLikeDetail: false,
+  verticalCoverAlignment: false,
 });
 
 const SKIN_WEB_KEYS = Object.freeze(Object.keys(DEFAULT_SKIN_WEB_MANIFEST));
@@ -134,6 +135,7 @@ function extractWebManifest(meta) {
   out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
   out.ownedGamesFirstInGamesSidebar = w.ownedGamesFirstInGamesSidebar === true;
   out.compactCollectionLikeDetail = w.compactCollectionLikeDetail === true;
+  out.verticalCoverAlignment = w.verticalCoverAlignment === true;
 
   if (out.headerTitleFilter) {
     if (!("sidebarSearchPopup" in w)) {
