@@ -65,6 +65,7 @@ describe("skins routes", () => {
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
+      hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
     });
@@ -152,6 +153,7 @@ describe("skins routes", () => {
       headerTitleFilter: true,
       disableAlphabetNavigator: true,
       sidebarSearchPopup: true,
+      hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
     });
@@ -205,6 +207,7 @@ describe("skins routes", () => {
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
+      hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: true,
     });
