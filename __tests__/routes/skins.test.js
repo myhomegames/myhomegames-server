@@ -62,12 +62,14 @@ describe("skins routes", () => {
       libraryPagesVerticalList: false,
       libraryHoverSelect: false,
       libraryBarHeaderActions: false,
+      topRightToolDock: false,
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
       hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
+      verticalCoverAlignment: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -150,12 +152,14 @@ describe("skins routes", () => {
       libraryPagesVerticalList: true,
       libraryHoverSelect: true,
       libraryBarHeaderActions: true,
+      topRightToolDock: false,
       headerTitleFilter: true,
       disableAlphabetNavigator: true,
       sidebarSearchPopup: true,
       hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
+      verticalCoverAlignment: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
@@ -204,12 +208,14 @@ describe("skins routes", () => {
       libraryPagesVerticalList: false,
       libraryHoverSelect: false,
       libraryBarHeaderActions: false,
+      topRightToolDock: false,
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
       hideAddGame: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: true,
+      verticalCoverAlignment: false,
     });
 
     // A subsequent partial update only touches the requested flag.

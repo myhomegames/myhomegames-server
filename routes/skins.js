@@ -105,6 +105,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   libraryPagesVerticalList: false,
   libraryHoverSelect: false,
   libraryBarHeaderActions: false,
+  topRightToolDock: false,
   headerTitleFilter: false,
   disableAlphabetNavigator: false,
   sidebarSearchPopup: false,
@@ -132,6 +133,7 @@ function extractWebManifest(meta) {
   out.libraryPagesVerticalList = w.libraryPagesVerticalList === true;
   out.libraryHoverSelect = w.libraryHoverSelect === true;
   out.libraryBarHeaderActions = w.libraryBarHeaderActions === true;
+  out.topRightToolDock = w.topRightToolDock === true;
   out.headerTitleFilter = w.headerTitleFilter === true;
   out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
   out.hideAddGame = w.hideAddGame === true;
