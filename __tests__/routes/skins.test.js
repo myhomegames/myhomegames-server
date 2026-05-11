@@ -163,12 +163,18 @@ describe("skins routes", () => {
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
   });
 
-  test("POST /skins without token returns 401 when auth required", async () => {
+  test("POST /skins without token succeeds when Twitch login is off (optionalToken)", async () => {
     const zip = new AdmZip();
-    zip.addFile("skin.json", Buffer.from(JSON.stringify({ name: "X" }), "utf8"));
+    zip.addFile(
+      "skin.json",
+      Buffer.from(JSON.stringify({ name: "Optional Auth Upload Skin" }), "utf8")
+    );
     zip.addFile("bundle.css", Buffer.from("a{}", "utf8"));
     const res = await request(app).post("/skins").attach("archive", zip.toBuffer(), "x.zip");
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBeDefined();
+    const del = await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
+    expect(del.status).toBe(204);
   });
 
   test("PUT /settings with activeSkinId hydrates settings.skinWeb from skin.json", async () => {
