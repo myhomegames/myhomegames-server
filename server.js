@@ -454,6 +454,24 @@ function requireToken(req, res, next) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
+// Launcher: always allow when Twitch login is disabled (same idea as optionalToken).
+// When Twitch login is enabled, allow requests with no token (local / empty client storage)
+// so Play still works; if a token is sent, it must be valid (reject invalid tokens).
+function optionalLauncherToken(req, res, next) {
+  const settings = readSettings();
+  if (!settings.twitchLoginEnabled) {
+    return next();
+  }
+  const token = getRequestToken(req);
+  if (!token) {
+    return next();
+  }
+  if (isAuthorizedToken(token)) {
+    return next();
+  }
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
 function getRequestToken(req) {
   return (
     req.header("X-Auth-Token") ||
@@ -604,8 +622,8 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
   res.sendFile(backgroundPath);
 });
 
-// Endpoint: launcher — launches an executable for a game
-app.get("/launcher", requireToken, (req, res) => {
+// Endpoint: launcher — launches an executable for a game (no strict auth when Twitch is off or no token is sent)
+app.get("/launcher", optionalLauncherToken, (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
 

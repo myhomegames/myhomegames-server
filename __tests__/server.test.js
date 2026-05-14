@@ -101,6 +101,19 @@ describe('GET /launcher', () => {
     expect(response.body).toHaveProperty('error', 'Missing gameId');
   });
 
+  test('should return 400 if gameId is missing without any auth token', async () => {
+    const response = await request(app).get('/launcher').expect(400);
+    expect(response.body).toHaveProperty('error', 'Missing gameId');
+  });
+
+  test('should return 401 when Twitch login is enabled and an invalid token is sent', async () => {
+    const response = await request(app)
+      .get('/launcher?gameId=1')
+      .set('X-Auth-Token', 'not-a-valid-token-for-sure');
+    expect(response.status).toBe(401);
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+
   test('should return 404 for non-existent game', async () => {
     const response = await request(app)
       .get('/launcher?gameId=nonexistent')
