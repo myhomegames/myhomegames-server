@@ -808,7 +808,6 @@ function normalizeSkinWebManifestValue(raw) {
   return out;
 }
 
-// Helper function to read settings
 function readSettings() {
   const defaultSettings = {
     language: "en",
@@ -829,13 +828,16 @@ function readSettings() {
    * files written before this key existed) bypass the default shape. Normalize it so callers
    * always see a full boolean manifest with the known keys.
    */
-  return {
+  const skinWeb = normalizeSkinWebManifestValue(
+    settings && typeof settings === "object" ? settings.skinWeb : undefined
+  );
+  const result = {
     ...defaultSettings,
     ...settings,
-    skinWeb: normalizeSkinWebManifestValue(
-      settings && typeof settings === "object" ? settings.skinWeb : undefined
-    ),
+    skinWeb,
   };
+  delete result.fixedFocalStepSound;
+  return result;
 }
 
 // Helper function to write settings
@@ -935,10 +937,12 @@ app.put("/settings", (req, res) => {
     ...currentSettings,
     ...body,
   };
+  // Drop deprecated top-level key (superseded by settings.skinWeb.fixedFocalStepSound).
+  delete updatedSettings.fixedFocalStepSound;
 
   const ok = writeSettings(updatedSettings);
   if (ok) {
-    res.json({ status: "success", settings: updatedSettings });
+    res.json({ status: "success", settings: readSettings() });
   } else {
     res.status(500).json({ error: "Failed to save settings" });
   }

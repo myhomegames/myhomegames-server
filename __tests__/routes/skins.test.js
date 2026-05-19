@@ -69,6 +69,7 @@ describe("skins routes", () => {
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
       verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -158,6 +159,7 @@ describe("skins routes", () => {
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
       verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
@@ -219,6 +221,7 @@ describe("skins routes", () => {
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: true,
       verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
     });
 
     // A subsequent partial update only touches the requested flag.
