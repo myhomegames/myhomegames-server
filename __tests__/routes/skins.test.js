@@ -70,6 +70,7 @@ describe("skins routes", () => {
       compactCollectionLikeDetail: false,
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -160,6 +161,7 @@ describe("skins routes", () => {
       compactCollectionLikeDetail: false,
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
@@ -222,6 +224,7 @@ describe("skins routes", () => {
       compactCollectionLikeDetail: true,
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
     });
 
     // A subsequent partial update only touches the requested flag.
@@ -232,6 +235,47 @@ describe("skins routes", () => {
     expect(tweak.status).toBe(200);
     expect(tweak.body.settings.skinWeb.compactCollectionLikeDetail).toBe(false);
     expect(tweak.body.settings.skinWeb.persistentLibraryShell).toBe(true);
+
+    await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
+  });
+
+  test("PUT /settings can disable autoShowBackgroundOnSelection while verticalCoverAlignment stays on", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(
+        JSON.stringify({
+          name: "Vertical Rail Theme",
+          web: {
+            verticalCoverAlignment: true,
+            autoShowBackgroundOnSelection: true,
+          },
+        }),
+        "utf8"
+      )
+    );
+    zip.addFile("bundle.css", Buffer.from("body {}", "utf8"));
+    const uploaded = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip.toBuffer(), "vr.zip");
+    expect(uploaded.status).toBe(201);
+
+    const activate = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ activeSkinId: uploaded.body.id });
+    expect(activate.status).toBe(200);
+    expect(activate.body.settings.skinWeb.verticalCoverAlignment).toBe(true);
+    expect(activate.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(true);
+
+    const tweak = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ skinWeb: { autoShowBackgroundOnSelection: false } });
+    expect(tweak.status).toBe(200);
+    expect(tweak.body.settings.skinWeb.verticalCoverAlignment).toBe(true);
+    expect(tweak.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(false);
 
     await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
   });

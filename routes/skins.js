@@ -113,6 +113,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   compactCollectionLikeDetail: false,
   verticalCoverAlignment: false,
   fixedFocalStepSound: false,
+  autoShowBackgroundOnSelection: false,
 });
 
 const SKIN_WEB_KEYS = Object.freeze(Object.keys(DEFAULT_SKIN_WEB_MANIFEST));
@@ -140,6 +141,11 @@ function extractWebManifest(meta) {
   out.compactCollectionLikeDetail = w.compactCollectionLikeDetail === true;
   out.verticalCoverAlignment = w.verticalCoverAlignment === true;
   out.fixedFocalStepSound = w.fixedFocalStepSound === true;
+  out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
+
+  if (out.verticalCoverAlignment && !("autoShowBackgroundOnSelection" in w)) {
+    out.autoShowBackgroundOnSelection = true;
+  }
 
   if (out.headerTitleFilter) {
     if (!("sidebarSearchPopup" in w)) {
