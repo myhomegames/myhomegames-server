@@ -180,10 +180,37 @@ npm run release
 ```
 
 This will:
-1. Build the macOS `.app` bundle and `.pkg` installer
+1. Build packages for macOS, Linux, and Windows (`npm run build`)
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
-4. Attach the `.pkg` installer as a release asset
+4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
+5. Run **`scripts/publish-package-repos.js`** (optional steps below)
+
+### Package repositories (APT / YUM / Homebrew)
+
+After the GitHub release, `after:release` runs `publish-package-repos.js`. Each target is **skipped** unless configured.
+
+| Target | Env vars | Docs |
+|--------|----------|------|
+| APT | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_APT_ROOT` | [docs/install-apt.md](docs/install-apt.md) |
+| YUM/DNF | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_YUM_ROOT` | [docs/install-yum.md](docs/install-yum.md) |
+| Homebrew tap | `HOMEBREW_TAP_REPO` | [docs/install-homebrew.md](docs/install-homebrew.md) |
+
+Example (add to `.env.local`, not committed):
+
+```bash
+export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
+export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
+export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
+```
+
+Test publish without a full release:
+
+```bash
+npm run build
+npm run publish:repos
+```
 
 ### Build prerequisites
 
