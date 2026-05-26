@@ -996,40 +996,70 @@ function validateEnvironment() {
   }
 }
 
+const {
+  applyCloudflareTunnelEnv,
+  isCloudflareTunnelEnabled,
+  startCloudflareTunnel,
+  stopCloudflareTunnel,
+} = require("./utils/cloudflareTunnel");
+
 // Store server references for graceful shutdown
 let httpServer = null;
 let httpsServer = null;
+let cloudflareTunnel = null;
 
-// Graceful shutdown handler
-function gracefulShutdown(signal) {
-  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
-  
+function closeHttpServersAndExit() {
   const servers = [];
   if (httpServer) servers.push(httpServer);
   if (httpsServer) servers.push(httpsServer);
-  
+
   if (servers.length === 0) {
     process.exit(0);
     return;
   }
-  
-  // Close all servers
+
   let closedCount = 0;
   servers.forEach((server) => {
     server.close(() => {
       closedCount++;
       if (closedCount === servers.length) {
-        console.log('All servers closed. Exiting...');
+        console.log("All servers closed. Exiting...");
         process.exit(0);
       }
     });
   });
-  
-  // Force exit after 10 seconds if servers don't close
+
   setTimeout(() => {
-    console.error('Forced shutdown after timeout');
+    console.error("Forced shutdown after timeout");
     process.exit(1);
   }, 10000);
+}
+
+// Graceful shutdown handler
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+
+  if (cloudflareTunnel) {
+    stopCloudflareTunnel(cloudflareTunnel);
+    cloudflareTunnel.once("exit", () => closeHttpServersAndExit());
+    setTimeout(closeHttpServersAndExit, 3000);
+    return;
+  }
+
+  closeHttpServersAndExit();
+}
+
+async function maybeStartCloudflareTunnel(localOrigin) {
+  if (!isCloudflareTunnelEnabled()) return;
+
+  try {
+    cloudflareTunnel = await startCloudflareTunnel({ localOrigin });
+  } catch (error) {
+    console.error("Failed to start Cloudflare Tunnel:", error.message || error);
+    if (process.env.CLOUDFLARE_TUNNEL_STRICT === "true") {
+      process.exit(1);
+    }
+  }
 }
 
 // Handle termination signals
@@ -1049,8 +1079,18 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Only start listening if not in test environment
 if (process.env.NODE_ENV !== 'test') {
+  const tunnelEnv = applyCloudflareTunnelEnv();
+  if (tunnelEnv.applied) {
+    console.log(`Cloudflare Tunnel mode: public API at ${tunnelEnv.publicUrl}`);
+    if (tunnelEnv.httpsDisabled) {
+      console.log(
+        "Local HTTPS disabled; cloudflared forwards HTTP to localhost (TLS terminates at Cloudflare).",
+      );
+    }
+  }
+
   validateEnvironment();
-  
+
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
   
   if (HTTPS_ENABLED) {
@@ -1101,10 +1141,12 @@ if (process.env.NODE_ENV !== 'test') {
     // HTTP server only
     const HTTP_PORT = process.env.HTTP_PORT || PORT;
     httpServer = http.createServer(app);
+    const localOrigin = `http://127.0.0.1:${HTTP_PORT}`;
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
-      // Signal to macOS that the app is ready
-      process.stdout.write('Server ready\n');
+      maybeStartCloudflareTunnel(localOrigin).finally(() => {
+        process.stdout.write('Server ready\n');
+      });
     });
     
     // Handle server errors

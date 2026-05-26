@@ -47,7 +47,38 @@ openssl genrsa -out "${METADATA_PATH}/certs/key.pem" 2048
 openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PATH}/certs/cert.pem" -days 365 -subj "/CN=localhost"
 ```
 
-**Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a service like Cloudflare Tunnel.
+**Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a **Cloudflare Tunnel** (see below).
+
+## Cloudflare Tunnel (public HTTPS without local certificates)
+
+The server can start **cloudflared** automatically (npm package `cloudflared`) and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+
+**Prerequisites**
+
+1. Create the tunnel in [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) (Networks → Tunnels).
+2. Add a public hostname → `http://localhost:4000` (or your `HTTP_PORT`).
+3. Install credentials on this machine (`cloudflared tunnel login` / `tunnel create`, or copy the tunnel token).
+
+**`.env` example**
+
+```env
+CLOUDFLARE_TUNNEL_ENABLED=true
+CLOUDFLARE_TUNNEL_PUBLIC_URL=https://myhomegames-server.vige.it
+API_BASE=https://myhomegames-server.vige.it
+HTTPS_ENABLED=false
+HTTP_PORT=4000
+
+# Pick one auth method (same as plain `cloudflared tunnel run`):
+CLOUDFLARE_TUNNEL_NAME=myhomegames-server
+# CLOUDFLARE_TUNNEL_TOKEN=<token from dashboard>
+# CLOUDFLARE_TUNNEL_CONFIG=/Users/you/.cloudflared/config.yml
+```
+
+On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+
+**Twitch OAuth**: register redirect URI `https://myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE`).
+
+**Web client**: point `VITE_API_BASE` (or app settings) to the same public URL when testing remotely.
 
 ### Browser Security Warning
 
