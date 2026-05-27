@@ -813,6 +813,7 @@ function readSettings() {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
     twitchLoginEnabled: false,
+    twitchApiEnabled: false,
     activeSkinId: "",
     twitchClientId: "",
     twitchClientSecret: "",
@@ -837,6 +838,14 @@ function readSettings() {
     skinWeb,
   };
   delete result.fixedFocalStepSound;
+  if (typeof result.twitchApiEnabled !== "boolean") {
+    const hasStoredCreds =
+      typeof result.twitchClientId === "string" &&
+      result.twitchClientId.trim().length > 0 &&
+      typeof result.twitchClientSecret === "string" &&
+      result.twitchClientSecret.trim().length > 0;
+    result.twitchApiEnabled = hasStoredCreds;
+  }
   return result;
 }
 
@@ -898,34 +907,19 @@ app.put("/settings", (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const keys = Object.keys(body);
 
-    const hasLoginToggle = keys.includes("twitchLoginEnabled");
-    const disableLoginRequested =
-      hasLoginToggle && body.twitchLoginEnabled === false;
-
     const hasClientId = keys.includes("twitchClientId");
     const hasClientSecret = keys.includes("twitchClientSecret");
-    const hasBothCredentials = hasClientId && hasClientSecret;
-    const credentialsAreNonEmptyStrings =
-      hasBothCredentials &&
-      typeof body.twitchClientId === "string" &&
-      body.twitchClientId.trim().length > 0 &&
-      typeof body.twitchClientSecret === "string" &&
-      body.twitchClientSecret.trim().length > 0;
+    const partialCredentialsUpdate =
+      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
 
-    // Unauthenticated recovery payloads can:
-    // - disable Twitch login
-    // - rotate both credentials atomically
-    // - optionally include both actions in one request
-    const allowsOnlyRecoveryKeys = keys.every((k) =>
-      ["twitchLoginEnabled", "twitchClientId", "twitchClientSecret"].includes(k)
-    );
-    const validRecoveryRequest =
-      allowsOnlyRecoveryKeys &&
-      (
-        disableLoginRequested ||
-        credentialsAreNonEmptyStrings ||
-        (disableLoginRequested && credentialsAreNonEmptyStrings)
+    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.), and never
+    // a lone twitchClientId or twitchClientSecret (both must be sent together to rotate).
+    const allowsOnlyRecoveryKeys =
+      keys.length > 0 &&
+      keys.every((k) =>
+        ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"].includes(k)
       );
+    const validRecoveryRequest = allowsOnlyRecoveryKeys && !partialCredentialsUpdate;
 
     if (!validRecoveryRequest) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -963,6 +957,9 @@ app.put("/settings", (req, res) => {
     ...currentSettings,
     ...body,
   };
+  if (Object.prototype.hasOwnProperty.call(body, "twitchApiEnabled") && updatedSettings.twitchApiEnabled === false) {
+    updatedSettings.twitchLoginEnabled = false;
+  }
   // Drop deprecated top-level key (superseded by settings.skinWeb.fixedFocalStepSound).
   delete updatedSettings.fixedFocalStepSound;
 

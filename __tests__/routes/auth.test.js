@@ -57,14 +57,26 @@ describe('POST /auth/twitch', () => {
     expect(response.body.authUrl).toContain('user:read:email');
   });
 
-  test('should return 400 when credentials are missing', async () => {
+  test('should return 400 when client secret is missing (Twitch requires secret for auth code flow)', async () => {
+    const response = await request(app)
+      .post('/auth/twitch')
+      .send({
+        clientId: 'test-twitch-client-id',
+      })
+      .expect(400);
+
+    expect(response.body).toHaveProperty('error');
+    expect(response.body.error).toContain('TWITCH_CLIENT_SECRET is required');
+  });
+
+  test('should return 400 when clientId is missing', async () => {
     const response = await request(app)
       .post('/auth/twitch')
       .send({})
       .expect(400);
     
     expect(response.body).toHaveProperty('error');
-    expect(response.body.error).toContain('TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required');
+    expect(response.body.error).toContain('TWITCH_CLIENT_ID is required');
   });
 });
 
@@ -178,6 +190,7 @@ describe('GET /auth/twitch/callback', () => {
 
     expect(response.headers.location).toContain('twitch_token=');
     expect(response.headers.location).toContain('user_id=');
+    expect(response.headers.location).toContain('twitch_client_id=test-twitch-client-id');
 
     // Wait a bit for async operations to complete
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -190,6 +203,69 @@ describe('GET /auth/twitch/callback', () => {
     expect(tokens[mockUserId].accessToken).toBe(mockAccessToken);
     expect(tokens[mockUserId].userId).toBe(mockUserId);
     expect(tokens[mockUserId].userName).toBe(mockUserName);
+  });
+
+  test('should redirect to frontendUrl from login request after OAuth', async () => {
+    const authResponse = await request(app)
+      .post('/auth/twitch')
+      .send({
+        clientId: 'test-twitch-client-id',
+        clientSecret: 'test-twitch-client-secret',
+        frontendUrl: 'https://myhomegames.vige.it/app/login',
+      })
+      .expect(200);
+
+    const state = authResponse.body.state;
+
+    https.request.mockImplementation((options, callback) => {
+      const dataHandlers = [];
+      const endHandlers = [];
+      const mockRes = {
+        statusCode: 200,
+        on: jest.fn((event, handler) => {
+          if (event === 'data') dataHandlers.push(handler);
+          else if (event === 'end') endHandlers.push(handler);
+        }),
+      };
+      const mockReq = {
+        on: jest.fn(),
+        write: jest.fn(),
+        end: jest.fn(() => {
+          setImmediate(() => {
+            callback(mockRes);
+            setImmediate(() => {
+              const path = options.path || '';
+              if (path.includes('/oauth2/token')) {
+                dataHandlers.forEach((h) =>
+                  h(Buffer.from(JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_in: 3600 })))
+                );
+              } else {
+                dataHandlers.forEach((h) =>
+                  h(
+                    Buffer.from(
+                      JSON.stringify({
+                        data: [{ id: '1', login: 'u', display_name: 'u', profile_image_url: null }],
+                      })
+                    )
+                  )
+                );
+              }
+              endHandlers.forEach((handler) => handler());
+            });
+          });
+        }),
+      };
+      return mockReq;
+    });
+
+    const response = await request(app)
+      .get(`/auth/twitch/callback?code=abc&state=${state}`)
+      .expect(302);
+
+    expect(response.headers.location).toMatch(
+      /^https:\/\/myhomegames\.vige\.it\/app\/login\?/
+    );
+    expect(response.headers.location).toContain('twitch_client_id=test-twitch-client-id');
   });
 });
 
@@ -360,6 +436,13 @@ describe('Authentication middleware with Twitch tokens', () => {
   });
 
   test('should reject requests with invalid Twitch token', async () => {
+    const settingsPath = path.join(testMetadataPath, 'settings.json');
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ language: 'en', twitchLoginEnabled: true }, null, 2),
+      'utf8'
+    );
+
     const response = await request(app)
       .get('/libraries/library/games')
       .set('X-Auth-Token', 'invalid-twitch-token')

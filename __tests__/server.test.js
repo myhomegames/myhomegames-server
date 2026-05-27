@@ -398,6 +398,20 @@ describe('PUT /settings', () => {
     expect(response.body.settings).toHaveProperty('twitchClientSecret', 'recovery-client-secret');
   });
 
+  test('should allow unauthenticated Twitch public-app recovery (empty secret)', async () => {
+    const response = await request(app)
+      .put('/settings')
+      .send({
+        twitchClientId: 'public-client-id',
+        twitchClientSecret: '',
+      })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body.settings).toHaveProperty('twitchClientId', 'public-client-id');
+    expect(response.body.settings).toHaveProperty('twitchClientSecret', '');
+  });
+
   test('should reject unauthenticated partial Twitch credentials update', async () => {
     const response = await request(app)
       .put('/settings')
@@ -405,6 +419,20 @@ describe('PUT /settings', () => {
       .expect(401);
 
     expect(response.body).toHaveProperty('error', 'Unauthorized');
+  });
+
+  test('should allow unauthenticated twitchApiEnabled toggle when login is enabled', async () => {
+    const response = await request(app)
+      .put('/settings')
+      .send({
+        twitchLoginEnabled: false,
+        twitchApiEnabled: true,
+      })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body.settings).toHaveProperty('twitchApiEnabled', true);
+    expect(response.body.settings).toHaveProperty('twitchLoginEnabled', false);
   });
 });
 
