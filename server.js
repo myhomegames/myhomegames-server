@@ -886,7 +886,8 @@ app.get("/version", (req, res) => {
 
 // Endpoint: update settings
 // Special case: if Twitch login is currently enabled and caller is unauthenticated,
-// allow only the emergency toggle { twitchLoginEnabled: false } to avoid lock-out.
+// allow only recovery writes (disable login and/or replace both Twitch credentials)
+// to avoid lock-out when the configured credentials are no longer valid.
 app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
   const token = getRequestToken(req);
@@ -896,12 +897,37 @@ app.put("/settings", (req, res) => {
   if (twitchEnabled && !authorized) {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const keys = Object.keys(body);
-    const isDisableOnlyRequest =
-      keys.length === 1 &&
-      keys[0] === "twitchLoginEnabled" &&
-      body.twitchLoginEnabled === false;
 
-    if (!isDisableOnlyRequest) {
+    const hasLoginToggle = keys.includes("twitchLoginEnabled");
+    const disableLoginRequested =
+      hasLoginToggle && body.twitchLoginEnabled === false;
+
+    const hasClientId = keys.includes("twitchClientId");
+    const hasClientSecret = keys.includes("twitchClientSecret");
+    const hasBothCredentials = hasClientId && hasClientSecret;
+    const credentialsAreNonEmptyStrings =
+      hasBothCredentials &&
+      typeof body.twitchClientId === "string" &&
+      body.twitchClientId.trim().length > 0 &&
+      typeof body.twitchClientSecret === "string" &&
+      body.twitchClientSecret.trim().length > 0;
+
+    // Unauthenticated recovery payloads can:
+    // - disable Twitch login
+    // - rotate both credentials atomically
+    // - optionally include both actions in one request
+    const allowsOnlyRecoveryKeys = keys.every((k) =>
+      ["twitchLoginEnabled", "twitchClientId", "twitchClientSecret"].includes(k)
+    );
+    const validRecoveryRequest =
+      allowsOnlyRecoveryKeys &&
+      (
+        disableLoginRequested ||
+        credentialsAreNonEmptyStrings ||
+        (disableLoginRequested && credentialsAreNonEmptyStrings)
+      );
+
+    if (!validRecoveryRequest) {
       return res.status(401).json({ error: "Unauthorized" });
     }
   }
