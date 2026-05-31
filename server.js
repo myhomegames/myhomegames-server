@@ -137,8 +137,6 @@ app.use(cors());
 
 const API_TOKEN = process.env.API_TOKEN;
 const PORT = process.env.PORT || 4000; // PORT can have a default
-// Note: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are no longer read from .env
-// They are now passed from the client during login and API requests
 const API_BASE = process.env.API_BASE;
 
 /** Default data directory: macOS ~/Library/..., Windows %APPDATA%\\MyHomeGames, Linux XDG or ~/.local/share */
@@ -815,8 +813,6 @@ function readSettings() {
     twitchLoginEnabled: false,
     twitchApiEnabled: false,
     activeSkinId: "",
-    twitchClientId: "",
-    twitchClientSecret: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
@@ -838,13 +834,16 @@ function readSettings() {
     skinWeb,
   };
   delete result.fixedFocalStepSound;
+  delete result.twitchClientId;
+  delete result.twitchClientSecret;
   if (typeof result.twitchApiEnabled !== "boolean") {
-    const hasStoredCreds =
-      typeof result.twitchClientId === "string" &&
-      result.twitchClientId.trim().length > 0 &&
-      typeof result.twitchClientSecret === "string" &&
-      result.twitchClientSecret.trim().length > 0;
-    result.twitchApiEnabled = hasStoredCreds;
+    result.twitchApiEnabled = false;
+  }
+  const hadLegacyTwitchCreds =
+    (typeof settings.twitchClientId === "string" && settings.twitchClientId.trim()) ||
+    (typeof settings.twitchClientSecret === "string" && settings.twitchClientSecret.trim());
+  if (hadLegacyTwitchCreds) {
+    writeSettings(result);
   }
   return result;
 }
@@ -852,10 +851,13 @@ function readSettings() {
 // Helper function to write settings
 function writeSettings(settings) {
   try {
+    const toWrite = { ...settings };
+    delete toWrite.twitchClientId;
+    delete toWrite.twitchClientSecret;
     // Ensure parent directory exists before writing
     const parentDir = path.dirname(SETTINGS_FILE);
     ensureDirectoryExists(parentDir);
-    writeJsonFile(SETTINGS_FILE, settings);
+    writeJsonFile(SETTINGS_FILE, toWrite);
     return true;
   } catch (e) {
     console.error("Error writing settings:", e.message);
@@ -907,19 +909,11 @@ app.put("/settings", (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const keys = Object.keys(body);
 
-    const hasClientId = keys.includes("twitchClientId");
-    const hasClientSecret = keys.includes("twitchClientSecret");
-    const partialCredentialsUpdate =
-      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
-
-    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.), and never
-    // a lone twitchClientId or twitchClientSecret (both must be sent together to rotate).
+    // Unauthenticated recovery: only Twitch feature toggles (credentials live on API gateway / server env).
     const allowsOnlyRecoveryKeys =
       keys.length > 0 &&
-      keys.every((k) =>
-        ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"].includes(k)
-      );
-    const validRecoveryRequest = allowsOnlyRecoveryKeys && !partialCredentialsUpdate;
+      keys.every((k) => ["twitchLoginEnabled", "twitchApiEnabled"].includes(k));
+    const validRecoveryRequest = allowsOnlyRecoveryKeys;
 
     if (!validRecoveryRequest) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -953,10 +947,15 @@ app.put("/settings", (req, res) => {
     body.skinWeb = normalizeSkinWebManifestValue(merged);
   }
 
+  delete body.twitchClientId;
+  delete body.twitchClientSecret;
+
   const updatedSettings = {
     ...currentSettings,
     ...body,
   };
+  delete updatedSettings.twitchClientId;
+  delete updatedSettings.twitchClientSecret;
   if (Object.prototype.hasOwnProperty.call(body, "twitchApiEnabled") && updatedSettings.twitchApiEnabled === false) {
     updatedSettings.twitchLoginEnabled = false;
   }
@@ -1003,8 +1002,7 @@ function validateEnvironment() {
   
   const API_BASE = process.env.API_BASE;
  
-  // Note: Twitch OAuth credentials are now passed from client, not required in .env
-  // API_BASE is still required for OAuth redirects
+  // API_BASE is required for OAuth redirects (Twitch app credentials come from API gateway headers).
   const hasApiBase = !!API_BASE;
   
   if (!hasApiBase) {

@@ -63,7 +63,7 @@ For production, copy `.env.production.example` to `.env`:
 cp .env.production.example .env
 ```
 
-Then edit `.env` and configure all required variables (Twitch OAuth credentials, API_BASE, etc.).
+Then edit `.env` and configure required variables (e.g. `API_BASE`, `METADATA_PATH`).
 
 MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset.
 
@@ -85,7 +85,6 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
   - Used by tag cover endpoint (`/:tagId/cover.webp`) when no local `cover.webp` exists
   - Example: `https://myhomegames.vige.it` (without `/app`)
 - `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
-- **Note:** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are no longer required in `.env`. They are now provided by users during login through the frontend.
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
 - `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive installed on first startup when no skins are present (default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`)
 
@@ -236,7 +235,7 @@ For production, users authenticate via Twitch OAuth. To enable this:
 3. Set environment variables:
    - `API_BASE` - Your API base URL (e.g., `https://api.example.com`)
 
-**Note:** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are no longer required in `.env`. Users provide these credentials through the login page in the frontend. The server does not store or require these credentials in environment variables.
+Twitch application credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
 
 Users will authenticate via Twitch, and their access tokens will be stored in `${METADATA_PATH}/tokens.json`.
 
