@@ -130,6 +130,8 @@ const developersRoutes = require("./routes/developers");
 const publishersRoutes = require("./routes/publishers");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
+const { registerTunnelRoutes } = require("./routes/tunnel");
+const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
 
 const app = express();
 app.use(express.json());
@@ -155,6 +157,8 @@ function getDefaultMetadataPath() {
 }
 
 const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
+
+let cloudflareTunnel = null;
 const DEFAULT_SKIN_URL =
   process.env.DEFAULT_SKIN_URL || "https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip";
 
@@ -512,6 +516,26 @@ setTimeout(() => {
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
+
+function applyTunnelPublicUrl(publicUrl) {
+  const normalized = String(publicUrl || "").trim().replace(/\/$/, "");
+  if (normalized) {
+    process.env.API_BASE = normalized;
+  }
+}
+
+registerTunnelRoutes(app, {
+  metadataPath: METADATA_PATH,
+  getTunnelProcess: () => cloudflareTunnel,
+  setTunnelProcess: (tunnel) => {
+    cloudflareTunnel = tunnel;
+  },
+  getLocalOrigin: () => {
+    const HTTP_PORT = process.env.HTTP_PORT || PORT;
+    return `http://127.0.0.1:${HTTP_PORT}`;
+  },
+  applyPublicUrl: applyTunnelPublicUrl,
+});
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, optionalToken);
@@ -1027,7 +1051,6 @@ const {
 // Store server references for graceful shutdown
 let httpServer = null;
 let httpsServer = null;
-let cloudflareTunnel = null;
 
 function closeHttpServersAndExit() {
   const servers = [];
@@ -1073,8 +1096,24 @@ function gracefulShutdown(signal) {
 async function maybeStartCloudflareTunnel(localOrigin) {
   if (!isCloudflareTunnelEnabled()) return;
 
+  const stored = loadStoredTunnelCredentials(METADATA_PATH);
+  if (!stored?.token) {
+    console.warn(
+      "Cloudflare Tunnel enabled: no stored run token. Connect from the web app (/tunnel/login).",
+    );
+    return;
+  }
+
+  if (stored.publicUrl) {
+    applyTunnelPublicUrl(stored.publicUrl);
+  }
+
   try {
-    cloudflareTunnel = await startCloudflareTunnel({ localOrigin });
+    cloudflareTunnel = await startCloudflareTunnel({
+      localOrigin,
+      runtimeToken: stored.token,
+      publicUrl: stored.publicUrl,
+    });
   } catch (error) {
     console.error("Failed to start Cloudflare Tunnel:", error.message || error);
     if (process.env.CLOUDFLARE_TUNNEL_STRICT === "true") {
@@ -1101,6 +1140,12 @@ process.on('unhandledRejection', (reason, promise) => {
 // Only start listening if not in test environment
 if (process.env.NODE_ENV !== 'test') {
   const tunnelEnv = applyCloudflareTunnelEnv();
+  if (isCloudflareTunnelEnabled()) {
+    const stored = loadStoredTunnelCredentials(METADATA_PATH);
+    if (stored?.publicUrl) {
+      applyTunnelPublicUrl(stored.publicUrl);
+    }
+  }
   if (tunnelEnv.applied) {
     console.log(`Cloudflare Tunnel mode: public API at ${tunnelEnv.publicUrl}`);
     if (tunnelEnv.httpsDisabled) {

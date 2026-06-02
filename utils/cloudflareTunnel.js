@@ -36,18 +36,14 @@ function defaultCloudflaredConfigPath() {
 }
 
 /**
- * Build cloudflared CLI args for an existing named/token/config tunnel.
- * @returns {string[] | null} null when tunnel should not start (missing config)
+ * Build cloudflared CLI args for a tunnel run token or advanced local config.
+ * Per-user run tokens come from the tunnel manager (POST /tunnel/connect), not .env.
+ * @returns {{ mode: string, args: string[] } | null} null when tunnel should not start
  */
-function buildCloudflareTunnelArgs(env = process.env, localOrigin) {
-  const token = env.CLOUDFLARE_TUNNEL_TOKEN?.trim();
-  if (token) {
-    return { mode: "token", args: ["tunnel", "run", "--token", token] };
-  }
-
-  const tunnelName = env.CLOUDFLARE_TUNNEL_NAME?.trim();
-  if (tunnelName) {
-    return { mode: "name", args: ["tunnel", "run", tunnelName] };
+function buildCloudflareTunnelArgs(env = process.env, localOrigin, options = {}) {
+  const runtimeToken = options.runtimeToken?.trim();
+  if (runtimeToken) {
+    return { mode: "runtime-token", args: ["tunnel", "run", "--token", runtimeToken] };
   }
 
   const configPath =
@@ -113,16 +109,21 @@ function writeGeneratedTunnelConfig({
 
 /**
  * Start cloudflared (named tunnel already configured in Cloudflare / ~/.cloudflared).
- * @param {{ localOrigin: string, env?: NodeJS.ProcessEnv, onLog?: (line: string) => void }} options
+ * @param {{ localOrigin: string, env?: NodeJS.ProcessEnv, onLog?: (line: string) => void, runtimeToken?: string, publicUrl?: string }} options
  * @returns {Promise<import('cloudflared').Tunnel>}
  */
-async function startCloudflareTunnel({ localOrigin, env = process.env, onLog }) {
-  const built = buildCloudflareTunnelArgs(env, localOrigin);
+async function startCloudflareTunnel({
+  localOrigin,
+  env = process.env,
+  onLog,
+  runtimeToken,
+  publicUrl,
+}) {
+  const built = buildCloudflareTunnelArgs(env, localOrigin, { runtimeToken });
   if (!built) {
     throw new Error(
-      "Cloudflare Tunnel enabled but not configured. Set CLOUDFLARE_TUNNEL_TOKEN, " +
-        "CLOUDFLARE_TUNNEL_NAME, CLOUDFLARE_TUNNEL_CONFIG (~/.cloudflared/config.yml), or " +
-        "CLOUDFLARE_TUNNEL_ID + CLOUDFLARE_TUNNEL_CREDENTIALS_FILE + hostname.",
+      "Cloudflare Tunnel enabled but no run token. Sign in via the web app (Cloudflare Access) " +
+        "and connect, or set CLOUDFLARE_TUNNEL_CONFIG (~/.cloudflared/config.yml) for advanced local use.",
     );
   }
 
@@ -133,7 +134,8 @@ async function startCloudflareTunnel({ localOrigin, env = process.env, onLog }) 
   }
 
   const tunnel = new Tunnel(built.args);
-  const publicUrl = env.API_BASE?.trim() || DEFAULT_PUBLIC_URL;
+  const displayPublicUrl =
+    publicUrl?.trim() || env.API_BASE?.trim() || DEFAULT_PUBLIC_URL;
 
   const log = (line) => {
     if (onLog) onLog(line);
@@ -179,7 +181,9 @@ async function startCloudflareTunnel({ localOrigin, env = process.env, onLog }) 
     throw err;
   });
 
-  console.log(`Cloudflare Tunnel active (${built.mode}) → ${publicUrl.replace(/\/$/, "")}`);
+  console.log(
+    `Cloudflare Tunnel active (${built.mode}) → ${displayPublicUrl.replace(/\/$/, "")}`,
+  );
   console.log(`  Local origin: ${localOrigin}`);
 
   return tunnel;

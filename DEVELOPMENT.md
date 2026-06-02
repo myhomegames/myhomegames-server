@@ -55,29 +55,25 @@ The server can start **cloudflared** automatically (npm package `cloudflared`) a
 
 **Prerequisites**
 
-1. Create the tunnel in [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) (Networks → Tunnels).
-2. Add a public hostname → `http://localhost:4000` (or your `HTTP_PORT`).
-3. Install credentials on this machine (`cloudflared tunnel login` / `tunnel create`, or copy the tunnel token).
+1. Deploy `myhomegames-proxy` tunnel manager (`GET /api/get-token` after Cloudflare Access login).
+2. Enable tunnel mode on the server and web (see below).
 
-**`.env` example**
+**`.env` example (server)**
 
 ```env
 CLOUDFLARE_TUNNEL_ENABLED=true
-API_BASE=https://myhomegames-server.vige.it
+API_BASE=https://your-user.myhomegames-server.vige.it
 HTTPS_ENABLED=false
 HTTP_PORT=4000
-
-# Pick one auth method (same as plain `cloudflared tunnel run`):
-CLOUDFLARE_TUNNEL_NAME=myhomegames-server
-# CLOUDFLARE_TUNNEL_TOKEN=<token from dashboard>
-# CLOUDFLARE_TUNNEL_CONFIG=/Users/you/.cloudflared/config.yml
 ```
+
+The run token is **not** in `.env`. The web app opens the tunnel manager, fetches a per-user token, and `POST`s it to `http://localhost:4000/tunnel/connect`. The server stores it under `METADATA_PATH/cloudflared/tunnel-credentials.json` and restarts `cloudflared` on the next boot.
 
 On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
 
-**Twitch OAuth**: register redirect URI `https://myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE`).
+**Twitch OAuth**: register redirect URI `https://<your-user>.myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
 
-**Web client**: point `VITE_API_BASE` (or app settings) to the same public URL when testing remotely.
+**Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
 ### Browser Security Warning
 

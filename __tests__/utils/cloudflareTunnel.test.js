@@ -34,22 +34,25 @@ describe("cloudflareTunnel", () => {
     expect(env.API_BASE).toBe("https://custom.example.com");
   });
 
-  test("buildCloudflareTunnelArgs uses token when set", () => {
+  test("buildCloudflareTunnelArgs uses runtime token when provided", () => {
     const built = buildCloudflareTunnelArgs(
-      { CLOUDFLARE_TUNNEL_TOKEN: "sekret" },
+      {},
       "http://127.0.0.1:4000",
+      { runtimeToken: "sekret" },
     );
-    expect(built.mode).toBe("token");
+    expect(built.mode).toBe("runtime-token");
     expect(built.args).toEqual(["tunnel", "run", "--token", "sekret"]);
   });
 
-  test("buildCloudflareTunnelArgs uses tunnel name when set", () => {
+  test("buildCloudflareTunnelArgs ignores legacy env token and name", () => {
     const built = buildCloudflareTunnelArgs(
-      { CLOUDFLARE_TUNNEL_NAME: "myhomegames-server" },
+      {
+        CLOUDFLARE_TUNNEL_TOKEN: "old-token",
+        CLOUDFLARE_TUNNEL_NAME: "MyHomeGames",
+      },
       "http://127.0.0.1:4000",
     );
-    expect(built.mode).toBe("name");
-    expect(built.args).toEqual(["tunnel", "run", "myhomegames-server"]);
+    expect(built).toBeNull();
   });
 
   test("buildCloudflareTunnelArgs uses explicit config path", () => {
