@@ -14,11 +14,8 @@ function applyCloudflareTunnelEnv(env = process.env) {
     return { applied: false };
   }
 
-  const publicUrl =
-    env.CLOUDFLARE_TUNNEL_PUBLIC_URL?.trim() || DEFAULT_PUBLIC_URL;
-
   if (!env.API_BASE?.trim()) {
-    env.API_BASE = publicUrl.replace(/\/$/, "");
+    env.API_BASE = DEFAULT_PUBLIC_URL.replace(/\/$/, "");
   }
 
   let httpsDisabled = false;
@@ -64,7 +61,7 @@ function buildCloudflareTunnelArgs(env = process.env, localOrigin) {
   const tunnelId = env.CLOUDFLARE_TUNNEL_ID?.trim();
   const hostname =
     env.CLOUDFLARE_TUNNEL_HOSTNAME?.trim() ||
-    tryHostnameFromPublicUrl(env.CLOUDFLARE_TUNNEL_PUBLIC_URL || env.API_BASE);
+    tryHostnameFromPublicUrl(env.API_BASE);
 
   if (credentialsFile && tunnelId && hostname && fs.existsSync(credentialsFile)) {
     const generated = writeGeneratedTunnelConfig({
@@ -136,10 +133,7 @@ async function startCloudflareTunnel({ localOrigin, env = process.env, onLog }) 
   }
 
   const tunnel = new Tunnel(built.args);
-  const publicUrl =
-    env.CLOUDFLARE_TUNNEL_PUBLIC_URL?.trim() ||
-    env.API_BASE?.trim() ||
-    DEFAULT_PUBLIC_URL;
+  const publicUrl = env.API_BASE?.trim() || DEFAULT_PUBLIC_URL;
 
   const log = (line) => {
     if (onLog) onLog(line);

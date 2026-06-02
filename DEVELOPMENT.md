@@ -63,7 +63,6 @@ The server can start **cloudflared** automatically (npm package `cloudflared`) a
 
 ```env
 CLOUDFLARE_TUNNEL_ENABLED=true
-CLOUDFLARE_TUNNEL_PUBLIC_URL=https://myhomegames-server.vige.it
 API_BASE=https://myhomegames-server.vige.it
 HTTPS_ENABLED=false
 HTTP_PORT=4000
