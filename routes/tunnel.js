@@ -21,13 +21,11 @@ function registerTunnelRoutes(app, deps) {
   app.get("/tunnel/status", (req, res) => {
     const stored = loadStoredTunnelCredentials(metadataPath);
     const process = getTunnelProcess();
-    const publicUrl = stored?.publicUrl || process.env.API_BASE || "";
-
     res.json({
       featureEnabled: isCloudflareTunnelEnabled(),
       hasStoredToken: Boolean(stored?.token),
       connected: Boolean(process),
-      publicUrl: publicUrl.replace(/\/$/, ""),
+      publicUrl: (stored?.publicUrl || "").replace(/\/$/, ""),
     });
   });
 
