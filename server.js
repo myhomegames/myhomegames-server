@@ -1099,7 +1099,7 @@ async function maybeStartCloudflareTunnel(localOrigin) {
   const stored = loadStoredTunnelCredentials(METADATA_PATH);
   if (!stored?.token) {
     console.warn(
-      "Cloudflare Tunnel enabled: no stored run token. Connect from the web app (/tunnel/login).",
+      "Cloudflare Tunnel enabled: no stored run token. The web app will fetch one from the tunnel manager on startup.",
     );
     return;
   }

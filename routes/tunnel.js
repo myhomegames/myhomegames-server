@@ -11,6 +11,43 @@ const {
   clearStoredTunnelCredentials,
 } = require("../utils/cloudflareTunnelStore");
 
+async function startTunnelFromStored(deps, stored) {
+  const { getTunnelProcess, setTunnelProcess, getLocalOrigin, applyPublicUrl } = deps;
+  const token = String(stored?.token || "").trim();
+  let publicUrl = String(stored?.publicUrl || "").trim();
+
+  if (!token) {
+    throw new Error("tunnel token is required");
+  }
+
+  if (publicUrl && !/^https?:\/\//i.test(publicUrl)) {
+    publicUrl = `https://${publicUrl}`;
+  }
+  publicUrl = publicUrl.replace(/\/$/, "");
+
+  if (publicUrl) {
+    applyPublicUrl(publicUrl);
+  }
+
+  const existing = getTunnelProcess();
+  if (existing) {
+    stopCloudflareTunnel(existing);
+    setTunnelProcess(null);
+  }
+
+  const tunnel = await startCloudflareTunnel({
+    localOrigin: getLocalOrigin(),
+    runtimeToken: token,
+    publicUrl: publicUrl || undefined,
+  });
+  setTunnelProcess(tunnel);
+
+  return {
+    connected: true,
+    publicUrl: publicUrl || process.env.API_BASE || "",
+  };
+}
+
 /**
  * @param {import('express').Express} app
  * @param {{ metadataPath: string, getTunnelProcess: () => import('cloudflared').Tunnel | null, setTunnelProcess: (t: import('cloudflared').Tunnel | null) => void, getLocalOrigin: () => string, applyPublicUrl: (url: string) => void }} deps
@@ -48,27 +85,38 @@ function registerTunnelRoutes(app, deps) {
 
     saveStoredTunnelCredentials(metadataPath, { token, publicUrl });
 
-    if (publicUrl) {
-      applyPublicUrl(publicUrl);
+    try {
+      const result = await startTunnelFromStored(deps, { token, publicUrl });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({
+        error: "Failed to start Cloudflare Tunnel",
+        detail: err.message || String(err),
+      });
+    }
+  });
+
+  app.post("/tunnel/reconnect", async (req, res) => {
+    if (!isCloudflareTunnelEnabled()) {
+      return res.status(400).json({ error: "Cloudflare Tunnel is not enabled on this server." });
     }
 
-    const existing = getTunnelProcess();
-    if (existing) {
-      stopCloudflareTunnel(existing);
-      setTunnelProcess(null);
+    if (getTunnelProcess()) {
+      const stored = loadStoredTunnelCredentials(metadataPath);
+      return res.json({
+        connected: true,
+        publicUrl: (stored?.publicUrl || process.env.API_BASE || "").replace(/\/$/, ""),
+      });
+    }
+
+    const stored = loadStoredTunnelCredentials(metadataPath);
+    if (!stored?.token) {
+      return res.status(400).json({ error: "No stored tunnel credentials" });
     }
 
     try {
-      const tunnel = await startCloudflareTunnel({
-        localOrigin: getLocalOrigin(),
-        runtimeToken: token,
-        publicUrl: publicUrl || undefined,
-      });
-      setTunnelProcess(tunnel);
-      res.json({
-        connected: true,
-        publicUrl: publicUrl || process.env.API_BASE || "",
-      });
+      const result = await startTunnelFromStored(deps, stored);
+      res.json(result);
     } catch (err) {
       res.status(500).json({
         error: "Failed to start Cloudflare Tunnel",
@@ -88,4 +136,4 @@ function registerTunnelRoutes(app, deps) {
   });
 }
 
-module.exports = { registerTunnelRoutes };
+module.exports = { registerTunnelRoutes, startTunnelFromStored };
