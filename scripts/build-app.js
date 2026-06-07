@@ -310,7 +310,7 @@ appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(NSMenuItem(title: menuL.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 NSApp.mainMenu = mainMenu
 
-// Icona nella menu bar (destra) per accesso rapido
+// Menu bar icon (right) for quick access
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 if let button = statusItem.button {
     button.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "MyHomeGames Server")
@@ -781,7 +781,7 @@ if (linuxExe || winExe) {
     }
   }
 
-  // Step 9: Linux .deb (deboa) and .rpm (rpm-builder) — solo npm; .rpm richiede rpmbuild su sistema
+  // Step 9: Linux .deb (deboa) and .rpm (rpm-builder) — npm only; .rpm requires rpmbuild on the system
   if (linuxExe) {
     (async () => {
       const pkgRoot = path.join(BUILD_DIR, 'linux-pkgroot');
@@ -837,7 +837,7 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
         console.log('⚠️  .deb failed:', e.message);
       }
 
-      // .rpm con rpm-builder (npm); richiede rpmbuild su sistema (Linux o brew install rpm su macOS)
+      // .rpm via rpm-builder (npm); requires rpmbuild on the system (Linux or brew install rpm on macOS)
       try {
         const buildRpm = require('rpm-builder');
         await new Promise((resolve, reject) => {

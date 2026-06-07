@@ -44,7 +44,7 @@ async function startTunnelFromStored(deps, stored) {
 
   return {
     connected: true,
-    publicUrl: publicUrl || process.env.API_BASE || "",
+    publicUrl: publicUrl || "",
   };
 }
 
@@ -105,7 +105,7 @@ function registerTunnelRoutes(app, deps) {
       const stored = loadStoredTunnelCredentials(metadataPath);
       return res.json({
         connected: true,
-        publicUrl: (stored?.publicUrl || process.env.API_BASE || "").replace(/\/$/, ""),
+        publicUrl: (stored?.publicUrl || "").replace(/\/$/, ""),
       });
     }
 
