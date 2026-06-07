@@ -62,7 +62,7 @@ The server can start **cloudflared** automatically (npm package `cloudflared`) a
 
 ```env
 CLOUDFLARE_TUNNEL_ENABLED=true
-API_BASE=https://your-user.myhomegames-server.vige.it
+API_BASE=https://your-user-myhomegames-server.vige.it
 HTTPS_ENABLED=false
 HTTP_PORT=4000
 ```
@@ -71,7 +71,7 @@ The run token is **not** in `.env`. On startup the web app fetches a per-user to
 
 On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
 
-**Twitch OAuth**: register redirect URI `https://<your-user>.myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
+**Twitch OAuth**: register redirect URI `https://<your-user>-myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
 
 **Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
