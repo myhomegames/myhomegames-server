@@ -164,6 +164,7 @@ const DEFAULT_SKIN_URL =
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
+const { tokensDirectory } = require("./utils/metadataTokenPaths");
 
 // Ensure metadata directory structure exists
 function ensureMetadataDirectories() {
@@ -185,6 +186,7 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "skins"),
     path.join(METADATA_PATH, "certs"),
+    tokensDirectory(METADATA_PATH),
   ];
 
   directories.forEach((dir) => {

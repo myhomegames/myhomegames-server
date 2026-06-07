@@ -237,7 +237,7 @@ For production, users authenticate via Twitch OAuth. To enable this:
 
 Twitch application credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
 
-Users will authenticate via Twitch, and their access tokens will be stored in `${METADATA_PATH}/tokens.json`.
+Users will authenticate via Twitch, and their access tokens will be stored in `${METADATA_PATH}/tokens/twitch-oauth-sessions.json`.
 
 ### Authentication Endpoints
 

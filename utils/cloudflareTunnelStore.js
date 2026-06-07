@@ -3,10 +3,10 @@
 const fs = require("fs");
 const path = require("path");
 const { ensureDirectoryExists, readJsonFile, writeJsonFile } = require("./fileUtils");
-const { migrateUserTunnelPublicUrl } = require("./tunnelHostname");
+const { cloudflareTunnelRunPath } = require("./metadataTokenPaths");
 
 function tunnelCredentialsPath(metadataPath) {
-  return path.join(metadataPath, "cloudflared", "tunnel-credentials.json");
+  return cloudflareTunnelRunPath(metadataPath);
 }
 
 /**
@@ -17,13 +17,8 @@ function loadStoredTunnelCredentials(metadataPath) {
   const data = readJsonFile(filePath, null);
   if (!data || typeof data !== "object") return null;
   const token = typeof data.token === "string" ? data.token.trim() : "";
-  let publicUrl = typeof data.publicUrl === "string" ? data.publicUrl.trim() : "";
+  const publicUrl = typeof data.publicUrl === "string" ? data.publicUrl.trim() : "";
   if (!token) return null;
-  const migrated = migrateUserTunnelPublicUrl(publicUrl);
-  if (migrated && migrated !== publicUrl.replace(/\/$/, "")) {
-    publicUrl = migrated;
-    saveStoredTunnelCredentials(metadataPath, { token, publicUrl });
-  }
   return { token, publicUrl, updatedAt: data.updatedAt };
 }
 

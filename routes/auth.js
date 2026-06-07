@@ -6,15 +6,16 @@ const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("../utils/fileUtils");
 const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+const { twitchOAuthSessionsPath } = require("../utils/metadataTokenPaths");
 
 // Twitch app credentials: X-Twitch-Client-* headers (API gateway) or POST /auth/twitch body.
 const API_BASE = process.env.API_BASE;
 const API_TOKEN = process.env.API_TOKEN;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
-// Path to store user tokens
+// Path to store Twitch OAuth sessions (per user)
 function getTokensPath(metadataPath) {
-  return path.join(metadataPath, "tokens.json");
+  return twitchOAuthSessionsPath(metadataPath);
 }
 
 // Load user tokens from file

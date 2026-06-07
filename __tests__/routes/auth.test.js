@@ -5,6 +5,7 @@ const https = require('https');
 
 // Import setup first to set environment variables
 const { testMetadataPath } = require('../setup');
+const { twitchOAuthSessionsPath } = require('../../utils/metadataTokenPaths');
 
 // Mock https module for Twitch API calls
 jest.mock('https');
@@ -23,7 +24,7 @@ beforeAll(() => {
 
 afterEach(() => {
   // Clear tokens file after each test
-  const tokensPath = path.join(testMetadataPath, 'tokens.json');
+  const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
   if (fs.existsSync(tokensPath)) {
     fs.unlinkSync(tokensPath);
   }
@@ -196,7 +197,7 @@ describe('GET /auth/twitch/callback', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Verify token was saved
-    const tokensPath = path.join(testMetadataPath, 'tokens.json');
+    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
     expect(fs.existsSync(tokensPath)).toBe(true);
     const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
     expect(tokens[mockUserId]).toBeDefined();
@@ -296,7 +297,7 @@ describe('GET /auth/me', () => {
     const mockUserImage = 'https://example.com/avatar.jpg';
 
     // Save token to tokens file
-    const tokensPath = path.join(testMetadataPath, 'tokens.json');
+    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
     const tokens = {
       [mockUserId]: {
         accessToken: mockAccessToken,
@@ -414,7 +415,7 @@ describe('Authentication middleware with Twitch tokens', () => {
     const mockUserId = '123456';
 
     // Save token to tokens file
-    const tokensPath = path.join(testMetadataPath, 'tokens.json');
+    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
     const tokens = {
       [mockUserId]: {
         accessToken: mockAccessToken,
