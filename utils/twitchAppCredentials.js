@@ -1,16 +1,54 @@
 "use strict";
 
-const IGDB_CREDENTIALS_ERROR =
+const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
+const { loadStoredTwitchAppCredentials } = require("./twitchAppCredentialsStore");
+
+const IGDB_CREDENTIALS_ERROR_GATEWAY =
   "IGDB API credentials are not available. Configure them on the API gateway (e.g. Cloudflare Worker).";
+
+const IGDB_CREDENTIALS_ERROR_LOCAL =
+  "IGDB API credentials are not available. Configure Client ID and Client Secret in Settings, or set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in the server .env file.";
+
+let metadataPath = null;
+
+function setTwitchCredentialsMetadataPath(nextPath) {
+  metadataPath = typeof nextPath === "string" && nextPath.trim() ? nextPath.trim() : null;
+}
+
+function igdbCredentialsError() {
+  return isCloudflareTunnelEnabled()
+    ? IGDB_CREDENTIALS_ERROR_GATEWAY
+    : IGDB_CREDENTIALS_ERROR_LOCAL;
+}
 
 /**
  * Resolve Twitch app credentials for IGDB (client_credentials).
- * Only X-Twitch-Client-* headers (injected by the API gateway Worker).
+ * Tunnel enabled: only X-Twitch-Client-* headers (API gateway).
+ * Tunnel disabled: headers, then tokens/twitch-app-credentials.json, then TWITCH_CLIENT_* env vars.
  */
 function resolveTwitchAppCredentials(req) {
-  const clientId = String(req.header("X-Twitch-Client-Id") || "").trim();
-  const clientSecret = String(req.header("X-Twitch-Client-Secret") || "").trim();
-  return { clientId, clientSecret };
+  const headerClientId = String(req.header("X-Twitch-Client-Id") || "").trim();
+  const headerClientSecret = String(req.header("X-Twitch-Client-Secret") || "").trim();
+
+  if (isCloudflareTunnelEnabled()) {
+    return { clientId: headerClientId, clientSecret: headerClientSecret };
+  }
+
+  if (headerClientId || headerClientSecret) {
+    return { clientId: headerClientId, clientSecret: headerClientSecret };
+  }
+
+  if (metadataPath) {
+    const stored = loadStoredTwitchAppCredentials(metadataPath);
+    if (stored && (stored.clientId || stored.clientSecret)) {
+      return { clientId: stored.clientId, clientSecret: stored.clientSecret };
+    }
+  }
+
+  return {
+    clientId: String(process.env.TWITCH_CLIENT_ID || "").trim(),
+    clientSecret: String(process.env.TWITCH_CLIENT_SECRET || "").trim(),
+  };
 }
 
 /**
@@ -21,14 +59,18 @@ function requireTwitchAppCredentials(req, res, options = {}) {
   const creds = resolveTwitchAppCredentials(req);
   if (!creds.clientId || !creds.clientSecret) {
     res.setHeader("Content-Type", contentType);
-    res.status(400).json({ error: IGDB_CREDENTIALS_ERROR });
+    res.status(400).json({ error: igdbCredentialsError() });
     return null;
   }
   return creds;
 }
 
 module.exports = {
-  IGDB_CREDENTIALS_ERROR,
+  IGDB_CREDENTIALS_ERROR: IGDB_CREDENTIALS_ERROR_GATEWAY,
+  IGDB_CREDENTIALS_ERROR_GATEWAY,
+  IGDB_CREDENTIALS_ERROR_LOCAL,
+  igdbCredentialsError,
+  setTwitchCredentialsMetadataPath,
   resolveTwitchAppCredentials,
   requireTwitchAppCredentials,
 };

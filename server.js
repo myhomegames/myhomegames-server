@@ -132,6 +132,12 @@ const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
 const { registerTunnelRoutes } = require("./routes/tunnel");
 const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
+const { isCloudflareTunnelEnabled } = require("./utils/cloudflareTunnel");
+const { setTwitchCredentialsMetadataPath } = require("./utils/twitchAppCredentials");
+const {
+  loadStoredTwitchAppCredentials,
+  saveStoredTwitchAppCredentials,
+} = require("./utils/twitchAppCredentialsStore");
 
 const app = express();
 app.use(express.json());
@@ -832,6 +838,48 @@ function normalizeSkinWebManifestValue(raw) {
   return out;
 }
 
+function migrateLegacyTwitchCredentialsFromSettings(settingsOnDisk) {
+  if (isCloudflareTunnelEnabled()) return false;
+  const legacyId =
+    typeof settingsOnDisk.twitchClientId === "string" ? settingsOnDisk.twitchClientId.trim() : "";
+  const legacySecret =
+    typeof settingsOnDisk.twitchClientSecret === "string"
+      ? settingsOnDisk.twitchClientSecret.trim()
+      : "";
+  if (!legacyId && !legacySecret) return false;
+
+  const stored = loadStoredTwitchAppCredentials(METADATA_PATH);
+  if (!stored?.clientId && !stored?.clientSecret) {
+    saveStoredTwitchAppCredentials(METADATA_PATH, {
+      clientId: legacyId,
+      clientSecret: legacySecret,
+    });
+  }
+  return true;
+}
+
+function attachTwitchAppCredentialsToSettings(result) {
+  delete result.twitchClientId;
+  delete result.twitchClientSecret;
+
+  if (isCloudflareTunnelEnabled()) {
+    if (typeof result.twitchApiEnabled !== "boolean") {
+      result.twitchApiEnabled = false;
+    }
+    return result;
+  }
+
+  const stored = loadStoredTwitchAppCredentials(METADATA_PATH);
+  result.twitchClientId = stored?.clientId || "";
+  result.twitchClientSecret = stored?.clientSecret || "";
+
+  if (typeof result.twitchApiEnabled !== "boolean") {
+    result.twitchApiEnabled =
+      result.twitchClientId.length > 0 && result.twitchClientSecret.length > 0;
+  }
+  return result;
+}
+
 function readSettings() {
   const defaultSettings = {
     language: "en",
@@ -844,7 +892,7 @@ function readSettings() {
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object and merge with defaults for missing keys
   if (typeof settings !== 'object' || settings === null) {
-    return defaultSettings;
+    return attachTwitchAppCredentialsToSettings({ ...defaultSettings });
   }
   /*
    * `skinWeb` is a nested object: a simple spread would let a persisted partial (e.g. settings
@@ -862,16 +910,12 @@ function readSettings() {
   delete result.fixedFocalStepSound;
   delete result.twitchClientId;
   delete result.twitchClientSecret;
-  if (typeof result.twitchApiEnabled !== "boolean") {
-    result.twitchApiEnabled = false;
-  }
-  const hadLegacyTwitchCreds =
-    (typeof settings.twitchClientId === "string" && settings.twitchClientId.trim()) ||
-    (typeof settings.twitchClientSecret === "string" && settings.twitchClientSecret.trim());
-  if (hadLegacyTwitchCreds) {
+
+  if (migrateLegacyTwitchCredentialsFromSettings(settings)) {
     writeSettings(result);
   }
-  return result;
+
+  return attachTwitchAppCredentialsToSettings(result);
 }
 
 // Helper function to write settings
@@ -891,10 +935,15 @@ function writeSettings(settings) {
   }
 }
 
+setTwitchCredentialsMetadataPath(METADATA_PATH);
+
 // Endpoint: get settings (public so client can load twitchLoginEnabled without token)
 app.get("/settings", (req, res) => {
   const settings = readSettings();
-  res.json(settings);
+  res.json({
+    ...settings,
+    cloudflareTunnelEnabled: isCloudflareTunnelEnabled(),
+  });
 });
 
 // Endpoint: get server version (public, for update notification to compare with GitHub releases)
@@ -935,11 +984,20 @@ app.put("/settings", (req, res) => {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const keys = Object.keys(body);
 
-    // Unauthenticated recovery: only Twitch feature toggles (credentials live on API gateway / server env).
+    const recoveryKeys = isCloudflareTunnelEnabled()
+      ? ["twitchLoginEnabled", "twitchApiEnabled"]
+      : ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"];
+    const hasClientId = keys.includes("twitchClientId");
+    const hasClientSecret = keys.includes("twitchClientSecret");
+    const partialCredentialsUpdate =
+      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
+
+    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.).
     const allowsOnlyRecoveryKeys =
-      keys.length > 0 &&
-      keys.every((k) => ["twitchLoginEnabled", "twitchApiEnabled"].includes(k));
-    const validRecoveryRequest = allowsOnlyRecoveryKeys;
+      keys.length > 0 && keys.every((k) => recoveryKeys.includes(k));
+    const validRecoveryRequest =
+      allowsOnlyRecoveryKeys &&
+      (isCloudflareTunnelEnabled() || !partialCredentialsUpdate);
 
     if (!validRecoveryRequest) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -973,6 +1031,17 @@ app.put("/settings", (req, res) => {
     body.skinWeb = normalizeSkinWebManifestValue(merged);
   }
 
+  let credentialUpdate = null;
+  if (!isCloudflareTunnelEnabled()) {
+    const hasClientId = Object.prototype.hasOwnProperty.call(body, "twitchClientId");
+    const hasClientSecret = Object.prototype.hasOwnProperty.call(body, "twitchClientSecret");
+    if (hasClientId && hasClientSecret) {
+      credentialUpdate = {
+        clientId: String(body.twitchClientId || "").trim(),
+        clientSecret: String(body.twitchClientSecret || "").trim(),
+      };
+    }
+  }
   delete body.twitchClientId;
   delete body.twitchClientSecret;
 
@@ -989,6 +1058,9 @@ app.put("/settings", (req, res) => {
   delete updatedSettings.fixedFocalStepSound;
 
   const ok = writeSettings(updatedSettings);
+  if (ok && credentialUpdate) {
+    saveStoredTwitchAppCredentials(METADATA_PATH, credentialUpdate);
+  }
   if (ok) {
     res.json({ status: "success", settings: readSettings() });
   } else {
@@ -1045,7 +1117,6 @@ function validateEnvironment() {
 
 const {
   applyCloudflareTunnelEnv,
-  isCloudflareTunnelEnabled,
   startCloudflareTunnel,
   stopCloudflareTunnel,
 } = require("./utils/cloudflareTunnel");

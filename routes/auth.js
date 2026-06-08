@@ -5,6 +5,7 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("../utils/fileUtils");
+const { isCloudflareTunnelEnabled } = require("../utils/cloudflareTunnel");
 const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 const { twitchOAuthSessionsPath } = require("../utils/metadataTokenPaths");
 
@@ -184,8 +185,9 @@ function registerAuthRoutes(app, metadataPath) {
     // Twitch authorization-code login requires client_secret (no PKCE on this flow).
     if (!clientSecret) {
       return res.status(400).json({
-        error:
-          "TWITCH_CLIENT_SECRET is required for Twitch login. Configure it on the API gateway (e.g. Cloudflare Worker).",
+        error: isCloudflareTunnelEnabled()
+          ? "TWITCH_CLIENT_SECRET is required for Twitch login. Configure it on the API gateway (e.g. Cloudflare Worker)."
+          : "TWITCH_CLIENT_SECRET is required for Twitch login. Generate a Client Secret in the Twitch Developer Console (Manage application → New Secret) and save it in Settings.",
       });
     }
 

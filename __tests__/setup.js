@@ -10,6 +10,7 @@ process.env.NODE_ENV = 'test';
 process.env.METADATA_PATH = testMetadataPath;
 process.env.API_TOKEN = 'test-token';
 process.env.PORT = '0'; // Use random port for tests
+process.env.CLOUDFLARE_TUNNEL_ENABLED = 'false';
 
 // Create test metadata directory structure immediately when module is loaded
 // This ensures directories exist before server.js is required

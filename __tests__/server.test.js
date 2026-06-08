@@ -384,13 +384,51 @@ describe('PUT /settings', () => {
     expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 
-  test('should ignore unauthenticated twitchClientId in settings body', async () => {
+  test('should allow unauthenticated Twitch credentials recovery when login is enabled', async () => {
     const response = await request(app)
       .put('/settings')
       .send({
         twitchClientId: 'recovery-client-id',
         twitchClientSecret: 'recovery-client-secret',
       })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body.settings).toHaveProperty('twitchClientId', 'recovery-client-id');
+    expect(response.body.settings).toHaveProperty('twitchClientSecret', 'recovery-client-secret');
+
+    const { twitchAppCredentialsPath } = require('../utils/metadataTokenPaths');
+    const credsPath = twitchAppCredentialsPath(testMetadataPath);
+    expect(fs.existsSync(credsPath)).toBe(true);
+    const stored = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+    expect(stored.clientId).toBe('recovery-client-id');
+    expect(stored.clientSecret).toBe('recovery-client-secret');
+
+    const settingsOnDisk = JSON.parse(
+      fs.readFileSync(path.join(testMetadataPath, 'settings.json'), 'utf8')
+    );
+    expect(settingsOnDisk).not.toHaveProperty('twitchClientId');
+    expect(settingsOnDisk).not.toHaveProperty('twitchClientSecret');
+  });
+
+  test('should allow unauthenticated Twitch public-app recovery (empty secret)', async () => {
+    const response = await request(app)
+      .put('/settings')
+      .send({
+        twitchClientId: 'public-client-id',
+        twitchClientSecret: '',
+      })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body.settings).toHaveProperty('twitchClientId', 'public-client-id');
+    expect(response.body.settings).toHaveProperty('twitchClientSecret', '');
+  });
+
+  test('should reject unauthenticated partial Twitch credentials update', async () => {
+    const response = await request(app)
+      .put('/settings')
+      .send({ twitchClientId: 'only-id' })
       .expect(401);
 
     expect(response.body).toHaveProperty('error', 'Unauthorized');
