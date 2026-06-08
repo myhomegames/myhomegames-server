@@ -166,7 +166,7 @@ const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
 
 let cloudflareTunnel = null;
 const DEFAULT_SKIN_URL =
-  process.env.DEFAULT_SKIN_URL || "https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip";
+  process.env.DEFAULT_SKIN_URL || "https://myhomegames-skins.vige.it/zips/plex.mhg-skin.zip";
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");

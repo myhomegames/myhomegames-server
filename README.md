@@ -86,7 +86,7 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
   - Example: `https://myhomegames.vige.it` (without `/app`)
 - `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
-- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive installed on first startup when no skins are present (default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`)
+- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive installed on first startup when no skins are present (default: `https://myhomegames-skins.vige.it/zips/plex.mhg-skin.zip`)
 
 ### Metadata Path
 
