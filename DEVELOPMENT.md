@@ -202,8 +202,13 @@ The test suite covers:
 The project uses `release-it` to automate GitHub releases. To create a release:
 
 ```bash
+export GITHUB_TOKEN=ghp_your_token_here   # recommended — classic PAT with repo scope
 npm run release
 ```
+
+Without `GITHUB_TOKEN`, `release-it` falls back to the GitHub “new release” page in the browser. A long changelog in the URL may fail with **“Your request URL is too long”**, and build artifacts are **not** uploaded automatically in that mode.
+
+`npm run release` uses `scripts/run-release.mjs`, which sets `NODE_DEBUG=release-it:config` to work around a release-it/Octokit bug (`log: null` → *Cannot read properties of null (reading 'debug')*). GitHub config uses `skipChecks: true` for the same compatibility reason.
 
 This will:
 1. Build packages for macOS, Linux, and Windows (`npm run build`)
@@ -256,32 +261,28 @@ Temporary build files (including RPM working directory) are created under `build
 
 ### GitHub Token Configuration
 
-`release-it` requires a GitHub Personal Access Token to create releases automatically. Without it, you'll need to create the release manually through the web interface.
+A **GitHub Personal Access Token** with `repo` scope is **recommended** for automated releases (not required — `npm run release` warns and falls back to the web UI).
 
-To configure the token:
+1. Create a token at [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)** → scope **`repo`**.
+2. Export it (or set in `.env` / `.env.local` — see `.env.example`; never commit the token):
 
-1. **Create a GitHub Personal Access Token:**
-   - Go to https://github.com/settings/tokens
-   - Click "Generate new token" → "Generate new token (classic)"
-   - Give it a name (e.g., "release-it")
-   - Select the `repo` scope (required for creating releases and tags)
-   - Click "Generate token" and copy the token
+```bash
+export GITHUB_TOKEN=ghp_your_token_here
+```
 
-2. **Set the token as an environment variable:**
-   
-   **Option 1: Export in your shell (temporary):**
-   ```bash
-   export GITHUB_TOKEN=ghp_your_token_here
-   ```
-   
-   **Option 2: Add to `.env` file (persistent):**
-   ```bash
-   echo "GITHUB_TOKEN=ghp_your_token_here" >> .env
-   ```
-   
-   **Option 3: Use a `.env.local` file (not committed to Git):**
-   ```bash
-   echo "GITHUB_TOKEN=ghp_your_token_here" >> .env.local
-   ```
+#### Token troubleshooting
+
+If release fails with authentication or Octokit errors:
+
+1. **Classic PAT** — scope **`repo`** must be enabled.
+2. **Organization SSO** — if `myhomegames` uses SAML SSO, open the token → **Configure SSO** → **Authorize** for the org.
+3. **Fine-grained PAT** — select repository `myhomegames-server` and grant **Contents: Read and write** + **Metadata: Read**.
+4. Verify the token:
+
+```bash
+curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+```
+
+A valid response includes your `"login"`.
 
 **Security Note:** Never commit your `GITHUB_TOKEN` to the repository. The `.gitignore` file already excludes `.env.local` and `.env.*.local` files.
