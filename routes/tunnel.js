@@ -12,7 +12,8 @@ const {
 } = require("../utils/cloudflareTunnelStore");
 
 async function startTunnelFromStored(deps, stored) {
-  const { getTunnelProcess, setTunnelProcess, getLocalOrigin, applyPublicUrl } = deps;
+  const { getTunnelProcess, setTunnelProcess, getLocalOrigin, applyPublicUrl, metadataPath } =
+    deps;
   const token = String(stored?.token || "").trim();
   let publicUrl = String(stored?.publicUrl || "").trim();
 
@@ -39,6 +40,7 @@ async function startTunnelFromStored(deps, stored) {
     localOrigin: getLocalOrigin(),
     runtimeToken: token,
     publicUrl: publicUrl || undefined,
+    metadataPath,
   });
   setTunnelProcess(tunnel);
 

@@ -164,6 +164,9 @@ function getDefaultMetadataPath() {
 }
 
 const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
+if (!process.env.METADATA_PATH) {
+  process.env.METADATA_PATH = METADATA_PATH;
+}
 
 let cloudflareTunnel = null;
 
@@ -191,6 +194,7 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "skins"),
     path.join(METADATA_PATH, "certs"),
+    path.join(METADATA_PATH, "bin"),
     tokensDirectory(METADATA_PATH),
   ];
 
@@ -1188,6 +1192,7 @@ async function maybeStartCloudflareTunnel(localOrigin) {
       localOrigin,
       runtimeToken: stored.token,
       publicUrl: stored.publicUrl,
+      metadataPath: METADATA_PATH,
     });
   } catch (error) {
     console.error("Failed to start Cloudflare Tunnel:", error.message || error);
