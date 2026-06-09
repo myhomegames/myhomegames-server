@@ -9,6 +9,7 @@ const ROOT = path.join(__dirname, "..");
 const BUILD_DIR = path.join(ROOT, "build");
 
 const ENV_CONTENT_STANDALONE = require("./release-env-content");
+const { copyCloudflaredBinary } = require("./copy-cloudflared-binary");
 
 const SERVER_INFO_FILENAME = "server-info.json";
 
@@ -86,6 +87,7 @@ function populateUnifiedPayload() {
   }
   fs.writeFileSync(path.join(UNIFIED_PAYLOAD_DIR, ".env"), ENV_CONTENT_STANDALONE);
   fs.writeFileSync(path.join(UNIFIED_PAYLOAD_DIR, SERVER_INFO_FILENAME), getServerInfoJson());
+  copyCloudflaredBinary(path.join(UNIFIED_PAYLOAD_DIR, "bin"));
   const png = path.join(BUILD_DIR, TRAY_PNG_NAME);
   if (fs.existsSync(png)) {
     fs.copyFileSync(png, path.join(UNIFIED_PAYLOAD_DIR, TRAY_PNG_NAME));

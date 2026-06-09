@@ -6,6 +6,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { buildWindowsUnifiedExe } = require('./windows-release-assets');
 const releaseEnvContent = require('./release-env-content');
+const { copyCloudflaredBinary } = require('./copy-cloudflared-binary');
 
 const APP_NAME = 'MyHomeGames';
 const APP_BUNDLE = `${APP_NAME}.app`;
@@ -420,6 +421,10 @@ fs.writeFileSync(path.join(CONTENTS_PATH, 'Info.plist'), infoPlist);
 // Step 5: Create PkgInfo (optional but recommended)
 fs.writeFileSync(path.join(CONTENTS_PATH, 'PkgInfo'), 'APPL????');
 
+// Step 5.4: Bundle cloudflared for the macOS app (copied to writable metadata on first tunnel start)
+console.log('Step 5.4: Bundling cloudflared binary...');
+copyCloudflaredBinary(path.join(RESOURCES_PATH, 'bin'));
+
 // Step 5.5: Create .env file with default configuration
 console.log('Step 5: Creating .env file...');
 const envContent = releaseEnvContent;
@@ -752,10 +757,18 @@ if (linuxExe || winExe) {
   if (linuxExe) {
     fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
     fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
+    const linuxBinDir = path.join(BUILD_DIR, 'bin');
+    const hasLinuxBin = copyCloudflaredBinary(linuxBinDir);
     const tarName = `MyHomeGames-${version}-linux-x64.tar.gz`;
     const tarPath = path.join(BUILD_DIR, tarName);
+    const tarMembers = [`"${linuxExe}"`, '".env"', `"${SERVER_INFO_FILENAME}"`];
+    if (hasLinuxBin) {
+      tarMembers.push('"bin"');
+    }
     try {
-      execSync(`tar -czf "${tarPath}" -C "${BUILD_DIR}" "${linuxExe}" ".env" "${SERVER_INFO_FILENAME}"`, { stdio: 'inherit' });
+      execSync(`tar -czf "${tarPath}" -C "${BUILD_DIR}" ${tarMembers.join(' ')}`, {
+        stdio: 'inherit',
+      });
       console.log(`✅ Linux: ${tarName}`);
     } catch (e) {
       console.log('⚠️  Linux tarball failed:', e.message);
@@ -786,6 +799,7 @@ if (linuxExe || winExe) {
       }
       fs.copyFileSync(path.join(BUILD_DIR, '.env'), path.join(optDir, '.env'));
       fs.writeFileSync(path.join(optDir, SERVER_INFO_FILENAME), serverInfoJson);
+      copyCloudflaredBinary(path.join(optDir, 'bin'));
       const wrapper = `#!/bin/sh
 cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
 `;

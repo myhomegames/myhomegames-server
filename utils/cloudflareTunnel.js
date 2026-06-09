@@ -4,6 +4,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const { ensureCloudflaredBinary } = require("./cloudflaredBinary");
+
 const DEFAULT_PUBLIC_URL = "https://myhomegames-server.vige.it";
 
 /**
@@ -109,12 +111,13 @@ function writeGeneratedTunnelConfig({
 
 /**
  * Start cloudflared (named tunnel already configured in Cloudflare / ~/.cloudflared).
- * @param {{ localOrigin: string, env?: NodeJS.ProcessEnv, onLog?: (line: string) => void, runtimeToken?: string, publicUrl?: string }} options
+ * @param {{ localOrigin: string, env?: NodeJS.ProcessEnv, metadataPath?: string, onLog?: (line: string) => void, runtimeToken?: string, publicUrl?: string }} options
  * @returns {Promise<import('cloudflared').Tunnel>}
  */
 async function startCloudflareTunnel({
   localOrigin,
   env = process.env,
+  metadataPath,
   onLog,
   runtimeToken,
   publicUrl,
@@ -127,11 +130,8 @@ async function startCloudflareTunnel({
     );
   }
 
-  const { Tunnel, bin, install } = require("cloudflared");
-  if (!fs.existsSync(bin)) {
-    console.log("Downloading cloudflared binary (first run)...");
-    await install(bin);
-  }
+  await ensureCloudflaredBinary({ env, metadataPath });
+  const { Tunnel } = require("cloudflared");
 
   const tunnel = new Tunnel(built.args);
   const displayPublicUrl =
