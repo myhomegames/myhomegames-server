@@ -47,7 +47,33 @@ openssl genrsa -out "${METADATA_PATH}/certs/key.pem" 2048
 openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PATH}/certs/cert.pem" -days 365 -subj "/CN=localhost"
 ```
 
-**Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a service like Cloudflare Tunnel.
+**Note**: These are self-signed certificates. Browsers will show a security warning when accessing the site. For production/public access, use proper SSL certificates or a **Cloudflare Tunnel** (see below).
+
+## Cloudflare Tunnel (public HTTPS without local certificates)
+
+The server can start **cloudflared** automatically (npm package `cloudflared`) and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+
+**Prerequisites**
+
+1. Deploy `myhomegames-proxy` tunnel manager (`GET /api/get-token` after Cloudflare Access login).
+2. Enable tunnel mode on the server and web (see below).
+
+**`.env` example (server)**
+
+```env
+CLOUDFLARE_TUNNEL_ENABLED=true
+API_BASE=https://your-user-myhomegames-server.vige.it
+HTTPS_ENABLED=false
+HTTP_PORT=4000
+```
+
+The run token is **not** in `.env`. On startup the web app fetches a per-user token from the tunnel manager (Cloudflare Access) and `POST`s it to `http://localhost:4000/tunnel/connect`, or reconnects with stored credentials via `POST /tunnel/reconnect`. The server stores the run token under `METADATA_PATH/tokens/cloudflare-tunnel-run.json` and starts `cloudflared` on boot when present.
+
+On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+
+**Twitch OAuth**: register redirect URI `https://<your-user>-myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
+
+**Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
 ### Browser Security Warning
 
@@ -125,7 +151,7 @@ For development, the server uses the following environment variables:
 - `METADATA_PATH` - Path where game metadata are stored
   - Default: `$HOME/Library/Application Support/MyHomeGames`
 - `DEFAULT_SKIN_URL` - Optional zip URL for first-run default skin installation
-  - Default: `https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip`
+  - Default: `plex.mhg-skin.zip` from the latest GitHub Release of `myhomegames/myhomegames-skins` (override repo with `MHG_SKINS_GITHUB_REPO`)
   - Applied only when `METADATA_PATH/skins` has no installed skins; the installed skin is also selected as active
 
 ## Development Authentication
@@ -176,14 +202,46 @@ The test suite covers:
 The project uses `release-it` to automate GitHub releases. To create a release:
 
 ```bash
+export GITHUB_TOKEN=ghp_your_token_here   # recommended — classic PAT with repo scope
 npm run release
 ```
 
+Without `GITHUB_TOKEN`, `release-it` falls back to the GitHub “new release” page in the browser. A long changelog in the URL may fail with **“Your request URL is too long”**, and build artifacts are **not** uploaded automatically in that mode.
+
+`npm run release` uses `scripts/run-release.mjs`, which sets `NODE_DEBUG=release-it:config` to work around a release-it/Octokit bug (`log: null` → *Cannot read properties of null (reading 'debug')*). GitHub config uses `skipChecks: true` for the same compatibility reason.
+
 This will:
-1. Build the macOS `.app` bundle and `.pkg` installer
+1. Build packages for macOS, Linux, and Windows (`npm run build`)
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
-4. Attach the `.pkg` installer as a release asset
+4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
+5. Run **`scripts/publish-package-repos.js`** (optional steps below)
+
+### Package repositories (APT / YUM / Homebrew)
+
+After the GitHub release, `after:release` runs `publish-package-repos.js`. Each target is **skipped** unless configured.
+
+| Target | Env vars | Docs |
+|--------|----------|------|
+| APT | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_APT_ROOT` | [docs/install-apt.md](docs/install-apt.md) |
+| YUM/DNF | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_YUM_ROOT` | [docs/install-yum.md](docs/install-yum.md) |
+| Homebrew tap | `HOMEBREW_TAP_REPO` | [docs/install-homebrew.md](docs/install-homebrew.md) |
+
+Example (add to `.env.local`, not committed):
+
+```bash
+export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
+export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
+export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
+```
+
+Test publish without a full release:
+
+```bash
+npm run build
+npm run publish:repos
+```
 
 ### Build prerequisites
 
@@ -203,32 +261,28 @@ Temporary build files (including RPM working directory) are created under `build
 
 ### GitHub Token Configuration
 
-`release-it` requires a GitHub Personal Access Token to create releases automatically. Without it, you'll need to create the release manually through the web interface.
+A **GitHub Personal Access Token** with `repo` scope is **recommended** for automated releases (not required — `npm run release` warns and falls back to the web UI).
 
-To configure the token:
+1. Create a token at [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)** → scope **`repo`**.
+2. Export it (or set in `.env` / `.env.local` — see `.env.example`; never commit the token):
 
-1. **Create a GitHub Personal Access Token:**
-   - Go to https://github.com/settings/tokens
-   - Click "Generate new token" → "Generate new token (classic)"
-   - Give it a name (e.g., "release-it")
-   - Select the `repo` scope (required for creating releases and tags)
-   - Click "Generate token" and copy the token
+```bash
+export GITHUB_TOKEN=ghp_your_token_here
+```
 
-2. **Set the token as an environment variable:**
-   
-   **Option 1: Export in your shell (temporary):**
-   ```bash
-   export GITHUB_TOKEN=ghp_your_token_here
-   ```
-   
-   **Option 2: Add to `.env` file (persistent):**
-   ```bash
-   echo "GITHUB_TOKEN=ghp_your_token_here" >> .env
-   ```
-   
-   **Option 3: Use a `.env.local` file (not committed to Git):**
-   ```bash
-   echo "GITHUB_TOKEN=ghp_your_token_here" >> .env.local
-   ```
+#### Token troubleshooting
+
+If release fails with authentication or Octokit errors:
+
+1. **Classic PAT** — scope **`repo`** must be enabled.
+2. **Organization SSO** — if `myhomegames` uses SAML SSO, open the token → **Configure SSO** → **Authorize** for the org.
+3. **Fine-grained PAT** — select repository `myhomegames-server` and grant **Contents: Read and write** + **Metadata: Read**.
+4. Verify the token:
+
+```bash
+curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+```
+
+A valid response includes your `"login"`.
 
 **Security Note:** Never commit your `GITHUB_TOKEN` to the repository. The `.gitignore` file already excludes `.env.local` and `.env.*.local` files.

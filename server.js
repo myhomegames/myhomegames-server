@@ -130,6 +130,15 @@ const developersRoutes = require("./routes/developers");
 const publishersRoutes = require("./routes/publishers");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
+const { registerTunnelRoutes } = require("./routes/tunnel");
+const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
+const { isCloudflareTunnelEnabled } = require("./utils/cloudflareTunnel");
+const { setTwitchCredentialsMetadataPath } = require("./utils/twitchAppCredentials");
+const {
+  loadStoredTwitchAppCredentials,
+  saveStoredTwitchAppCredentials,
+} = require("./utils/twitchAppCredentialsStore");
+const { resolveDefaultSkinUrl } = require("./utils/defaultSkinUrl");
 
 const app = express();
 app.use(express.json());
@@ -137,8 +146,6 @@ app.use(cors());
 
 const API_TOKEN = process.env.API_TOKEN;
 const PORT = process.env.PORT || 4000; // PORT can have a default
-// Note: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are no longer read from .env
-// They are now passed from the client during login and API requests
 const API_BASE = process.env.API_BASE;
 
 /** Default data directory: macOS ~/Library/..., Windows %APPDATA%\\MyHomeGames, Linux XDG or ~/.local/share */
@@ -157,11 +164,12 @@ function getDefaultMetadataPath() {
 }
 
 const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
-const DEFAULT_SKIN_URL =
-  process.env.DEFAULT_SKIN_URL || "https://myhomegamesskins.vige.it/zips/plex.mhg-skin.zip";
+
+let cloudflareTunnel = null;
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
+const { tokensDirectory } = require("./utils/metadataTokenPaths");
 
 // Ensure metadata directory structure exists
 function ensureMetadataDirectories() {
@@ -183,6 +191,7 @@ function ensureMetadataDirectories() {
     path.join(METADATA_PATH, "content", "recommended"),
     path.join(METADATA_PATH, "skins"),
     path.join(METADATA_PATH, "certs"),
+    tokensDirectory(METADATA_PATH),
   ];
 
   directories.forEach((dir) => {
@@ -311,10 +320,12 @@ function installSkinZipBuffer(buffer, metadataPath, fallbackName = "Plex") {
 async function ensureDefaultSkinInstalled() {
   if (process.env.NODE_ENV === "test") return;
   const skinsDir = path.join(METADATA_PATH, "skins");
+  let skinUrl;
   try {
     ensureDirectoryExists(skinsDir);
     if (hasInstalledSkins(skinsDir)) return;
-    const zipBuffer = await fetchUrlBuffer(DEFAULT_SKIN_URL);
+    skinUrl = await resolveDefaultSkinUrl();
+    const zipBuffer = await fetchUrlBuffer(skinUrl);
     const installed = installSkinZipBuffer(zipBuffer, METADATA_PATH, "Plex");
     const currentSettings = readJsonFile(SETTINGS_FILE, {});
     const safeSettings =
@@ -331,10 +342,11 @@ async function ensureDefaultSkinInstalled() {
       activeSkinId: installed.id,
       skinWeb: skinsRoutes.readInstalledSkinWebFlags(METADATA_PATH, installed.id),
     });
-    console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${DEFAULT_SKIN_URL}`);
+    console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${skinUrl}`);
     console.log(`Selected default skin "${installed.name}" (${installed.id})`);
   } catch (error) {
-    console.error(`Failed to install default skin from ${DEFAULT_SKIN_URL}:`, error.message);
+    const from = skinUrl ? ` from ${skinUrl}` : "";
+    console.error(`Failed to install default skin${from}:`, error.message);
   }
 }
 
@@ -454,6 +466,24 @@ function requireToken(req, res, next) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
+// Launcher: always allow when Twitch login is disabled (same idea as optionalToken).
+// When Twitch login is enabled, allow requests with no token (local / empty client storage)
+// so Play still works; if a token is sent, it must be valid (reject invalid tokens).
+function optionalLauncherToken(req, res, next) {
+  const settings = readSettings();
+  if (!settings.twitchLoginEnabled) {
+    return next();
+  }
+  const token = getRequestToken(req);
+  if (!token) {
+    return next();
+  }
+  if (isAuthorizedToken(token)) {
+    return next();
+  }
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
 function getRequestToken(req) {
   return (
     req.header("X-Auth-Token") ||
@@ -496,6 +526,26 @@ setTimeout(() => {
 
 // Register routes
 authRoutes.registerAuthRoutes(app, METADATA_PATH);
+
+function applyTunnelPublicUrl(publicUrl) {
+  const normalized = String(publicUrl || "").trim().replace(/\/$/, "");
+  if (normalized) {
+    process.env.API_BASE = normalized;
+  }
+}
+
+registerTunnelRoutes(app, {
+  metadataPath: METADATA_PATH,
+  getTunnelProcess: () => cloudflareTunnel,
+  setTunnelProcess: (tunnel) => {
+    cloudflareTunnel = tunnel;
+  },
+  getLocalOrigin: () => {
+    const HTTP_PORT = process.env.HTTP_PORT || PORT;
+    return `http://127.0.0.1:${HTTP_PORT}`;
+  },
+  applyPublicUrl: applyTunnelPublicUrl,
+});
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, optionalToken);
@@ -604,8 +654,8 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
   res.sendFile(backgroundPath);
 });
 
-// Endpoint: launcher — launches an executable for a game
-app.get("/launcher", requireToken, (req, res) => {
+// Endpoint: launcher — launches an executable for a game (no strict auth when Twitch is off or no token is sent)
+app.get("/launcher", optionalLauncherToken, (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
 
@@ -790,43 +840,96 @@ function normalizeSkinWebManifestValue(raw) {
   return out;
 }
 
-// Helper function to read settings
+function migrateLegacyTwitchCredentialsFromSettings(settingsOnDisk) {
+  if (isCloudflareTunnelEnabled()) return false;
+  const legacyId =
+    typeof settingsOnDisk.twitchClientId === "string" ? settingsOnDisk.twitchClientId.trim() : "";
+  const legacySecret =
+    typeof settingsOnDisk.twitchClientSecret === "string"
+      ? settingsOnDisk.twitchClientSecret.trim()
+      : "";
+  if (!legacyId && !legacySecret) return false;
+
+  const stored = loadStoredTwitchAppCredentials(METADATA_PATH);
+  if (!stored?.clientId && !stored?.clientSecret) {
+    saveStoredTwitchAppCredentials(METADATA_PATH, {
+      clientId: legacyId,
+      clientSecret: legacySecret,
+    });
+  }
+  return true;
+}
+
+function attachTwitchAppCredentialsToSettings(result) {
+  delete result.twitchClientId;
+  delete result.twitchClientSecret;
+
+  if (isCloudflareTunnelEnabled()) {
+    if (typeof result.twitchApiEnabled !== "boolean") {
+      result.twitchApiEnabled = false;
+    }
+    return result;
+  }
+
+  const stored = loadStoredTwitchAppCredentials(METADATA_PATH);
+  result.twitchClientId = stored?.clientId || "";
+  result.twitchClientSecret = stored?.clientSecret || "";
+
+  if (typeof result.twitchApiEnabled !== "boolean") {
+    result.twitchApiEnabled =
+      result.twitchClientId.length > 0 && result.twitchClientSecret.length > 0;
+  }
+  return result;
+}
+
 function readSettings() {
   const defaultSettings = {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
     twitchLoginEnabled: false,
+    twitchApiEnabled: false,
     activeSkinId: "",
-    twitchClientId: "",
-    twitchClientSecret: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object and merge with defaults for missing keys
   if (typeof settings !== 'object' || settings === null) {
-    return defaultSettings;
+    return attachTwitchAppCredentialsToSettings({ ...defaultSettings });
   }
   /*
    * `skinWeb` is a nested object: a simple spread would let a persisted partial (e.g. settings
    * files written before this key existed) bypass the default shape. Normalize it so callers
    * always see a full boolean manifest with the known keys.
    */
-  return {
+  const skinWeb = normalizeSkinWebManifestValue(
+    settings && typeof settings === "object" ? settings.skinWeb : undefined
+  );
+  const result = {
     ...defaultSettings,
     ...settings,
-    skinWeb: normalizeSkinWebManifestValue(
-      settings && typeof settings === "object" ? settings.skinWeb : undefined
-    ),
+    skinWeb,
   };
+  delete result.fixedFocalStepSound;
+  delete result.twitchClientId;
+  delete result.twitchClientSecret;
+
+  if (migrateLegacyTwitchCredentialsFromSettings(settings)) {
+    writeSettings(result);
+  }
+
+  return attachTwitchAppCredentialsToSettings(result);
 }
 
 // Helper function to write settings
 function writeSettings(settings) {
   try {
+    const toWrite = { ...settings };
+    delete toWrite.twitchClientId;
+    delete toWrite.twitchClientSecret;
     // Ensure parent directory exists before writing
     const parentDir = path.dirname(SETTINGS_FILE);
     ensureDirectoryExists(parentDir);
-    writeJsonFile(SETTINGS_FILE, settings);
+    writeJsonFile(SETTINGS_FILE, toWrite);
     return true;
   } catch (e) {
     console.error("Error writing settings:", e.message);
@@ -834,10 +937,15 @@ function writeSettings(settings) {
   }
 }
 
+setTwitchCredentialsMetadataPath(METADATA_PATH);
+
 // Endpoint: get settings (public so client can load twitchLoginEnabled without token)
 app.get("/settings", (req, res) => {
   const settings = readSettings();
-  res.json(settings);
+  res.json({
+    ...settings,
+    cloudflareTunnelEnabled: isCloudflareTunnelEnabled(),
+  });
 });
 
 // Endpoint: get server version (public, for update notification to compare with GitHub releases)
@@ -866,7 +974,8 @@ app.get("/version", (req, res) => {
 
 // Endpoint: update settings
 // Special case: if Twitch login is currently enabled and caller is unauthenticated,
-// allow only the emergency toggle { twitchLoginEnabled: false } to avoid lock-out.
+// allow only recovery writes (disable login and/or replace both Twitch credentials)
+// to avoid lock-out when the configured credentials are no longer valid.
 app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
   const token = getRequestToken(req);
@@ -876,12 +985,23 @@ app.put("/settings", (req, res) => {
   if (twitchEnabled && !authorized) {
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const keys = Object.keys(body);
-    const isDisableOnlyRequest =
-      keys.length === 1 &&
-      keys[0] === "twitchLoginEnabled" &&
-      body.twitchLoginEnabled === false;
 
-    if (!isDisableOnlyRequest) {
+    const recoveryKeys = isCloudflareTunnelEnabled()
+      ? ["twitchLoginEnabled", "twitchApiEnabled"]
+      : ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"];
+    const hasClientId = keys.includes("twitchClientId");
+    const hasClientSecret = keys.includes("twitchClientSecret");
+    const partialCredentialsUpdate =
+      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
+
+    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.).
+    const allowsOnlyRecoveryKeys =
+      keys.length > 0 && keys.every((k) => recoveryKeys.includes(k));
+    const validRecoveryRequest =
+      allowsOnlyRecoveryKeys &&
+      (isCloudflareTunnelEnabled() || !partialCredentialsUpdate);
+
+    if (!validRecoveryRequest) {
       return res.status(401).json({ error: "Unauthorized" });
     }
   }
@@ -913,14 +1033,38 @@ app.put("/settings", (req, res) => {
     body.skinWeb = normalizeSkinWebManifestValue(merged);
   }
 
+  let credentialUpdate = null;
+  if (!isCloudflareTunnelEnabled()) {
+    const hasClientId = Object.prototype.hasOwnProperty.call(body, "twitchClientId");
+    const hasClientSecret = Object.prototype.hasOwnProperty.call(body, "twitchClientSecret");
+    if (hasClientId && hasClientSecret) {
+      credentialUpdate = {
+        clientId: String(body.twitchClientId || "").trim(),
+        clientSecret: String(body.twitchClientSecret || "").trim(),
+      };
+    }
+  }
+  delete body.twitchClientId;
+  delete body.twitchClientSecret;
+
   const updatedSettings = {
     ...currentSettings,
     ...body,
   };
+  delete updatedSettings.twitchClientId;
+  delete updatedSettings.twitchClientSecret;
+  if (Object.prototype.hasOwnProperty.call(body, "twitchApiEnabled") && updatedSettings.twitchApiEnabled === false) {
+    updatedSettings.twitchLoginEnabled = false;
+  }
+  // Drop deprecated top-level key (superseded by settings.skinWeb.fixedFocalStepSound).
+  delete updatedSettings.fixedFocalStepSound;
 
   const ok = writeSettings(updatedSettings);
+  if (ok && credentialUpdate) {
+    saveStoredTwitchAppCredentials(METADATA_PATH, credentialUpdate);
+  }
   if (ok) {
-    res.json({ status: "success", settings: updatedSettings });
+    res.json({ status: "success", settings: readSettings() });
   } else {
     res.status(500).json({ error: "Failed to save settings" });
   }
@@ -958,8 +1102,7 @@ function validateEnvironment() {
   
   const API_BASE = process.env.API_BASE;
  
-  // Note: Twitch OAuth credentials are now passed from client, not required in .env
-  // API_BASE is still required for OAuth redirects
+  // API_BASE is required for OAuth redirects (Twitch app credentials come from API gateway headers).
   const hasApiBase = !!API_BASE;
   
   if (!hasApiBase) {
@@ -974,40 +1117,84 @@ function validateEnvironment() {
   }
 }
 
+const {
+  applyCloudflareTunnelEnv,
+  startCloudflareTunnel,
+  stopCloudflareTunnel,
+} = require("./utils/cloudflareTunnel");
+
 // Store server references for graceful shutdown
 let httpServer = null;
 let httpsServer = null;
 
-// Graceful shutdown handler
-function gracefulShutdown(signal) {
-  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
-  
+function closeHttpServersAndExit() {
   const servers = [];
   if (httpServer) servers.push(httpServer);
   if (httpsServer) servers.push(httpsServer);
-  
+
   if (servers.length === 0) {
     process.exit(0);
     return;
   }
-  
-  // Close all servers
+
   let closedCount = 0;
   servers.forEach((server) => {
     server.close(() => {
       closedCount++;
       if (closedCount === servers.length) {
-        console.log('All servers closed. Exiting...');
+        console.log("All servers closed. Exiting...");
         process.exit(0);
       }
     });
   });
-  
-  // Force exit after 10 seconds if servers don't close
+
   setTimeout(() => {
-    console.error('Forced shutdown after timeout');
+    console.error("Forced shutdown after timeout");
     process.exit(1);
   }, 10000);
+}
+
+// Graceful shutdown handler
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+
+  if (cloudflareTunnel) {
+    stopCloudflareTunnel(cloudflareTunnel);
+    cloudflareTunnel.once("exit", () => closeHttpServersAndExit());
+    setTimeout(closeHttpServersAndExit, 3000);
+    return;
+  }
+
+  closeHttpServersAndExit();
+}
+
+async function maybeStartCloudflareTunnel(localOrigin) {
+  if (!isCloudflareTunnelEnabled()) return;
+
+  const stored = loadStoredTunnelCredentials(METADATA_PATH);
+  if (!stored?.token) {
+    console.warn(
+      "Cloudflare Tunnel enabled: no stored run token. The web app will fetch one from the tunnel manager on startup.",
+    );
+    return;
+  }
+
+  if (stored.publicUrl) {
+    applyTunnelPublicUrl(stored.publicUrl);
+  }
+
+  try {
+    cloudflareTunnel = await startCloudflareTunnel({
+      localOrigin,
+      runtimeToken: stored.token,
+      publicUrl: stored.publicUrl,
+    });
+  } catch (error) {
+    console.error("Failed to start Cloudflare Tunnel:", error.message || error);
+    if (process.env.CLOUDFLARE_TUNNEL_STRICT === "true") {
+      process.exit(1);
+    }
+  }
 }
 
 // Handle termination signals
@@ -1027,8 +1214,24 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Only start listening if not in test environment
 if (process.env.NODE_ENV !== 'test') {
+  const tunnelEnv = applyCloudflareTunnelEnv();
+  if (isCloudflareTunnelEnabled()) {
+    const stored = loadStoredTunnelCredentials(METADATA_PATH);
+    if (stored?.publicUrl) {
+      applyTunnelPublicUrl(stored.publicUrl);
+    }
+  }
+  if (tunnelEnv.applied) {
+    console.log(`Cloudflare Tunnel mode: public API at ${tunnelEnv.publicUrl}`);
+    if (tunnelEnv.httpsDisabled) {
+      console.log(
+        "Local HTTPS disabled; cloudflared forwards HTTP to localhost (TLS terminates at Cloudflare).",
+      );
+    }
+  }
+
   validateEnvironment();
-  
+
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
   
   if (HTTPS_ENABLED) {
@@ -1079,10 +1282,12 @@ if (process.env.NODE_ENV !== 'test') {
     // HTTP server only
     const HTTP_PORT = process.env.HTTP_PORT || PORT;
     httpServer = http.createServer(app);
+    const localOrigin = `http://127.0.0.1:${HTTP_PORT}`;
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
-      // Signal to macOS that the app is ready
-      process.stdout.write('Server ready\n');
+      maybeStartCloudflareTunnel(localOrigin).finally(() => {
+        process.stdout.write('Server ready\n');
+      });
     });
     
     // Handle server errors

@@ -8,12 +8,7 @@ const { execSync, spawnSync } = require("child_process");
 const ROOT = path.join(__dirname, "..");
 const BUILD_DIR = path.join(ROOT, "build");
 
-const ENV_CONTENT_STANDALONE = `HTTP_PORT=4000
-HTTPS_ENABLED=true
-HTTPS_PORT=41440
-API_BASE=https://localhost:41440
-FRONTEND_URL=https://myhomegames.vige.it/app/
-`;
+const ENV_CONTENT_STANDALONE = require("./release-env-content");
 
 const SERVER_INFO_FILENAME = "server-info.json";
 

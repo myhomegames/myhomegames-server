@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { buildWindowsUnifiedExe } = require('./windows-release-assets');
+const releaseEnvContent = require('./release-env-content');
 
 const APP_NAME = 'MyHomeGames';
 const APP_BUNDLE = `${APP_NAME}.app`;
@@ -310,7 +311,7 @@ appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(NSMenuItem(title: menuL.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 NSApp.mainMenu = mainMenu
 
-// Icona nella menu bar (destra) per accesso rapido
+// Menu bar icon (right) for quick access
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 if let button = statusItem.button {
     button.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "MyHomeGames Server")
@@ -421,12 +422,7 @@ fs.writeFileSync(path.join(CONTENTS_PATH, 'PkgInfo'), 'APPL????');
 
 // Step 5.5: Create .env file with default configuration
 console.log('Step 5: Creating .env file...');
-const envContent = `HTTP_PORT=4000
-HTTPS_ENABLED=true
-HTTPS_PORT=41440
-API_BASE=https://localhost:41440
-FRONTEND_URL=https://myhomegames.vige.it/app/
-`;
+const envContent = releaseEnvContent;
 fs.writeFileSync(path.join(RESOURCES_PATH, '.env'), envContent);
 fs.writeFileSync(path.join(RESOURCES_PATH, SERVER_INFO_FILENAME), serverInfoJson);
 console.log('✅ .env file created with default configuration');
@@ -725,12 +721,7 @@ try {
 }
 
 // Step 8: Package Linux and Windows (executable + .env, then archive)
-const envContentStandalone = `HTTP_PORT=4000
-HTTPS_ENABLED=true
-HTTPS_PORT=41440
-API_BASE=https://localhost:41440
-FRONTEND_URL=https://myhomegames.vige.it/app/
-`;
+const envContentStandalone = releaseEnvContent;
 const linuxExe = ['myhomegames-server-linux-x64', 'myhomegames-server-node18-linux-x64'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
 const winExe = ['myhomegames-server-win-x64.exe', 'myhomegames-server-node18-win-x64.exe'].find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
 
@@ -779,7 +770,7 @@ if (linuxExe || winExe) {
     }
   }
 
-  // Step 9: Linux .deb (deboa) and .rpm (rpm-builder) — solo npm; .rpm richiede rpmbuild su sistema
+  // Step 9: Linux .deb (deboa) and .rpm (rpm-builder) — npm only; .rpm requires rpmbuild on the system
   if (linuxExe) {
     (async () => {
       const pkgRoot = path.join(BUILD_DIR, 'linux-pkgroot');
@@ -835,7 +826,7 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
         console.log('⚠️  .deb failed:', e.message);
       }
 
-      // .rpm con rpm-builder (npm); richiede rpmbuild su sistema (Linux o brew install rpm su macOS)
+      // .rpm via rpm-builder (npm); requires rpmbuild on the system (Linux or brew install rpm on macOS)
       try {
         const buildRpm = require('rpm-builder');
         await new Promise((resolve, reject) => {

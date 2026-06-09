@@ -1772,7 +1772,7 @@ describe('DELETE /games/:gameId', () => {
     }
   });
 
-  test('should keep empty collection when deleting last game (no auto-delete)', async () => {
+  test('should auto-delete orphan empty collection when last game in it is deleted', async () => {
     const { testMetadataPath } = require('../setup');
     const fs = require('fs');
     const path = require('path');
@@ -1808,9 +1808,9 @@ describe('DELETE /games/:gameId', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(200);
 
-    // Empty collectionlike is no longer auto-deleted when the last game is removed
-    expect(fs.existsSync(collectionMetadataPath)).toBe(true);
-    expect(fs.existsSync(collectionDir)).toBe(true);
+    // removeGameFromAll prunes leaf collections with no games and no childs (see collectionsShared.js)
+    expect(fs.existsSync(collectionMetadataPath)).toBe(false);
+    expect(fs.existsSync(collectionDir)).toBe(false);
   });
 
   test('should handle game not found in library file gracefully', async () => {

@@ -3,6 +3,7 @@
 
 const https = require("https");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 
 // IGDB Access Token cache (per clientId)
 const igdbTokenCache = new Map();
@@ -323,14 +324,9 @@ function registerIGDBRoutes(app, requireToken) {
       }
     }
 
-    // Get Twitch credentials from headers or query params
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-
-    if (!clientId || !clientSecret) {
-      res.setHeader('Content-Type', 'application/json');
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required. Send them via X-Twitch-Client-Id and X-Twitch-Client-Secret headers, or clientId and clientSecret query parameters." });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -459,12 +455,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "At most 500 ids allowed" });
     }
 
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required (X-Twitch-Client-Id, X-Twitch-Client-Secret)." });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -510,12 +503,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "Invalid franchise ID" });
     }
 
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -602,12 +592,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "Invalid collection ID" });
     }
 
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -705,12 +692,9 @@ function registerIGDBRoutes(app, requireToken) {
         return res.status(400).json({ error: "Invalid tag ID" });
       }
 
-      const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-      const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-      if (!clientId || !clientSecret) {
-        res.setHeader("Content-Type", "application/json");
-        return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-      }
+      const twitchCreds = requireTwitchAppCredentials(req, res);
+      if (!twitchCreds) return;
+      const { clientId, clientSecret } = twitchCreds;
 
       try {
         const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -819,12 +803,9 @@ function registerIGDBRoutes(app, requireToken) {
         return res.status(400).json({ error: "Tag name is required" });
       }
 
-      const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-      const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-      if (!clientId || !clientSecret) {
-        res.setHeader("Content-Type", "application/json");
-        return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-      }
+      const twitchCreds = requireTwitchAppCredentials(req, res);
+      if (!twitchCreds) return;
+      const { clientId, clientSecret } = twitchCreds;
 
       try {
         const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -1050,12 +1031,9 @@ function registerIGDBRoutes(app, requireToken) {
       res.setHeader("Content-Type", "application/json");
       return res.status(400).json({ error: "Invalid company ID" });
     }
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
     try {
       const formatted = await fetchGamesByCompanyRole(companyId, "developer", excludeIds, clientId, clientSecret);
       res.setHeader("Content-Type", "application/json");
@@ -1074,12 +1052,9 @@ function registerIGDBRoutes(app, requireToken) {
       res.setHeader("Content-Type", "application/json");
       return res.status(400).json({ error: "Invalid company ID" });
     }
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
     try {
       const formatted = await fetchGamesByCompanyRole(companyId, "publisher", excludeIds, clientId, clientSecret);
       res.setHeader("Content-Type", "application/json");
@@ -1104,12 +1079,9 @@ function registerIGDBRoutes(app, requireToken) {
         res.setHeader("Content-Type", "application/json");
         return res.status(400).json({ error: "Company name is required" });
       }
-      const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-      const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-      if (!clientId || !clientSecret) {
-        res.setHeader("Content-Type", "application/json");
-        return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-      }
+      const twitchCreds = requireTwitchAppCredentials(req, res);
+      if (!twitchCreds) return;
+      const { clientId, clientSecret } = twitchCreds;
       try {
         const accessToken = await getIGDBAccessToken(clientId, clientSecret);
         const escapedName = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -1183,12 +1155,9 @@ function registerIGDBRoutes(app, requireToken) {
       res.setHeader("Content-Type", "application/json");
       return res.status(400).json({ error: "Invalid type or tag ID" });
     }
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
       const postData = `fields name; where id = ${tagId};`;
@@ -1241,12 +1210,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "Missing or invalid keyword" });
     }
 
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-    if (!clientId || !clientSecret) {
-      res.setHeader("Content-Type", "application/json");
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required" });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
@@ -1435,14 +1401,9 @@ function registerIGDBRoutes(app, requireToken) {
       return res.status(400).json({ error: "Invalid IGDB game ID" });
     }
 
-    // Get Twitch credentials from headers or query params
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    const clientSecret = req.header("X-Twitch-Client-Secret") || req.query.clientSecret;
-
-    if (!clientId || !clientSecret) {
-      res.setHeader('Content-Type', 'application/json');
-      return res.status(400).json({ error: "Twitch Client ID and Client Secret are required. Send them via X-Twitch-Client-Id and X-Twitch-Client-Secret headers, or clientId and clientSecret query parameters." });
-    }
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);

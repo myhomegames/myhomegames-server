@@ -60,11 +60,18 @@ describe("skins routes", () => {
       persistentLibraryShell: false,
       collectionsShortcutList: false,
       libraryPagesVerticalList: false,
+      libraryHoverSelect: false,
+      libraryBarHeaderActions: false,
+      topRightToolDock: false,
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
+      verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
+      disableTitleTooltips: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -121,6 +128,8 @@ describe("skins routes", () => {
             persistentLibraryShell: true,
             collectionsShortcutList: true,
             libraryPagesVerticalList: true,
+            libraryHoverSelect: true,
+            libraryBarHeaderActions: true,
             headerTitleFilter: true,
             disableAlphabetNavigator: true,
             extraIgnored: "x",
@@ -143,22 +152,35 @@ describe("skins routes", () => {
       persistentLibraryShell: true,
       collectionsShortcutList: true,
       libraryPagesVerticalList: true,
+      libraryHoverSelect: true,
+      libraryBarHeaderActions: true,
+      topRightToolDock: false,
       headerTitleFilter: true,
       disableAlphabetNavigator: true,
       sidebarSearchPopup: true,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: false,
+      verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
+      disableTitleTooltips: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
   });
 
-  test("POST /skins without token returns 401 when auth required", async () => {
+  test("POST /skins without token succeeds when Twitch login is off (optionalToken)", async () => {
     const zip = new AdmZip();
-    zip.addFile("skin.json", Buffer.from(JSON.stringify({ name: "X" }), "utf8"));
+    zip.addFile(
+      "skin.json",
+      Buffer.from(JSON.stringify({ name: "Optional Auth Upload Skin" }), "utf8")
+    );
     zip.addFile("bundle.css", Buffer.from("a{}", "utf8"));
     const res = await request(app).post("/skins").attach("archive", zip.toBuffer(), "x.zip");
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBeDefined();
+    const del = await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
+    expect(del.status).toBe(204);
   });
 
   test("PUT /settings with activeSkinId hydrates settings.skinWeb from skin.json", async () => {
@@ -194,11 +216,18 @@ describe("skins routes", () => {
       persistentLibraryShell: true,
       collectionsShortcutList: true,
       libraryPagesVerticalList: false,
+      libraryHoverSelect: false,
+      libraryBarHeaderActions: false,
+      topRightToolDock: false,
       headerTitleFilter: false,
       disableAlphabetNavigator: false,
       sidebarSearchPopup: false,
       ownedGamesFirstInGamesSidebar: false,
       compactCollectionLikeDetail: true,
+      verticalCoverAlignment: false,
+      fixedFocalStepSound: false,
+      autoShowBackgroundOnSelection: false,
+      disableTitleTooltips: false,
     });
 
     // A subsequent partial update only touches the requested flag.
@@ -209,6 +238,47 @@ describe("skins routes", () => {
     expect(tweak.status).toBe(200);
     expect(tweak.body.settings.skinWeb.compactCollectionLikeDetail).toBe(false);
     expect(tweak.body.settings.skinWeb.persistentLibraryShell).toBe(true);
+
+    await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
+  });
+
+  test("PUT /settings can disable autoShowBackgroundOnSelection while verticalCoverAlignment stays on", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(
+        JSON.stringify({
+          name: "Vertical Rail Theme",
+          web: {
+            verticalCoverAlignment: true,
+            autoShowBackgroundOnSelection: true,
+          },
+        }),
+        "utf8"
+      )
+    );
+    zip.addFile("bundle.css", Buffer.from("body {}", "utf8"));
+    const uploaded = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip.toBuffer(), "vr.zip");
+    expect(uploaded.status).toBe(201);
+
+    const activate = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ activeSkinId: uploaded.body.id });
+    expect(activate.status).toBe(200);
+    expect(activate.body.settings.skinWeb.verticalCoverAlignment).toBe(true);
+    expect(activate.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(true);
+
+    const tweak = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ skinWeb: { autoShowBackgroundOnSelection: false } });
+    expect(tweak.status).toBe(200);
+    expect(tweak.body.settings.skinWeb.verticalCoverAlignment).toBe(true);
+    expect(tweak.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(false);
 
     await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
   });

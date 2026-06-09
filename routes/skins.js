@@ -103,11 +103,18 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   persistentLibraryShell: false,
   collectionsShortcutList: false,
   libraryPagesVerticalList: false,
+  libraryHoverSelect: false,
+  libraryBarHeaderActions: false,
+  topRightToolDock: false,
   headerTitleFilter: false,
   disableAlphabetNavigator: false,
   sidebarSearchPopup: false,
   ownedGamesFirstInGamesSidebar: false,
   compactCollectionLikeDetail: false,
+  verticalCoverAlignment: false,
+  fixedFocalStepSound: false,
+  autoShowBackgroundOnSelection: false,
+  disableTitleTooltips: false,
 });
 
 const SKIN_WEB_KEYS = Object.freeze(Object.keys(DEFAULT_SKIN_WEB_MANIFEST));
@@ -126,10 +133,21 @@ function extractWebManifest(meta) {
   out.persistentLibraryShell = w.persistentLibraryShell === true;
   out.collectionsShortcutList = w.collectionsShortcutList === true;
   out.libraryPagesVerticalList = w.libraryPagesVerticalList === true;
+  out.libraryHoverSelect = w.libraryHoverSelect === true;
+  out.libraryBarHeaderActions = w.libraryBarHeaderActions === true;
+  out.topRightToolDock = w.topRightToolDock === true;
   out.headerTitleFilter = w.headerTitleFilter === true;
   out.disableAlphabetNavigator = w.disableAlphabetNavigator === true;
   out.ownedGamesFirstInGamesSidebar = w.ownedGamesFirstInGamesSidebar === true;
   out.compactCollectionLikeDetail = w.compactCollectionLikeDetail === true;
+  out.verticalCoverAlignment = w.verticalCoverAlignment === true;
+  out.fixedFocalStepSound = w.fixedFocalStepSound === true;
+  out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
+  out.disableTitleTooltips = w.disableTitleTooltips === true;
+
+  if (out.verticalCoverAlignment && !("autoShowBackgroundOnSelection" in w)) {
+    out.autoShowBackgroundOnSelection = true;
+  }
 
   if (out.headerTitleFilter) {
     if (!("sidebarSearchPopup" in w)) {

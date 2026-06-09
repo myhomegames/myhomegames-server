@@ -349,7 +349,7 @@ function runTagListTests(config) {
       expect(response.body.toString()).toBe("fake webp data");
     });
 
-    test("should redirect to remote URL if local cover does not exist and FRONTEND_URL is set", async () => {
+    test("should redirect to remote URL if local cover does not exist and COVER_TAG_URL is set", async () => {
       const tagTitle = `RemoteCoverTest-${Date.now()}`;
 
       await request(app)
@@ -359,8 +359,8 @@ function runTagListTests(config) {
         .expect(200);
 
       const tagId = getTagId(tagTitle);
-      const originalFrontendUrl = process.env.FRONTEND_URL;
-      process.env.FRONTEND_URL = "https://example.com/app";
+      const originalCoverTagUrl = process.env.COVER_TAG_URL;
+      process.env.COVER_TAG_URL = "https://example.com";
 
       try {
         const response = await request(app)
@@ -371,15 +371,15 @@ function runTagListTests(config) {
           `https://example.com${normalizedRouteBase}/${tagId}/cover.webp`
         );
       } finally {
-        if (originalFrontendUrl) {
-          process.env.FRONTEND_URL = originalFrontendUrl;
+        if (originalCoverTagUrl) {
+          process.env.COVER_TAG_URL = originalCoverTagUrl;
         } else {
-          delete process.env.FRONTEND_URL;
+          delete process.env.COVER_TAG_URL;
         }
       }
     });
 
-    test("should return 404 if local cover does not exist and FRONTEND_URL is not set", async () => {
+    test("should return 404 if local cover does not exist and COVER_TAG_URL is not set", async () => {
       const tagTitle = `NoCoverTest-${Date.now()}`;
 
       await request(app)
@@ -389,8 +389,8 @@ function runTagListTests(config) {
         .expect(200);
 
       const tagId = getTagId(tagTitle);
-      const originalFrontendUrl = process.env.FRONTEND_URL;
-      delete process.env.FRONTEND_URL;
+      const originalCoverTagUrl = process.env.COVER_TAG_URL;
+      delete process.env.COVER_TAG_URL;
 
       try {
         const response = await request(app)
@@ -399,8 +399,8 @@ function runTagListTests(config) {
 
         expect(response.headers["content-type"]).toContain("image/webp");
       } finally {
-        if (originalFrontendUrl) {
-          process.env.FRONTEND_URL = originalFrontendUrl;
+        if (originalCoverTagUrl) {
+          process.env.COVER_TAG_URL = originalCoverTagUrl;
         }
       }
     });

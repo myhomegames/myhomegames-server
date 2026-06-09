@@ -13,10 +13,6 @@ beforeAll(() => {
   // Clear module cache to ensure fresh server instance
   delete require.cache[require.resolve('../../server.js')];
   
-  // Clear IGDB credentials for tests (we're not testing actual IGDB API calls)
-  delete process.env.TWITCH_CLIENT_ID;
-  delete process.env.TWITCH_CLIENT_SECRET;
-  
   app = require('../../server.js');
 });
 
@@ -106,7 +102,8 @@ describe('GET /igdb/game-names-by-ids', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(400);
 
-    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required (X-Twitch-Client-Id, X-Twitch-Client-Secret).');
+    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
   });
 
   test('should require authentication', async () => {
@@ -166,7 +163,8 @@ describe('GET /igdb/games-by-genre/:tagId', () => {
       .get('/igdb/games-by-genre/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
   });
 });
 
@@ -216,7 +214,8 @@ describe('GET /igdb/games-by-developer/:companyId', () => {
       .get('/igdb/games-by-developer/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
   });
 });
 
@@ -266,7 +265,8 @@ describe('GET /igdb/games-by-publisher/:companyId', () => {
       .get('/igdb/games-by-publisher/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    expect(response.body).toHaveProperty('error', 'Twitch Client ID and Client Secret are required');
+    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
   });
 });
 

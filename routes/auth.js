@@ -5,16 +5,18 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile } = require("../utils/fileUtils");
+const { isCloudflareTunnelEnabled } = require("../utils/cloudflareTunnel");
+const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+const { twitchOAuthSessionsPath } = require("../utils/metadataTokenPaths");
 
-// Note: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are no longer read from .env
-// They are now passed from the client during login
+// Twitch app credentials: X-Twitch-Client-* headers (API gateway) or POST /auth/twitch body.
 const API_BASE = process.env.API_BASE;
 const API_TOKEN = process.env.API_TOKEN;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
-// Path to store user tokens
+// Path to store Twitch OAuth sessions (per user)
 function getTokensPath(metadataPath) {
-  return path.join(metadataPath, "tokens.json");
+  return twitchOAuthSessionsPath(metadataPath);
 }
 
 // Load user tokens from file
@@ -116,17 +118,61 @@ function getTwitchUserInfo(accessToken, clientId) {
 }
 
 // Store Twitch credentials temporarily by state (for OAuth flow)
-// This allows credentials to be passed from client instead of .env
 const twitchCredentialsByState = new Map();
+
+/** Normalize client-provided return URL (origin + path, no query/hash). */
+function normalizeFrontendRedirect(input) {
+  if (!input || typeof input !== "string") return null;
+  try {
+    const u = new URL(input.trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function resolveFrontendRedirect(req, storedUrl) {
+  const fromState = normalizeFrontendRedirect(storedUrl);
+  if (fromState) return fromState;
+  const fromOrigin = req.headers.origin
+    ? normalizeFrontendRedirect(`${req.headers.origin}/`)
+    : null;
+  if (fromOrigin) return fromOrigin;
+  const fromEnv = normalizeFrontendRedirect(FRONTEND_URL);
+  if (fromEnv) return fromEnv;
+  if (API_BASE) {
+    try {
+      return normalizeFrontendRedirect(API_BASE.replace(":4000", ":5173"));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function redirectToFrontend(res, req, storedFrontendUrl, query) {
+  const base = resolveFrontendRedirect(req, storedFrontendUrl);
+  if (!base) {
+    return res.status(500).send("FRONTEND_URL is not configured.");
+  }
+  const separator = base.includes("?") ? "&" : "?";
+  const qs = new URLSearchParams(query).toString();
+  res.redirect(`${base}${separator}${qs}`);
+}
 
 // Register authentication routes
 function registerAuthRoutes(app, metadataPath) {
   // Redirect to Twitch OAuth
   app.post("/auth/twitch", (req, res) => {
-    const { clientId, clientSecret } = req.body;
-    
-    if (!clientId || !clientSecret) {
-      return res.status(400).json({ error: "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required in request body." });
+    const gatewayCreds = resolveTwitchAppCredentials(req);
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const clientId = String(body.clientId || gatewayCreds.clientId || "").trim();
+    const clientSecret = String(body.clientSecret || gatewayCreds.clientSecret || "").trim();
+    const { frontendUrl } = body;
+
+    if (!clientId) {
+      return res.status(400).json({ error: "TWITCH_CLIENT_ID is required in request body." });
     }
 
     if (!API_BASE) {
@@ -136,10 +182,20 @@ function registerAuthRoutes(app, metadataPath) {
     const redirectUri = `${API_BASE}/auth/twitch/callback`;
     const state = Math.random().toString(36).substring(7);
     
+    // Twitch authorization-code login requires client_secret (no PKCE on this flow).
+    if (!clientSecret) {
+      return res.status(400).json({
+        error: isCloudflareTunnelEnabled()
+          ? "TWITCH_CLIENT_SECRET is required for Twitch login. Configure it on the API gateway (e.g. Cloudflare Worker)."
+          : "TWITCH_CLIENT_SECRET is required for Twitch login. Generate a Client Secret in the Twitch Developer Console (Manage application → New Secret) and save it in Settings.",
+      });
+    }
+
     // Store credentials temporarily by state (will be cleaned up after callback)
     twitchCredentialsByState.set(state, {
       clientId,
       clientSecret,
+      frontendUrl: normalizeFrontendRedirect(frontendUrl),
       timestamp: Date.now()
     });
     
@@ -156,11 +212,11 @@ function registerAuthRoutes(app, metadataPath) {
     const promptConsent = req.body.forceVerify === true ? "&prompt=consent" : "";
     
     const authUrl = `https://id.twitch.tv/oauth2/authorize?` +
-      `client_id=${clientId}&` +
+      `client_id=${encodeURIComponent(clientId)}&` +
       `redirect_uri=${encodeURIComponent(redirectUri)}&` +
       `response_type=code&` +
       `scope=user:read:email&` +
-      `state=${state}${promptConsent}`;
+      `state=${encodeURIComponent(state)}${promptConsent}`;
 
     res.json({ authUrl, state });
   });
@@ -172,45 +228,37 @@ function registerAuthRoutes(app, metadataPath) {
     const error = req.query.error;
 
     if (error) {
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      return res.redirect(`${frontendUrl}?auth_error=${encodeURIComponent(error)}`);
+      return redirectToFrontend(res, req, null, { auth_error: String(error) });
     }
 
     if (!code || !state) {
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      return res.redirect(`${frontendUrl}?auth_error=no_code_or_state`);
+      return redirectToFrontend(res, req, null, { auth_error: "no_code_or_state" });
     }
 
     // Retrieve credentials from state
     const credentials = twitchCredentialsByState.get(state);
     if (!credentials) {
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      return res.redirect(`${frontendUrl}?auth_error=invalid_state`);
+      return redirectToFrontend(res, req, null, { auth_error: "invalid_state" });
     }
 
-    const { clientId, clientSecret } = credentials;
+    const { clientId, clientSecret, frontendUrl: storedFrontendUrl } = credentials;
 
     // Clean up credentials after use
     twitchCredentialsByState.delete(state);
 
-    if (error) {
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      return res.redirect(`${frontendUrl}?auth_error=${encodeURIComponent(error)}`);
-    }
-
-    if (!code) {
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      return res.redirect(`${frontendUrl}?auth_error=no_code`);
-    }
-
     try {
       // Exchange code for access token
       const redirectUri = `${API_BASE}/auth/twitch/callback`;
-      const postData = `client_id=${clientId}&` +
-        `client_secret=${clientSecret}&` +
-        `code=${code}&` +
-        `grant_type=authorization_code&` +
-        `redirect_uri=${encodeURIComponent(redirectUri)}`;
+      const tokenBody = new URLSearchParams({
+        client_id: clientId,
+        code: String(code),
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+      });
+
+      tokenBody.set("client_secret", clientSecret);
+
+      const postData = tokenBody.toString();
 
       const tokenOptions = {
         hostname: "id.twitch.tv",
@@ -234,7 +282,15 @@ function registerAuthRoutes(app, metadataPath) {
                 const json = JSON.parse(data);
                 resolve(json);
               } else {
-                reject(new Error(`Failed to get access token: ${tokenRes.statusCode} ${tokenRes.statusMessage}`));
+                let message = "Failed to get access token";
+                try {
+                  const errJson = JSON.parse(data);
+                  if (errJson.message) message = errJson.message;
+                  else if (errJson.error) message = errJson.error;
+                } catch {
+                  if (data) message = data.slice(0, 200);
+                }
+                reject(new Error(message));
               }
             } catch (e) {
               reject(e);
@@ -266,21 +322,29 @@ function registerAuthRoutes(app, metadataPath) {
       };
       saveTokens(metadataPath, tokens);
 
-      // Redirect to frontend with token
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      res.redirect(`${frontendUrl}?twitch_token=${accessToken}&user_id=${userInfo.id}`);
+      redirectToFrontend(res, req, storedFrontendUrl, {
+        twitch_token: accessToken,
+        user_id: userInfo.id,
+        twitch_client_id: clientId,
+      });
     } catch (err) {
       console.error("Twitch auth error:", err);
-      const frontendUrl = req.headers.origin || FRONTEND_URL || API_BASE.replace(":4000", ":5173");
-      res.redirect(`${frontendUrl}?auth_error=${encodeURIComponent(err.message)}`);
+      let authError = err.message || "auth_failed";
+      if (/invalid client credentials/i.test(authError)) {
+        authError =
+          "twitch_secret_required: Twitch rejected the token exchange. Server-side login requires a valid Client Secret (Twitch does not support PKCE without a secret on this flow).";
+      }
+      redirectToFrontend(res, req, storedFrontendUrl, {
+        auth_error: authError,
+      });
     }
   });
 
   // Get current user info (requires valid token)
   app.get("/auth/me", async (req, res) => {
     const token = req.header("X-Auth-Token") || req.query.token || req.header("Authorization");
-    const clientId = req.header("X-Twitch-Client-Id") || req.query.clientId;
-    
+    const { clientId } = resolveTwitchAppCredentials(req);
+
     if (!token) {
       return res.status(401).json({ error: "Unauthorized" });
     }
@@ -296,7 +360,7 @@ function registerAuthRoutes(app, metadataPath) {
     }
 
     if (!clientId) {
-      return res.status(400).json({ error: "TWITCH_CLIENT_ID is required in X-Twitch-Client-Id header or clientId query parameter." });
+      return res.status(400).json({ error: "TWITCH_CLIENT_ID is required in X-Twitch-Client-Id header." });
     }
 
     try {
