@@ -138,6 +138,7 @@ const {
   loadStoredTwitchAppCredentials,
   saveStoredTwitchAppCredentials,
 } = require("./utils/twitchAppCredentialsStore");
+const { resolveDefaultSkinUrl } = require("./utils/defaultSkinUrl");
 
 const app = express();
 app.use(express.json());
@@ -165,8 +166,6 @@ function getDefaultMetadataPath() {
 const METADATA_PATH = process.env.METADATA_PATH || getDefaultMetadataPath();
 
 let cloudflareTunnel = null;
-const DEFAULT_SKIN_URL =
-  process.env.DEFAULT_SKIN_URL || "https://myhomegames-skins.vige.it/zips/plex.mhg-skin.zip";
 
 // Settings file path - stored in metadata path root
 const SETTINGS_FILE = path.join(METADATA_PATH, "settings.json");
@@ -321,10 +320,12 @@ function installSkinZipBuffer(buffer, metadataPath, fallbackName = "Plex") {
 async function ensureDefaultSkinInstalled() {
   if (process.env.NODE_ENV === "test") return;
   const skinsDir = path.join(METADATA_PATH, "skins");
+  let skinUrl;
   try {
     ensureDirectoryExists(skinsDir);
     if (hasInstalledSkins(skinsDir)) return;
-    const zipBuffer = await fetchUrlBuffer(DEFAULT_SKIN_URL);
+    skinUrl = await resolveDefaultSkinUrl();
+    const zipBuffer = await fetchUrlBuffer(skinUrl);
     const installed = installSkinZipBuffer(zipBuffer, METADATA_PATH, "Plex");
     const currentSettings = readJsonFile(SETTINGS_FILE, {});
     const safeSettings =
@@ -341,10 +342,11 @@ async function ensureDefaultSkinInstalled() {
       activeSkinId: installed.id,
       skinWeb: skinsRoutes.readInstalledSkinWebFlags(METADATA_PATH, installed.id),
     });
-    console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${DEFAULT_SKIN_URL}`);
+    console.log(`Installed default skin "${installed.name}" (${installed.id}) from ${skinUrl}`);
     console.log(`Selected default skin "${installed.name}" (${installed.id})`);
   } catch (error) {
-    console.error(`Failed to install default skin from ${DEFAULT_SKIN_URL}:`, error.message);
+    const from = skinUrl ? ` from ${skinUrl}` : "";
+    console.error(`Failed to install default skin${from}:`, error.message);
   }
 }
 

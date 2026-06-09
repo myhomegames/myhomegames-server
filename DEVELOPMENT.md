@@ -151,7 +151,7 @@ For development, the server uses the following environment variables:
 - `METADATA_PATH` - Path where game metadata are stored
   - Default: `$HOME/Library/Application Support/MyHomeGames`
 - `DEFAULT_SKIN_URL` - Optional zip URL for first-run default skin installation
-  - Default: `https://myhomegames-skins.vige.it/zips/plex.mhg-skin.zip`
+  - Default: `plex.mhg-skin.zip` from the latest GitHub Release of `myhomegames/myhomegames-skins` (override repo with `MHG_SKINS_GITHUB_REPO`)
   - Applied only when `METADATA_PATH/skins` has no installed skins; the installed skin is also selected as active
 
 ## Development Authentication
