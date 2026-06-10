@@ -118,6 +118,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           summary: c.summary || "",
           showTitle: c.showTitle,
           gameCount: actualGameCount,
+          gameIds: gameIds.filter((gameId) => allGames[gameId]).map((id) => String(id)),
           childs: Array.isArray(c.childs) ? c.childs : [],
         };
         // Check if cover exists locally

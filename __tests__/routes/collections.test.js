@@ -40,6 +40,8 @@ describe("Collections-specific: GET /collections", () => {
       const c = response.body.collections[0];
       expect(c).toHaveProperty("id");
       expect(c).toHaveProperty("title");
+      expect(c).toHaveProperty("gameIds");
+      expect(Array.isArray(c.gameIds)).toBe(true);
       if (c.cover) expect(c.cover).toContain("/collection-covers/");
     }
   });
