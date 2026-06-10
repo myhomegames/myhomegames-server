@@ -10,7 +10,7 @@
  *   PACKAGE_REPO_APT_CODENAME default: stable
  *
  * Env (Homebrew tap):
- *   HOMEBREW_TAP_REPO         e.g. git@github.com:myhomegames/homebrew-tap.git
+ *   HOMEBREW_TAP_REPO         e.g. git@github.com:myhomegames/myhomegames-homebrewtap.git
  *   GITHUB_RELEASE_BASE       default: https://github.com/myhomegames/myhomegames-server/releases/download
  *
  * Loads `.env` and `.env.local` (if present) from the project root.
@@ -144,15 +144,9 @@ end
 function publishHomebrewTap(caskBody) {
   if (!caskBody) return;
 
-  const localCaskDir = path.join(ROOT, 'packaging', 'homebrew', 'Casks');
-  const localCaskPath = path.join(localCaskDir, 'myhomegames-server.rb');
-  fs.mkdirSync(localCaskDir, { recursive: true });
-  fs.writeFileSync(localCaskPath, caskBody, 'utf8');
-  log(`Homebrew: wrote ${path.relative(ROOT, localCaskPath)}`);
-
   const tapRepo = process.env.HOMEBREW_TAP_REPO;
   if (!tapRepo) {
-    warn('Homebrew tap: skipped git push (set HOMEBREW_TAP_REPO to enable)');
+    warn('Homebrew tap: skipped (set HOMEBREW_TAP_REPO to enable)');
     return;
   }
 

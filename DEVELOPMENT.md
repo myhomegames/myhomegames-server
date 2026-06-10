@@ -233,7 +233,7 @@ Example (add to `.env.local`, not committed):
 export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
 export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
 export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
-export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
 ```
 
 Test publish without a full release:
