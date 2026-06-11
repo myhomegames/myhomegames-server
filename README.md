@@ -65,7 +65,7 @@ cp .env.production.example .env
 
 Then edit `.env` and configure required variables (e.g. `API_BASE`, `METADATA_PATH`).
 
-MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset.
+MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset. See [docs/IGDB.md](docs/IGDB.md) for automatic (proxy) vs manual Twitch Developer Console setup.
 
 **Important**: Do not use `API_TOKEN` in production.
 
@@ -222,7 +222,7 @@ API routes are open by default. Set `API_TOKEN` in development only if you need 
 
 The server does not require authentication for normal use. For development, optional `API_TOKEN` enables `GET /auth/me` — see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-IGDB API access uses Twitch **application** credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) for catalog search. With Cloudflare Tunnel, credentials are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
+IGDB API access uses Twitch **application** credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) for catalog search. With Cloudflare Tunnel, credentials are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings. Without the proxy, register your own app in the Twitch Developer Console — see [docs/IGDB.md](docs/IGDB.md).
 
 ## Troubleshooting
 
