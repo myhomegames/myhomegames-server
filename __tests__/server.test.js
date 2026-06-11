@@ -26,12 +26,12 @@ afterAll(async () => {
 });
 
 describe('Authentication', () => {
-  test('should reject requests without token', async () => {
+  test('should allow requests without token', async () => {
     const response = await request(app)
       .get('/libraries/library/games')
-      .expect(401);
+      .expect(200);
     
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
+    expect(response.body).toHaveProperty('games');
   });
 
   test('should accept requests with X-Auth-Token header', async () => {
@@ -104,14 +104,6 @@ describe('GET /launcher', () => {
   test('should return 400 if gameId is missing without any auth token', async () => {
     const response = await request(app).get('/launcher').expect(400);
     expect(response.body).toHaveProperty('error', 'Missing gameId');
-  });
-
-  test('should return 401 when Twitch login is enabled and an invalid token is sent', async () => {
-    const response = await request(app)
-      .get('/launcher?gameId=1')
-      .set('X-Auth-Token', 'not-a-valid-token-for-sure');
-    expect(response.status).toBe(401);
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 
   test('should return 404 for non-existent game', async () => {
@@ -265,13 +257,6 @@ describe('POST /reload-games', () => {
     expect(typeof response.body.playerPerspectives).toBe('number');
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .post('/reload-games')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('GET /version', () => {
@@ -310,7 +295,6 @@ describe('GET /settings', () => {
       .expect(200);
     
     expect(response.body).toHaveProperty('language');
-    expect(response.body).toHaveProperty('twitchLoginEnabled');
   });
 
   test('should return default settings if file does not exist', async () => {
@@ -327,7 +311,6 @@ describe('GET /settings', () => {
       .expect(200);
     
     expect(response.body).toHaveProperty('language', 'en');
-    expect(response.body).toHaveProperty('twitchLoginEnabled', false);
     
     // Restore settings file
     if (fs.existsSync(backupPath)) {
@@ -375,16 +358,16 @@ describe('PUT /settings', () => {
     expect(response.body.settings).toHaveProperty('language');
   });
 
-  test('should require authentication when twitchLoginEnabled is true', async () => {
+  test('should allow unauthenticated settings update', async () => {
     const response = await request(app)
       .put('/settings')
       .send({ language: 'en' })
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
   });
 
-  test('should allow unauthenticated Twitch credentials recovery when login is enabled', async () => {
+  test('should persist Twitch credentials without authentication', async () => {
     const response = await request(app)
       .put('/settings')
       .send({
@@ -396,79 +379,16 @@ describe('PUT /settings', () => {
     expect(response.body).toHaveProperty('status', 'success');
     expect(response.body.settings).toHaveProperty('twitchClientId', 'recovery-client-id');
     expect(response.body.settings).toHaveProperty('twitchClientSecret', 'recovery-client-secret');
-
-    const { twitchAppCredentialsPath } = require('../utils/metadataTokenPaths');
-    const credsPath = twitchAppCredentialsPath(testMetadataPath);
-    expect(fs.existsSync(credsPath)).toBe(true);
-    const stored = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-    expect(stored.clientId).toBe('recovery-client-id');
-    expect(stored.clientSecret).toBe('recovery-client-secret');
-
-    const settingsOnDisk = JSON.parse(
-      fs.readFileSync(path.join(testMetadataPath, 'settings.json'), 'utf8')
-    );
-    expect(settingsOnDisk).not.toHaveProperty('twitchClientId');
-    expect(settingsOnDisk).not.toHaveProperty('twitchClientSecret');
-  });
-
-  test('should allow unauthenticated Twitch public-app recovery (empty secret)', async () => {
-    const response = await request(app)
-      .put('/settings')
-      .send({
-        twitchClientId: 'public-client-id',
-        twitchClientSecret: '',
-      })
-      .expect(200);
-
-    expect(response.body).toHaveProperty('status', 'success');
-    expect(response.body.settings).toHaveProperty('twitchClientId', 'public-client-id');
-    expect(response.body.settings).toHaveProperty('twitchClientSecret', '');
-  });
-
-  test('should reject unauthenticated partial Twitch credentials update', async () => {
-    const response = await request(app)
-      .put('/settings')
-      .send({ twitchClientId: 'only-id' })
-      .expect(401);
-
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
-
-  test('should allow unauthenticated twitchApiEnabled toggle when login is enabled', async () => {
-    const response = await request(app)
-      .put('/settings')
-      .send({
-        twitchLoginEnabled: false,
-        twitchApiEnabled: true,
-      })
-      .expect(200);
-
-    expect(response.body).toHaveProperty('status', 'success');
-    expect(response.body.settings).toHaveProperty('twitchApiEnabled', true);
-    expect(response.body.settings).toHaveProperty('twitchLoginEnabled', false);
   });
 });
 
-describe('When twitchLoginEnabled is false', () => {
+describe('Public API access', () => {
   test('should allow GET /libraries/library/games without token', async () => {
-    const settingsPath = path.join(testMetadataPath, 'settings.json');
-    const backupPath = settingsPath + '.backup';
-    
-    if (fs.existsSync(settingsPath)) {
-      fs.copyFileSync(settingsPath, backupPath);
-    }
-    fs.writeFileSync(settingsPath, JSON.stringify({ language: 'en', twitchLoginEnabled: false }, null, 2));
-    
     const response = await request(app)
       .get('/libraries/library/games')
       .expect(200);
-    
+
     expect(response.body).toHaveProperty('games');
-    
-    if (fs.existsSync(backupPath)) {
-      fs.copyFileSync(backupPath, settingsPath);
-      fs.unlinkSync(backupPath);
-    }
   });
 });
 

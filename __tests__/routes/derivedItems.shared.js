@@ -159,13 +159,6 @@ function runDerivedItemTests(config) {
         .expect(200);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .get(normalizedRouteBase)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`PUT ${normalizedRouteBase}/:id`, () => {
@@ -211,14 +204,6 @@ function runDerivedItemTests(config) {
       expect(response.body).toHaveProperty("error", "Invalid id");
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .put(`${normalizedRouteBase}/1`)
-        .send({ showTitle: false })
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`POST ${normalizedRouteBase}/:id/upload-cover`, () => {
@@ -289,14 +274,6 @@ function runDerivedItemTests(config) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .post(`${normalizedRouteBase}/1/upload-cover`)
-        .attach("file", Buffer.from("test"), "test.png")
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`DELETE ${normalizedRouteBase}/:id/delete-cover`, () => {
@@ -322,13 +299,6 @@ function runDerivedItemTests(config) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .delete(`${normalizedRouteBase}/1/delete-cover`)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`GET ${normalizedRouteBase}/:id/cover.webp`, () => {

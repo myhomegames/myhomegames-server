@@ -204,7 +204,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     limits: { fileSize: MAX_ZIP_BYTES },
   });
 
-  /** Public read: theme CSS must load on /login before the user has a token (Twitch-on). */
+  /** Public read: theme CSS must load before any API token is available. */
   app.get("/skins", (req, res) => {
     try {
       const dir = root();

@@ -470,22 +470,8 @@ function requireToken(req, res, next) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
-// Launcher: always allow when Twitch login is disabled (same idea as optionalToken).
-// When Twitch login is enabled, allow requests with no token (local / empty client storage)
-// so Play still works; if a token is sent, it must be valid (reject invalid tokens).
 function optionalLauncherToken(req, res, next) {
-  const settings = readSettings();
-  if (!settings.twitchLoginEnabled) {
-    return next();
-  }
-  const token = getRequestToken(req);
-  if (!token) {
-    return next();
-  }
-  if (isAuthorizedToken(token)) {
-    return next();
-  }
-  return res.status(401).json({ error: "Unauthorized" });
+  return next();
 }
 
 function getRequestToken(req) {
@@ -499,16 +485,11 @@ function getRequestToken(req) {
 function isAuthorizedToken(token) {
   if (!token) return false;
   if (API_TOKEN && token === API_TOKEN) return true;
-  return authRoutes.isValidToken(token, METADATA_PATH);
+  return authRoutes.isValidToken(token);
 }
 
-// Optional token: when Twitch login is disabled, allow access without token; otherwise require token
 function optionalToken(req, res, next) {
-  const settings = readSettings();
-  if (!settings.twitchLoginEnabled) {
-    return next();
-  }
-  return requireToken(req, res, next);
+  return next();
 }
 
 // Load games whitelist from JSON files
@@ -890,7 +871,6 @@ function readSettings() {
   const defaultSettings = {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
-    twitchLoginEnabled: false,
     twitchApiEnabled: false,
     activeSkinId: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
@@ -916,6 +896,7 @@ function readSettings() {
   delete result.fixedFocalStepSound;
   delete result.twitchClientId;
   delete result.twitchClientSecret;
+  delete result.twitchLoginEnabled;
 
   if (migrateLegacyTwitchCredentialsFromSettings(settings)) {
     writeSettings(result);
@@ -943,7 +924,7 @@ function writeSettings(settings) {
 
 setTwitchCredentialsMetadataPath(METADATA_PATH);
 
-// Endpoint: get settings (public so client can load twitchLoginEnabled without token)
+// Endpoint: get settings (public)
 app.get("/settings", (req, res) => {
   const settings = readSettings();
   res.json({
@@ -977,38 +958,8 @@ app.get("/version", (req, res) => {
 });
 
 // Endpoint: update settings
-// Special case: if Twitch login is currently enabled and caller is unauthenticated,
-// allow only recovery writes (disable login and/or replace both Twitch credentials)
-// to avoid lock-out when the configured credentials are no longer valid.
 app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
-  const token = getRequestToken(req);
-  const authorized = isAuthorizedToken(token);
-  const twitchEnabled = !!currentSettings.twitchLoginEnabled;
-
-  if (twitchEnabled && !authorized) {
-    const body = req.body && typeof req.body === "object" ? req.body : {};
-    const keys = Object.keys(body);
-
-    const recoveryKeys = isCloudflareTunnelEnabled()
-      ? ["twitchLoginEnabled", "twitchApiEnabled"]
-      : ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"];
-    const hasClientId = keys.includes("twitchClientId");
-    const hasClientSecret = keys.includes("twitchClientSecret");
-    const partialCredentialsUpdate =
-      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
-
-    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.).
-    const allowsOnlyRecoveryKeys =
-      keys.length > 0 && keys.every((k) => recoveryKeys.includes(k));
-    const validRecoveryRequest =
-      allowsOnlyRecoveryKeys &&
-      (isCloudflareTunnelEnabled() || !partialCredentialsUpdate);
-
-    if (!validRecoveryRequest) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-  }
 
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
     ? { ...req.body }
@@ -1050,6 +1001,7 @@ app.put("/settings", (req, res) => {
   }
   delete body.twitchClientId;
   delete body.twitchClientSecret;
+  delete body.twitchLoginEnabled;
 
   const updatedSettings = {
     ...currentSettings,
@@ -1057,9 +1009,7 @@ app.put("/settings", (req, res) => {
   };
   delete updatedSettings.twitchClientId;
   delete updatedSettings.twitchClientSecret;
-  if (Object.prototype.hasOwnProperty.call(body, "twitchApiEnabled") && updatedSettings.twitchApiEnabled === false) {
-    updatedSettings.twitchLoginEnabled = false;
-  }
+  delete updatedSettings.twitchLoginEnabled;
   // Drop deprecated top-level key (superseded by settings.skinWeb.fixedFocalStepSound).
   delete updatedSettings.fixedFocalStepSound;
 
@@ -1106,11 +1056,10 @@ function validateEnvironment() {
   
   const API_BASE = process.env.API_BASE;
  
-  // API_BASE is required for OAuth redirects (Twitch app credentials come from API gateway headers).
   const hasApiBase = !!API_BASE;
   
   if (!hasApiBase) {
-    errors.push("API_BASE is required for Twitch OAuth redirects");
+    errors.push("API_BASE is required (public API URL, e.g. Cloudflare Tunnel hostname)");
   }
   
   if (errors.length > 0) {
@@ -1305,7 +1254,7 @@ if (process.env.NODE_ENV !== 'test') {
   }
   
   if (!API_TOKEN) {
-    console.warn("Warning: No API_TOKEN configured for development. For production, use Twitch OAuth (credentials passed via web requests).");
+    console.warn("Warning: No API_TOKEN configured. Optional in development for GET /auth/me.");
   }
 }
 

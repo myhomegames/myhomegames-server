@@ -1201,7 +1201,7 @@ function registerIGDBRoutes(app, requireToken) {
     }
   });
 
-  // Endpoint: get IGDB games by keyword name (for recommended sections when Twitch login enabled)
+  // Endpoint: get IGDB games by keyword name (for recommended sections)
   const handleGamesByKeyword = async (req, res) => {
     const keyword = req.body && typeof req.body.keyword === "string" ? req.body.keyword.trim() : null;
     const excludeIds = parseExcludeIds(req);

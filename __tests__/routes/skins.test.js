@@ -169,7 +169,7 @@ describe("skins routes", () => {
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
   });
 
-  test("POST /skins without token succeeds when Twitch login is off (optionalToken)", async () => {
+  test("POST /skins without token succeeds (optionalToken)", async () => {
     const zip = new AdmZip();
     zip.addFile(
       "skin.json",

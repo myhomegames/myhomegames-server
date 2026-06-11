@@ -45,13 +45,6 @@ describe('GET /igdb/search', () => {
     expect(response.body).toHaveProperty('error', 'Missing search query');
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/igdb/search?q=test')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 
   // Note: Full IGDB integration tests would require mocking HTTP requests
   // This is left as a placeholder for future implementation
@@ -102,19 +95,10 @@ describe('GET /igdb/game-names-by-ids', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(400);
 
-    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
+    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', igdbCredentialsError());
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/igdb/game-names-by-ids?ids=1,2,3')
-      .set('X-Twitch-Client-Id', 'test-client-id')
-      .set('X-Twitch-Client-Secret', 'test-client-secret')
-      .expect(401);
-
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('GET /igdb/game/:igdbId', () => {
@@ -127,13 +111,6 @@ describe('GET /igdb/game/:igdbId', () => {
     expect(response.body).toHaveProperty('error', 'Invalid IGDB game ID');
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/igdb/game/12345')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 
   // Note: Full IGDB integration tests would require mocking HTTP requests
   // This is left as a placeholder for future implementation
@@ -150,21 +127,14 @@ describe('GET /igdb/games-by-genre/:tagId', () => {
     expect(response.body).toHaveProperty('error', 'Invalid tag ID');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .get('/igdb/games-by-genre/1')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .expect(401);
-  });
 
   test('should return 400 if Twitch credentials are missing', async () => {
     const response = await request(app)
       .get('/igdb/games-by-genre/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
+    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', igdbCredentialsError());
   });
 });
 
@@ -180,14 +150,6 @@ describe('POST /igdb/games-by-genre-by-name', () => {
     expect(response.body).toHaveProperty('error', 'Tag name is required');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .post('/igdb/games-by-genre-by-name')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .send({ name: 'RPG' })
-      .expect(401);
-  });
 });
 
 describe('GET /igdb/games-by-developer/:companyId', () => {
@@ -201,21 +163,14 @@ describe('GET /igdb/games-by-developer/:companyId', () => {
     expect(response.body).toHaveProperty('error', 'Invalid company ID');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .get('/igdb/games-by-developer/1')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .expect(401);
-  });
 
   test('should return 400 if Twitch credentials are missing', async () => {
     const response = await request(app)
       .get('/igdb/games-by-developer/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
+    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', igdbCredentialsError());
   });
 });
 
@@ -231,14 +186,6 @@ describe('POST /igdb/games-by-developer-by-name', () => {
     expect(response.body).toHaveProperty('error', 'Company name is required');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .post('/igdb/games-by-developer-by-name')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .send({ name: 'Nintendo' })
-      .expect(401);
-  });
 });
 
 describe('GET /igdb/games-by-publisher/:companyId', () => {
@@ -252,21 +199,14 @@ describe('GET /igdb/games-by-publisher/:companyId', () => {
     expect(response.body).toHaveProperty('error', 'Invalid company ID');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .get('/igdb/games-by-publisher/1')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .expect(401);
-  });
 
   test('should return 400 if Twitch credentials are missing', async () => {
     const response = await request(app)
       .get('/igdb/games-by-publisher/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { IGDB_CREDENTIALS_ERROR } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', IGDB_CREDENTIALS_ERROR);
+    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', igdbCredentialsError());
   });
 });
 
@@ -282,13 +222,5 @@ describe('POST /igdb/games-by-publisher-by-name', () => {
     expect(response.body).toHaveProperty('error', 'Company name is required');
   });
 
-  test('should require authentication', async () => {
-    await request(app)
-      .post('/igdb/games-by-publisher-by-name')
-      .set('X-Twitch-Client-Id', 'id')
-      .set('X-Twitch-Client-Secret', 'secret')
-      .send({ name: 'Nintendo' })
-      .expect(401);
-  });
 });
 

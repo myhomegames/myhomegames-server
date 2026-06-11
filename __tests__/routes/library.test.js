@@ -95,13 +95,6 @@ describe('GET /libraries/library/games', () => {
     }
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/libraries/library/games')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('GET /games/:gameId', () => {
@@ -216,23 +209,6 @@ describe('GET /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .get(`/games/${gameId}`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle URL-encoded game IDs', async () => {
     // First get a game ID from the library
@@ -553,24 +529,6 @@ describe('PUT /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .put(`/games/${gameId}`)
-        .send({ title: 'Updated Title' })
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should return updated game data', async () => {
     // First get a game ID from the library
@@ -794,23 +752,6 @@ describe('POST /games/:gameId/reload', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .post(`/games/${gameId}/reload`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 });
 
 describe('POST /games/:gameId/upload-executable', () => {
@@ -984,25 +925,6 @@ describe('POST /games/:gameId/upload-executable', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      const fileContent = Buffer.from('#!/bin/bash\necho "test"');
-      
-      const response = await request(app)
-        .post(`/games/${gameId}/upload-executable`)
-        .attach('file', fileContent, 'test-script.sh')
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should rename file to script.sh regardless of original name', async () => {
     // First get a game ID from the library
@@ -1637,23 +1559,6 @@ describe('POST /games/:gameId/upload-screenshot', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should return 401 without token', async () => {
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-
-      const response = await request(app)
-        .post(`/games/${gameId}/upload-screenshot`)
-        .attach('file', testImageBuffer, 'screenshot.png')
-        .expect(401);
-
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 });
 
 describe('DELETE /games/:gameId', () => {
@@ -1754,23 +1659,6 @@ describe('DELETE /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should auto-delete orphan empty collection when last game in it is deleted', async () => {
     const { testMetadataPath } = require('../setup');
@@ -2461,17 +2349,6 @@ describe('POST /games/add-from-igdb', () => {
       .expect(200);
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .post('/games/add-from-igdb')
-      .send({
-        igdbId: 999996,
-        name: 'Test Game'
-      })
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 
   test('should preserve genre case', async () => {
     // Add a game with uppercase genres
@@ -2590,13 +2467,6 @@ describe('POST /games/create', () => {
     expect(res2.body).toHaveProperty('error', 'Missing required field: title');
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .post('/games/create')
-      .send({ title: 'Unauthorized Game' })
-      .expect(401);
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('DELETE /games/:gameId/delete-cover', () => {
@@ -2775,23 +2645,6 @@ describe('DELETE /games/:gameId/delete-cover', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}/delete-cover`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle game without cover file gracefully', async () => {
     // First get a game ID from the library
@@ -2936,23 +2789,6 @@ describe('DELETE /games/:gameId/delete-background', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}/delete-background`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle game without background file gracefully', async () => {
     // First get a game ID from the library

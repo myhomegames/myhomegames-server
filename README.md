@@ -67,24 +67,23 @@ Then edit `.env` and configure required variables (e.g. `API_BASE`, `METADATA_PA
 
 MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset.
 
-**Important**: Do not use `API_TOKEN` in production. Use Twitch OAuth instead.
+**Important**: Do not use `API_TOKEN` in production.
 
 ### Environment Variables
 
 - `PORT` (default: `4000`) - Port on which the server will listen
-- `API_TOKEN` - Authentication token for API requests (development only, optional)
+- `API_TOKEN` - Optional dev token for `GET /auth/me` (development only)
 - `FRONTEND_URL` - Frontend application URL (optional, rarely needed)
-  - **When is it needed?** Only when the `Origin` header is not available in OAuth callback requests
+  - **When is it needed?** Only when the `Origin` header is not available in requests
   - **Normal case:** The browser always sends the `Origin` header, so this is not needed
   - **When to use:** 
-    - Testing OAuth with `curl` or Postman (which don't send `Origin`)
+    - Testing with `curl` or Postman (which don't send `Origin`)
     - If a proxy/CDN filters or modifies the `Origin` header
-    - In production, only if you have a specific infrastructure setup that requires it
   - **Fallback behavior:** If not set and `Origin` is missing, the server will attempt to derive the frontend URL from `API_BASE` (replacing port 4000 with 5173 for development)
 - `COVER_TAG_URL` - Base URL used for tag cover failover redirects (optional)
   - Used by tag cover endpoint (`/:tagId/cover.webp`) when no local `cover.webp` exists
   - Example: `https://myhomegames.vige.it` (without `/app`)
-- `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
+- `API_BASE` - Base URL of the API server (public hostname when using Cloudflare Tunnel)
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
 - `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive on first startup when no skins are present (default: `plex.mhg-skin.zip` from the **latest** [myhomegames-skins](https://github.com/myhomegames/myhomegames-skins/releases) GitHub release)
 - `MHG_SKINS_GITHUB_REPO` (optional) - `owner/repo` for that lookup (default: `myhomegames/myhomegames-skins`)
@@ -209,47 +208,21 @@ Tests are organized in the `__tests__` directory. See [DEVELOPMENT.md](DEVELOPME
 
 ## API Endpoints
 
-- `GET /auth/twitch` - Initiate Twitch OAuth flow
-- `GET /auth/twitch/callback` - Twitch OAuth callback
-- `GET /auth/me` - Get current user information (requires authentication)
-- `POST /auth/logout` - Logout (requires authentication)
-- `GET /libraries` - Get list of game libraries (requires authentication)
-- `GET /games/:library` - Get games for a specific library (requires authentication)
-- `POST /launch/:gameId` - Launch a game (requires authentication)
-- `GET /search` - Search games via IGDB API (requires authentication)
-- `GET /covers/:gameId` - Get game cover image (public, no authentication required)
+- `GET /auth/me` - Dev user profile when `API_TOKEN` matches (optional)
+- `POST /auth/logout` - No-op logout (client clears local state)
+- `GET /libraries` - Get list of game libraries
+- `GET /games/:library` - Get games for a specific library
+- `GET /launcher` - Launch a game
+- `GET /igdb/*` - IGDB catalog search (requires Twitch app credentials for IGDB API)
+- `GET /covers/:gameId` - Get game cover image (public)
 
-All authenticated endpoints require the `X-Auth-Token` header with a valid token.
+API routes are open by default. Set `API_TOKEN` in development only if you need `GET /auth/me` to return a dev user.
 
 ## Authentication
 
-The server supports two authentication methods:
+The server does not require authentication for normal use. For development, optional `API_TOKEN` enables `GET /auth/me` — see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-For development authentication setup, see [DEVELOPMENT.md](DEVELOPMENT.md).
-
-### Production Mode (Twitch OAuth)
-
-For production, users authenticate via Twitch OAuth. To enable this:
-
-1. Create a Twitch application at https://dev.twitch.tv/console/apps
-2. Set the OAuth redirect URL to: `http://your-api-domain:4000/auth/twitch/callback`
-3. Set environment variables:
-   - `API_BASE` - Your API base URL (e.g., `https://api.example.com`)
-
-Twitch application credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
-
-Users will authenticate via Twitch, and their access tokens will be stored in `${METADATA_PATH}/tokens/twitch-oauth-sessions.json`.
-
-### Authentication Endpoints
-
-- `GET /auth/twitch` - Initiate Twitch OAuth flow (returns `authUrl`)
-- `GET /auth/twitch/callback` - Twitch OAuth callback (handles redirect)
-- `GET /auth/me` - Get current user information (requires valid token)
-- `POST /auth/logout` - Logout (clears token on client side)
-
-All authenticated endpoints require the `X-Auth-Token` header with either:
-- The development token (value from `API_TOKEN` environment variable, if set)
-- A valid Twitch OAuth access token
+IGDB API access uses Twitch **application** credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) for catalog search. With Cloudflare Tunnel, credentials are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
 
 ## Troubleshooting
 
@@ -271,7 +244,7 @@ If the server logs `"openssl" is not recognized` on Windows: current builds gene
 
 ### Authentication Issues
 
-- Verify that Twitch OAuth credentials are correctly configured (if using Twitch authentication)
+- Verify that IGDB credentials (Twitch Client ID/Secret) are configured in Settings or via the API gateway
 - Check that `API_BASE` is set correctly in the environment variables
 - Review server logs for authentication errors
 

@@ -218,13 +218,6 @@ describe("Collections-specific: DELETE /collections/:id", () => {
       .expect(404);
     expect(res.body.error).toBe("Collection not found");
   });
-  test("should require authentication", async () => {
-    const list = await request(app).get("/collections").set("X-Auth-Token", "test-token").expect(200);
-    if (list.body.collections.length === 0) return;
-    const id = list.body.collections[0].id;
-    const res = await request(app).delete(`/collections/${id}`).expect(401);
-    expect(res.body.error).toBe("Unauthorized");
-  });
   test("should delete only metadata.json and remove directory if empty", async () => {
     const createRes = await request(app)
       .post("/collections")
@@ -262,13 +255,6 @@ describe("POST /collections/:id/reload", () => {
       .expect(404);
     expect(res.body.error).toBe("Collection not found");
   });
-  test("should require authentication", async () => {
-    const list = await request(app).get("/collections").set("X-Auth-Token", "test-token").expect(200);
-    if (list.body.collections.length === 0) return;
-    const id = list.body.collections[0].id;
-    const res = await request(app).post(`/collections/${id}/reload`).expect(401);
-    expect(res.body.error).toBe("Unauthorized");
-  });
 });
 
 describe("DELETE /collections/:id/delete-cover", () => {
@@ -296,13 +282,6 @@ describe("DELETE /collections/:id/delete-cover", () => {
       .set("X-Auth-Token", "test-token")
       .expect(404);
     expect(res.body.error).toBe("Collection not found");
-  });
-  test("should require authentication", async () => {
-    const list = await request(app).get("/collections").set("X-Auth-Token", "test-token").expect(200);
-    if (list.body.collections.length === 0) return;
-    const id = list.body.collections[0].id;
-    const res = await request(app).delete(`/collections/${id}/delete-cover`).expect(401);
-    expect(res.body.error).toBe("Unauthorized");
   });
   test("should handle collection without cover file gracefully", async () => {
     const createRes = await request(app)
@@ -363,13 +342,6 @@ describe("DELETE /collections/:id/delete-background", () => {
       .set("X-Auth-Token", "test-token")
       .expect(404);
     expect(res.body.error).toBe("Collection not found");
-  });
-  test("should require authentication", async () => {
-    const list = await request(app).get("/collections").set("X-Auth-Token", "test-token").expect(200);
-    if (list.body.collections.length === 0) return;
-    const id = list.body.collections[0].id;
-    const res = await request(app).delete(`/collections/${id}/delete-background`).expect(401);
-    expect(res.body.error).toBe("Unauthorized");
   });
   test("should handle collection without background file gracefully", async () => {
     const createRes = await request(app)
@@ -440,19 +412,6 @@ describe("PUT /collections/:id/games/order", () => {
     expect(after.body.games.map((g) => g.id)).toContain(gameId2);
   });
 
-  test("should require authentication", async () => {
-    const createRes = await request(app)
-      .post("/collections")
-      .set("X-Auth-Token", "test-token")
-      .send({ title: "Test Collection Auth Order " + Date.now() })
-      .expect(200);
-    const id = createRes.body.collection.id;
-    const res = await request(app)
-      .put(`/collections/${id}/games/order`)
-      .send({ gameIds: [] })
-      .expect(401);
-    expect(res.body.error).toBe("Unauthorized");
-  });
 
   test("should preserve client order when setting multiple games on empty collection", async () => {
     const gamesRes = await request(app)

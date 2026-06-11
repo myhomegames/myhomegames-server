@@ -1,464 +1,52 @@
 const request = require('supertest');
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
 
-// Import setup first to set environment variables
 const { testMetadataPath } = require('../setup');
-const { twitchOAuthSessionsPath } = require('../../utils/metadataTokenPaths');
-
-// Mock https module for Twitch API calls
-jest.mock('https');
 
 let app;
 
 beforeAll(() => {
-  // Note: Twitch credentials are now passed via web requests, not environment variables
   process.env.API_BASE = 'http://127.0.0.1:4000';
-  
-  // Clear module cache to ensure fresh server instance
   delete require.cache[require.resolve('../../server.js')];
   delete require.cache[require.resolve('../../routes/auth.js')];
   app = require('../../server.js');
 });
 
-afterEach(() => {
-  // Clear tokens file after each test
-  const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
-  if (fs.existsSync(tokensPath)) {
-    fs.unlinkSync(tokensPath);
-  }
-  jest.clearAllMocks();
-});
-
 afterAll(async () => {
-  // Give time for any pending async operations to complete
-  await new Promise(resolve => setTimeout(resolve, 100));
-  
-  // Force garbage collection if available (helps with cleanup)
-  if (global.gc) {
-    global.gc();
-  }
-});
-
-describe('POST /auth/twitch', () => {
-  test('should return auth URL when Twitch credentials are provided in body', async () => {
-    const response = await request(app)
-      .post('/auth/twitch')
-      .send({
-        clientId: 'test-twitch-client-id',
-        clientSecret: 'test-twitch-client-secret'
-      })
-      .expect(200);
-    
-    expect(response.body).toHaveProperty('authUrl');
-    expect(response.body).toHaveProperty('state');
-    expect(response.body.authUrl).toContain('id.twitch.tv/oauth2/authorize');
-    expect(response.body.authUrl).toContain('test-twitch-client-id');
-    expect(response.body.authUrl).toContain('user:read:email');
-  });
-
-  test('should return 400 when client secret is missing (Twitch requires secret for auth code flow)', async () => {
-    const response = await request(app)
-      .post('/auth/twitch')
-      .send({
-        clientId: 'test-twitch-client-id',
-      })
-      .expect(400);
-
-    expect(response.body).toHaveProperty('error');
-    expect(response.body.error).toContain('TWITCH_CLIENT_SECRET is required');
-  });
-
-  test('should return 400 when clientId is missing', async () => {
-    const response = await request(app)
-      .post('/auth/twitch')
-      .send({})
-      .expect(400);
-    
-    expect(response.body).toHaveProperty('error');
-    expect(response.body.error).toContain('TWITCH_CLIENT_ID is required');
-  });
-});
-
-describe('GET /auth/twitch/callback', () => {
-  test('should redirect with error when code is missing', async () => {
-    const response = await request(app)
-      .get('/auth/twitch/callback')
-      .expect(302);
-    
-    expect(response.headers.location).toContain('auth_error=no_code');
-  });
-
-  test('should redirect with error when error parameter is present', async () => {
-    const response = await request(app)
-      .get('/auth/twitch/callback?error=access_denied')
-      .expect(302);
-    
-    expect(response.headers.location).toContain('auth_error=access_denied');
-  });
-
-  test('should exchange code for token and redirect with token', async () => {
-    const mockCode = 'test-auth-code';
-    const mockState = 'test-state-123';
-    const mockAccessToken = 'test-access-token';
-    const mockRefreshToken = 'test-refresh-token';
-    const mockUserId = '123456';
-    const mockUserName = 'testuser';
-    const mockUserImage = 'https://example.com/avatar.jpg';
-
-    // First, create a state by calling POST /auth/twitch
-    const authResponse = await request(app)
-      .post('/auth/twitch')
-      .send({
-        clientId: 'test-twitch-client-id',
-        clientSecret: 'test-twitch-client-secret'
-      })
-      .expect(200);
-    
-    const state = authResponse.body.state;
-
-    // Mock Twitch token endpoint
-    const mockTokenResponse = {
-      access_token: mockAccessToken,
-      refresh_token: mockRefreshToken,
-      expires_in: 3600,
-    };
-
-    // Mock Twitch user info endpoint
-    const mockUserResponse = {
-      data: [{
-        id: mockUserId,
-        login: mockUserName,
-        display_name: mockUserName,
-        profile_image_url: mockUserImage,
-      }],
-    };
-
-    let requestCallCount = 0;
-    https.request.mockImplementation((options, callback) => {
-      const dataHandlers = [];
-      const endHandlers = [];
-      
-      const mockRes = {
-        statusCode: 200,
-        on: jest.fn((event, handler) => {
-          if (event === 'data') {
-            dataHandlers.push(handler);
-          } else if (event === 'end') {
-            endHandlers.push(handler);
-          }
-        }),
-      };
-
-      const currentCall = requestCallCount;
-      requestCallCount++;
-
-      const mockReq = {
-        on: jest.fn(),
-        write: jest.fn((data) => {
-          return true;
-        }),
-        end: jest.fn(() => {
-          // Simulate async response after request is sent
-          setImmediate(() => {
-            // Call the response callback
-            callback(mockRes);
-            
-            // Then trigger data and end events
-            setImmediate(() => {
-              dataHandlers.forEach(handler => {
-                if (currentCall === 0) {
-                  handler(Buffer.from(JSON.stringify(mockTokenResponse)));
-                } else if (currentCall === 1) {
-                  handler(Buffer.from(JSON.stringify(mockUserResponse)));
-                }
-              });
-              
-              endHandlers.forEach(handler => handler());
-            });
-          });
-        }),
-      };
-      
-      return mockReq;
-    });
-
-    const response = await request(app)
-      .get(`/auth/twitch/callback?code=${mockCode}&state=${state}`)
-      .set('Origin', 'http://localhost:5173')
-      .expect(302);
-
-    expect(response.headers.location).toContain('twitch_token=');
-    expect(response.headers.location).toContain('user_id=');
-    expect(response.headers.location).toContain('twitch_client_id=test-twitch-client-id');
-
-    // Wait a bit for async operations to complete
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Verify token was saved
-    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
-    expect(fs.existsSync(tokensPath)).toBe(true);
-    const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
-    expect(tokens[mockUserId]).toBeDefined();
-    expect(tokens[mockUserId].accessToken).toBe(mockAccessToken);
-    expect(tokens[mockUserId].userId).toBe(mockUserId);
-    expect(tokens[mockUserId].userName).toBe(mockUserName);
-  });
-
-  test('should redirect to frontendUrl from login request after OAuth', async () => {
-    const authResponse = await request(app)
-      .post('/auth/twitch')
-      .send({
-        clientId: 'test-twitch-client-id',
-        clientSecret: 'test-twitch-client-secret',
-        frontendUrl: 'https://myhomegames.vige.it/app/login',
-      })
-      .expect(200);
-
-    const state = authResponse.body.state;
-
-    https.request.mockImplementation((options, callback) => {
-      const dataHandlers = [];
-      const endHandlers = [];
-      const mockRes = {
-        statusCode: 200,
-        on: jest.fn((event, handler) => {
-          if (event === 'data') dataHandlers.push(handler);
-          else if (event === 'end') endHandlers.push(handler);
-        }),
-      };
-      const mockReq = {
-        on: jest.fn(),
-        write: jest.fn(),
-        end: jest.fn(() => {
-          setImmediate(() => {
-            callback(mockRes);
-            setImmediate(() => {
-              const path = options.path || '';
-              if (path.includes('/oauth2/token')) {
-                dataHandlers.forEach((h) =>
-                  h(Buffer.from(JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_in: 3600 })))
-                );
-              } else {
-                dataHandlers.forEach((h) =>
-                  h(
-                    Buffer.from(
-                      JSON.stringify({
-                        data: [{ id: '1', login: 'u', display_name: 'u', profile_image_url: null }],
-                      })
-                    )
-                  )
-                );
-              }
-              endHandlers.forEach((handler) => handler());
-            });
-          });
-        }),
-      };
-      return mockReq;
-    });
-
-    const response = await request(app)
-      .get(`/auth/twitch/callback?code=abc&state=${state}`)
-      .expect(302);
-
-    expect(response.headers.location).toMatch(
-      /^https:\/\/myhomegames\.vige\.it\/app\/login\?/
-    );
-    expect(response.headers.location).toContain('twitch_client_id=test-twitch-client-id');
-  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  if (global.gc) global.gc();
 });
 
 describe('GET /auth/me', () => {
-  test('should return dev user info when using dev token', async () => {
+  test('should return dev user when API_TOKEN matches', async () => {
     const response = await request(app)
       .get('/auth/me')
       .set('X-Auth-Token', 'test-token')
       .expect(200);
-    
-    expect(response.body).toHaveProperty('userId', 'dev');
-    expect(response.body).toHaveProperty('userName', 'Development User');
-    expect(response.body).toHaveProperty('isDev', true);
+
+    expect(response.body).toMatchObject({
+      userId: 'dev',
+      userName: 'Development User',
+      isDev: true,
+    });
   });
 
-  test('should return 401 when token is missing', async () => {
-    const response = await request(app)
-      .get('/auth/me')
-      .expect(401);
-    
+  test('should return 401 without token', async () => {
+    const response = await request(app).get('/auth/me').expect(401);
     expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 
-  test('should return user info for valid Twitch token', async () => {
-    const mockAccessToken = 'valid-twitch-token';
-    const mockUserId = '123456';
-    const mockUserName = 'testuser';
-    const mockUserImage = 'https://example.com/avatar.jpg';
-
-    // Save token to tokens file
-    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
-    const tokens = {
-      [mockUserId]: {
-        accessToken: mockAccessToken,
-        refreshToken: 'refresh-token',
-        userId: mockUserId,
-        userName: mockUserName,
-        userImage: mockUserImage,
-        expiresAt: Date.now() + 3600000,
-      },
-    };
-    fs.writeFileSync(tokensPath, JSON.stringify(tokens));
-
-    // Mock Twitch token validation
-    const mockValidateResponse = {
-      client_id: 'test-twitch-client-id',
-      login: mockUserName,
-      user_id: mockUserId,
-    };
-
-    // Mock Twitch user info
-    const mockUserResponse = {
-      data: [{
-        id: mockUserId,
-        login: mockUserName,
-        display_name: mockUserName,
-        profile_image_url: mockUserImage,
-      }],
-    };
-
-    let requestCallCount = 0;
-    https.request.mockImplementation((options, callback) => {
-      const mockRes = {
-        statusCode: 200,
-        on: jest.fn((event, handler) => {
-          if (event === 'data') {
-            // First call is for validation, second is for user info
-            if (requestCallCount === 0) {
-              handler(Buffer.from(JSON.stringify(mockValidateResponse)));
-            } else {
-              handler(Buffer.from(JSON.stringify(mockUserResponse)));
-            }
-          } else if (event === 'end') {
-            handler();
-          }
-        }),
-      };
-
-      requestCallCount++;
-      setImmediate(() => callback(mockRes));
-
-      return {
-        on: jest.fn(),
-        end: jest.fn(),
-      };
-    });
-
-    const response = await request(app)
-      .get('/auth/me')
-      .set('X-Auth-Token', mockAccessToken)
-      .set('X-Twitch-Client-Id', 'test-twitch-client-id')
-      .expect(200);
-    
-    expect(response.body).toHaveProperty('userId', mockUserId);
-    expect(response.body).toHaveProperty('userName', mockUserName);
-    expect(response.body).toHaveProperty('userImage', mockUserImage);
-    expect(response.body).toHaveProperty('isDev', false);
-  });
-
-  test('should return 401 for invalid Twitch token', async () => {
-    // Mock Twitch token validation failure
-    https.request.mockImplementation((options, callback) => {
-      const mockRes = {
-        statusCode: 401,
-        on: jest.fn((event, handler) => {
-          if (event === 'data') {
-            handler(Buffer.from(JSON.stringify({ error: 'Invalid token' })));
-          } else if (event === 'end') {
-            handler();
-          }
-        }),
-      };
-
-      setImmediate(() => callback(mockRes));
-
-      return {
-        on: jest.fn(),
-        end: jest.fn(),
-      };
-    });
-
+  test('should return 401 for invalid token', async () => {
     const response = await request(app)
       .get('/auth/me')
       .set('X-Auth-Token', 'invalid-token')
-      .set('X-Twitch-Client-Id', 'test-twitch-client-id')
       .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Invalid token');
+    expect(response.body).toHaveProperty('error', 'Unauthorized');
   });
 });
 
 describe('POST /auth/logout', () => {
-  test('should return success for logout', async () => {
-    const response = await request(app)
-      .post('/auth/logout')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
+  test('should return success', async () => {
+    const response = await request(app).post('/auth/logout').expect(200);
     expect(response.body).toHaveProperty('status', 'success');
   });
 });
-
-describe('Authentication middleware with Twitch tokens', () => {
-  test('should accept requests with valid Twitch token', async () => {
-    const mockAccessToken = 'valid-twitch-token';
-    const mockUserId = '123456';
-
-    // Save token to tokens file
-    const tokensPath = twitchOAuthSessionsPath(testMetadataPath);
-    const tokens = {
-      [mockUserId]: {
-        accessToken: mockAccessToken,
-        refreshToken: 'refresh-token',
-        userId: mockUserId,
-        userName: 'testuser',
-        expiresAt: Date.now() + 3600000,
-      },
-    };
-    fs.writeFileSync(tokensPath, JSON.stringify(tokens));
-
-    // Test that the token works with a protected endpoint
-    const response = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', mockAccessToken)
-      .expect(200);
-    
-    expect(response.body).toHaveProperty('games');
-  });
-
-  test('should reject requests with invalid Twitch token', async () => {
-    const settingsPath = path.join(testMetadataPath, 'settings.json');
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({ language: 'en', twitchLoginEnabled: true }, null, 2),
-      'utf8'
-    );
-
-    const response = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'invalid-twitch-token')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
-
-  test('should accept requests with dev token', async () => {
-    const response = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    expect(response.body).toHaveProperty('games');
-  });
-});
-

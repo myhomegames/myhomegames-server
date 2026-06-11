@@ -71,8 +71,6 @@ The run token is **not** in `.env`. On startup the web app fetches a per-user to
 
 On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
 
-**Twitch OAuth**: register redirect URI `https://<your-user>-myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
-
 **Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
 ### Browser Security Warning
@@ -128,7 +126,7 @@ The server will start:
 - **HTTP**: `http://localhost:4000` (always available)
 - **HTTPS**: `https://localhost:41440` (if `HTTPS_ENABLED=true`)
 
-**Important**: HTTPS in development is optional. The server always provides HTTP access. Use HTTPS only when testing features that require it (like Twitch OAuth callbacks in some scenarios).
+**Important**: HTTPS in development is optional. The server always provides HTTP access. Use HTTPS when testing self-signed certificate acceptance or mixed-content scenarios.
 
 ## Development Configuration
 
@@ -146,7 +144,7 @@ For development, the server uses the following environment variables:
 - `HTTPS_PORT` (default: `41440`) - Port for HTTPS server (only if `HTTPS_ENABLED=true`)
 - `API_TOKEN` - Authentication token for API requests (development only, optional)
   - Default: `changeme` (from `.env.example`)
-  - Used for quick testing without setting up Twitch OAuth
+  - Optional dev token for `GET /auth/me` only
 - `API_BASE` - Base URL of the API server (optional for development)
 - `METADATA_PATH` - Path where game metadata are stored
   - Default: `$HOME/Library/Application Support/MyHomeGames`
@@ -156,7 +154,7 @@ For development, the server uses the following environment variables:
 
 ## Development Authentication
 
-In development mode, you can use the `API_TOKEN` environment variable for quick testing without setting up Twitch OAuth.
+In development mode, you can set `API_TOKEN` so `GET /auth/me` returns a dev user profile.
 
 Set `API_TOKEN` in your `.env` file:
 ```bash
@@ -188,9 +186,8 @@ The test suite covers:
 - Check console for error messages
 
 ### Authentication issues
-- Verify `API_TOKEN` is set correctly in `.env` (if using development token)
-- Check that Twitch OAuth is properly configured (for production)
-- Review server logs for authentication errors
+- Verify `API_TOKEN` is set correctly in `.env` (development only, for `/auth/me`)
+- Review server logs for API errors
 
 ### HTTPS issues
 - **HTTPS server not starting**: Check that `HTTPS_ENABLED=true` in `.env`
