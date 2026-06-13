@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /**
- * Publish release artifacts to self-hosted APT/YUM repos (via SSH) and update the
- * Homebrew tap (git push). Skips any step when the required env vars are missing.
+ * Publish release artifacts to Cloudsmith (APT/YUM) and the Homebrew tap (git push).
+ * Skips any step when the required env vars are missing.
  *
- * Env (APT/YUM):
- *   PACKAGE_REPO_SSH          e.g. deploy@packages.myhomegames.vige.it
- *   PACKAGE_REPO_APT_ROOT     e.g. /var/www/packages/apt
- *   PACKAGE_REPO_YUM_ROOT     e.g. /var/www/packages/yum/el9/x86_64
- *   PACKAGE_REPO_APT_CODENAME default: stable
+ * Env (Cloudsmith):
+ *   CLOUDSMITH_API_KEY
+ *   CLOUDSMITH_OWNER          e.g. myhomegames
+ *   CLOUDSMITH_REPO           e.g. myhomegames-server
+ *   CLOUDSMITH_DEB_DISTRO     default: any-distro
+ *   CLOUDSMITH_DEB_VERSION    default: any-version
+ *   CLOUDSMITH_RPM_DISTRO     default: el
+ *   CLOUDSMITH_RPM_VERSION    default: 9
  *
  * Env (Homebrew tap):
  *   HOMEBREW_TAP_REPO         e.g. git@github.com:myhomegames/myhomegames-homebrewtap.git
@@ -21,6 +24,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { cloudsmithConfig, publishDeb, publishRpm } = require('./cloudsmith-publish');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -61,46 +65,32 @@ function artifactPaths() {
   return { deb, rpm, pkgArm64, pkgX64 };
 }
 
-function publishApt(debPath) {
-  const ssh = process.env.PACKAGE_REPO_SSH;
-  const aptRoot = process.env.PACKAGE_REPO_APT_ROOT;
-  if (!ssh || !aptRoot) {
-    warn('APT: skipped (set PACKAGE_REPO_SSH and PACKAGE_REPO_APT_ROOT to enable)');
-    return;
-  }
+async function publishCloudsmithApt(config, debPath) {
   if (!fs.existsSync(debPath)) {
-    warn(`APT: skipped (.deb not found: ${debPath})`);
+    warn(`Cloudsmith APT: skipped (.deb not found: ${debPath})`);
     return;
   }
 
-  const codename = process.env.PACKAGE_REPO_APT_CODENAME || 'stable';
-  const remoteDeb = `/tmp/myhomegames-server_${version}_amd64.deb`;
-
-  log(`APT: uploading ${path.basename(debPath)} → ${ssh}`);
-  run(`scp "${debPath}" "${ssh}:${remoteDeb}"`);
-  run(
-    `ssh "${ssh}" "reprepro -b ${shellQuote(aptRoot)} includedeb ${shellQuote(codename)} ${shellQuote(remoteDeb)}"`,
+  log(
+    `Cloudsmith APT: uploading ${path.basename(debPath)} → ${config.owner}/${config.repo} (${config.debDistro}/${config.debVersion})`,
   );
-  log('APT: repository updated');
+  const result = await publishDeb(config, debPath);
+  const slug = result?.slug || result?.identifier || 'ok';
+  log(`Cloudsmith APT: published (${slug})`);
 }
 
-function publishYum(rpmPath) {
-  const ssh = process.env.PACKAGE_REPO_SSH;
-  const yumRoot = process.env.PACKAGE_REPO_YUM_ROOT;
-  if (!ssh || !yumRoot) {
-    warn('YUM: skipped (set PACKAGE_REPO_SSH and PACKAGE_REPO_YUM_ROOT to enable)');
-    return;
-  }
+async function publishCloudsmithYum(config, rpmPath) {
   if (!fs.existsSync(rpmPath)) {
-    warn(`YUM: skipped (.rpm not found: ${rpmPath})`);
+    warn(`Cloudsmith YUM: skipped (.rpm not found: ${rpmPath})`);
     return;
   }
 
-  const remoteRpm = `${yumRoot}/${path.basename(rpmPath)}`;
-  log(`YUM: uploading ${path.basename(rpmPath)} → ${ssh}:${remoteRpm}`);
-  run(`scp "${rpmPath}" "${ssh}:${remoteRpm}"`);
-  run(`ssh "${ssh}" "createrepo_c --update ${shellQuote(yumRoot)}"`);
-  log('YUM: repository updated');
+  log(
+    `Cloudsmith YUM: uploading ${path.basename(rpmPath)} → ${config.owner}/${config.repo} (${config.rpmDistro}/${config.rpmVersion})`,
+  );
+  const result = await publishRpm(config, rpmPath);
+  const slug = result?.slug || result?.identifier || 'ok';
+  log(`Cloudsmith YUM: published (${slug})`);
 }
 
 function shellQuote(value) {
@@ -175,21 +165,28 @@ function publishHomebrewTap(caskBody) {
   }
 }
 
-function main() {
+async function main() {
   log(`Publishing artifacts for version ${version}`);
 
   const { deb, rpm, pkgArm64, pkgX64 } = artifactPaths();
+  const cloudsmith = cloudsmithConfig();
 
-  try {
-    publishApt(deb);
-  } catch (err) {
-    warn(`APT: failed (${err.message})`);
-  }
+  if (cloudsmith) {
+    try {
+      await publishCloudsmithApt(cloudsmith, deb);
+    } catch (err) {
+      warn(`Cloudsmith APT: failed (${err.message})`);
+    }
 
-  try {
-    publishYum(rpm);
-  } catch (err) {
-    warn(`YUM: failed (${err.message})`);
+    try {
+      await publishCloudsmithYum(cloudsmith, rpm);
+    } catch (err) {
+      warn(`Cloudsmith YUM: failed (${err.message})`);
+    }
+  } else {
+    warn(
+      'Cloudsmith: skipped (set CLOUDSMITH_API_KEY, CLOUDSMITH_OWNER, CLOUDSMITH_REPO to enable)',
+    );
   }
 
   try {
@@ -202,4 +199,7 @@ function main() {
   log('Done');
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

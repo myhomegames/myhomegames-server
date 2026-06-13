@@ -220,18 +220,20 @@ After the GitHub release, `after:release` runs `publish-package-repos.js`. Each 
 
 | Target | Env vars | Docs |
 |--------|----------|------|
-| APT | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_APT_ROOT` | [docs/install-apt.md](docs/install-apt.md) |
-| YUM/DNF | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_YUM_ROOT` | [docs/install-yum.md](docs/install-yum.md) |
+| APT | `CLOUDSMITH_API_KEY`, `CLOUDSMITH_OWNER`, `CLOUDSMITH_REPO` | [docs/install-apt.md](docs/install-apt.md) |
+| YUM/DNF | same as APT | [docs/install-yum.md](docs/install-yum.md) |
 | Homebrew tap | `HOMEBREW_TAP_REPO` | [docs/install-homebrew.md](docs/install-homebrew.md) |
 
 Example (add to `.env.local`, not committed):
 
 ```bash
-export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
-export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
-export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
+export CLOUDSMITH_API_KEY=cs_api_xxxxxxxx
+export CLOUDSMITH_OWNER=myhomegames
+export CLOUDSMITH_REPO=myhomegames-server
 export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
 ```
+
+See [docs/install-cloudsmith.md](docs/install-cloudsmith.md) for Cloudsmith setup.
 
 Test publish without a full release:
 
