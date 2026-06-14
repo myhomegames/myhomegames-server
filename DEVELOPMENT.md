@@ -212,7 +212,8 @@ This will:
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
 4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
-5. Run **`scripts/publish-package-repos.js`** (optional steps below)
+5. Run **`scripts/publish-package-repos.js`** and **`scripts/publish-msstore.js`** (optional; see below)
+6. GitHub Actions **`msstore-release.yml`** builds MSIX and submits to the Microsoft Store when the release is published (requires repository secrets)
 
 ### Package repositories (APT / YUM / Homebrew)
 
@@ -240,6 +241,19 @@ Test publish without a full release:
 ```bash
 npm run build
 npm run publish:repos
+```
+
+### Microsoft Store (Windows MSIX)
+
+After the GitHub release is published, [`.github/workflows/msstore-release.yml`](.github/workflows/msstore-release.yml) runs on `windows-latest`: builds the unified `.exe`, packs **`MyHomeGames-<version>-win-x64.msix`**, and runs **`msstore publish`**.
+
+Configure **`MSSTORE_*` secrets** in the GitHub repository (see [docs/install-msstore.md](docs/install-msstore.md)). On macOS, `publish-msstore.js` only logs that the workflow handles Store submission.
+
+Local test on Windows (SDK MakeAppx + Store CLI):
+
+```bash
+npm run build:win-unified
+npm run build:msix
 ```
 
 ### Build prerequisites
