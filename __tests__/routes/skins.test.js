@@ -35,7 +35,7 @@ describe("skins routes", () => {
     const zip = new AdmZip();
     zip.addFile(
       "skin.json",
-      Buffer.from(JSON.stringify({ name: "Test Theme" }), "utf8")
+      Buffer.from(JSON.stringify({ name: "Test Theme", version: "2.4.0" }), "utf8")
     );
     zip.addFile("bundle.css", Buffer.from("body { --mhg-skin-test: 1; }", "utf8"));
     const buf = zip.toBuffer();
@@ -55,6 +55,7 @@ describe("skins routes", () => {
     expect(list.body.skins.length).toBe(1);
     expect(list.body.skins[0].id).toBe(res.body.id);
     expect(list.body.skins[0].name).toBe("Override Name");
+    expect(list.body.skins[0].version).toBe("2.4.0");
     expect(list.body.skins[0].snapshotUrl).toBe(`/skins/${res.body.id}/snapshot`);
     expect(list.body.skins[0].web).toEqual({
       persistentLibraryShell: false,

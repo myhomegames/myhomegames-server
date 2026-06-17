@@ -219,9 +219,12 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
         const meta = readJsonFile(path.join(skinDir, "skin.json"), null);
         const name =
           meta && typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : ent.name;
+        const version =
+          meta && typeof meta.version === "string" && meta.version.trim() ? meta.version.trim() : undefined;
         skins.push({
           id: ent.name,
           name,
+          version,
           snapshotUrl: `/skins/${encodeURIComponent(ent.name)}/snapshot`,
           web: extractWebManifest(meta),
         });

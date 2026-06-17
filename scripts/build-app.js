@@ -363,15 +363,9 @@ exit ${dollar}?
 
 // Step 4: Create Info.plist
 console.log('Step 3: Creating Info.plist...');
+const { buildServerInfo } = require('../utils/compatibility');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
-const serverInfo = {
-  name: packageJson.name,
-  version: packageJson.version,
-  buildDate: new Date().toISOString(),
-  creator: 'Luca Stancapiano',
-  community: 'Vige',
-  website: 'https://myhomegames.vige.it',
-};
+const serverInfo = buildServerInfo(path.join(__dirname, '..'));
 const serverInfoJson = JSON.stringify(serverInfo, null, 2);
 const SERVER_INFO_FILENAME = 'server-info.json';
 const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>

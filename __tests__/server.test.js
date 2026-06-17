@@ -267,6 +267,7 @@ describe('GET /version', () => {
     expect(response.body).toHaveProperty('version');
     expect(typeof response.body.version).toBe('string');
     expect(response.body.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(response.body).not.toHaveProperty('apiCompatibility');
   });
 
   test('should return version matching server package.json', async () => {

@@ -933,27 +933,33 @@ app.get("/settings", (req, res) => {
   });
 });
 
+const { readPackageVersion } = require("./utils/compatibility");
+
 // Endpoint: get server version (public, for update notification to compare with GitHub releases)
-function getServerVersion() {
+function getServerVersionInfo() {
+  const baseDir = process.cwd();
+  let version = null;
   try {
-    const infoPath = path.join(process.cwd(), "server-info.json");
+    const infoPath = path.join(baseDir, "server-info.json");
     if (fs.existsSync(infoPath)) {
       const data = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      if (data && typeof data.version === "string") return data.version;
+      if (data && typeof data.version === "string") version = data.version;
     }
   } catch (_) {}
-  try {
-    const pkgPath = path.join(__dirname, "package.json");
-    if (fs.existsSync(pkgPath)) {
-      const data = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      if (data && typeof data.version === "string") return data.version;
-    }
-  } catch (_) {}
-  return null;
+  if (!version) {
+    try {
+      version = readPackageVersion(__dirname);
+    } catch (_) {}
+  }
+  if (!version) return null;
+  return {
+    name: "myhomegames-server",
+    version,
+  };
 }
 app.get("/version", (req, res) => {
-  const version = getServerVersion();
-  if (version) res.json({ version });
+  const info = getServerVersionInfo();
+  if (info) res.json(info);
   else res.status(500).json({ error: "Version not available" });
 });
 

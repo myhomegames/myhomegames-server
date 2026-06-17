@@ -17,20 +17,10 @@ function readPackageJson() {
   return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
 }
 
+const { buildServerInfo } = require("../utils/compatibility");
+
 function getServerInfoJson() {
-  const packageJson = readPackageJson();
-  return JSON.stringify(
-    {
-      name: packageJson.name,
-      version: packageJson.version,
-      buildDate: new Date().toISOString(),
-      creator: "Luca Stancapiano",
-      community: "Vige",
-      website: "https://myhomegames.vige.it",
-    },
-    null,
-    2
-  );
+  return JSON.stringify(buildServerInfo(ROOT), null, 2);
 }
 
 function findWinExe() {
