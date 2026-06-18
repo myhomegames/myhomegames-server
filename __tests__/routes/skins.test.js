@@ -73,6 +73,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       disableTitleTooltips: false,
+      collapsibleLibrarySidebar: false,
     });
 
     const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
@@ -165,6 +166,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       disableTitleTooltips: false,
+      collapsibleLibrarySidebar: false,
     });
 
     await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
@@ -229,6 +231,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       disableTitleTooltips: false,
+      collapsibleLibrarySidebar: false,
     });
 
     // A subsequent partial update only touches the requested flag.
