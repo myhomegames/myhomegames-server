@@ -601,7 +601,7 @@ describe('PUT /games/:gameId', () => {
   test('should update criticRating and userRating via PUT', async () => {
     const igdbId = 888881;
     const addRes = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -641,7 +641,7 @@ describe('PUT /games/:gameId', () => {
     const igdbId = 999990;
 
     const addRes = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -1761,7 +1761,7 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999995,
@@ -1824,7 +1824,7 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999996,
@@ -1885,7 +1885,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add a game with this category
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999994,
@@ -1951,7 +1951,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add first game with this category
     const addGame1Response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999993,
@@ -1968,7 +1968,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add second game with the same category
     const addGame2Response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999992,
@@ -2026,7 +2026,7 @@ describe('DELETE /games/:gameId', () => {
     const igdbId = 999991;
 
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -2080,7 +2080,7 @@ describe('DELETE /games/:gameId', () => {
   });
 });
 
-describe('POST /games/add-from-igdb', () => {
+describe('POST /igdb/import-game', () => {
   test('should add game from IGDB and create missing categories', async () => {
     // Get initial categories count
     const categoriesBefore = await request(app)
@@ -2092,7 +2092,7 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add a game with new genres
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999999,
@@ -2161,7 +2161,7 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add a game with the same genre
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999998,
@@ -2206,7 +2206,7 @@ describe('POST /games/add-from-igdb', () => {
 
   test('should return 400 if required fields are missing', async () => {
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         name: 'Test Game'
@@ -2247,7 +2247,7 @@ describe('POST /games/add-from-igdb', () => {
       
       // Try to add the same game again
       const response = await request(app)
-        .post('/games/add-from-igdb')
+        .post('/igdb/import-game')
         .set('X-Auth-Token', 'test-token')
         .send({
           igdbId: existingGameId,
@@ -2286,7 +2286,7 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add the game - should succeed
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: gameId,
@@ -2328,7 +2328,7 @@ describe('POST /games/add-from-igdb', () => {
 
   test('should handle games without genres', async () => {
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999997,
@@ -2353,7 +2353,7 @@ describe('POST /games/add-from-igdb', () => {
   test('should preserve genre case', async () => {
     // Add a game with uppercase genres
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/igdb/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999995,

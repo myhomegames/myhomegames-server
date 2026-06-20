@@ -1512,7 +1512,7 @@ function registerIGDBRoutes(app, requireToken) {
               }
             }
 
-            // Process involved companies — return { id, name, logo?, description? } so add-from-igdb can create/update developer/publisher blocks
+            // Process involved companies — return { id, name, logo?, description? } for import-game
             const developers = game.involved_companies
               ? game.involved_companies
                   .filter((ic) => ic.developer && ic.company)

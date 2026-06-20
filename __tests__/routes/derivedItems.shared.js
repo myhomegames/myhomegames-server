@@ -125,7 +125,7 @@ function runDerivedItemTests(config) {
       const testFieldName = `Test ${humanName} ${testFieldId}`;
 
       const addGameResponse = await request(app)
-        .post(`/games/add-from-igdb`)
+        .post(`/igdb/import-game`)
         .set("X-Auth-Token", "test-token")
         .send({
           igdbId: testIgdbId,

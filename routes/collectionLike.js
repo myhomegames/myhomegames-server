@@ -34,6 +34,12 @@ function storedExternalBackgroundUrl(entry) {
   return typeof u === "string" && u.trim() ? u.trim() : null;
 }
 
+function appendIgdbCompanyInfo(data, entry) {
+  if (entry && entry.igdbCompanyInfo && typeof entry.igdbCompanyInfo === "object") {
+    data.igdbCompanyInfo = entry.igdbCompanyInfo;
+  }
+}
+
 function createCollectionLikeRoutes(config) {
   const {
     contentFolder,
@@ -74,6 +80,10 @@ function createCollectionLikeRoutes(config) {
       const logo = typeof item === "object" && item && item.logo ? item.logo : null;
       const description =
         typeof item === "object" && item && typeof item.description === "string" ? item.description : "";
+      const igdbCompanyInfo =
+        typeof item === "object" && item && item.igdbCompanyInfo && typeof item.igdbCompanyInfo === "object"
+          ? item.igdbCompanyInfo
+          : null;
 
       let entry = byId.get(numId);
       if (!entry) {
@@ -84,6 +94,7 @@ function createCollectionLikeRoutes(config) {
           childs: [],
           summary: description || "",
           externalCoverUrl: logo || null,
+          ...(igdbCompanyInfo ? { igdbCompanyInfo } : {}),
         };
         saveItem(metadataPath, contentFolder, entry);
         byId.set(numId, entry);
@@ -157,8 +168,8 @@ function createCollectionLikeRoutes(config) {
       res.sendFile(backgroundPath);
     });
 
-    app.post(normalizedRouteBase, requireToken, (req, res) => {
-      const { title, summary } = req.body || {};
+    app.post(normalizedRouteBase, requireToken, async (req, res) => {
+      const { title, summary, id: requestedId } = req.body || {};
       if (!title || typeof title !== "string" || !title.trim()) {
         return res.status(400).json({ error: "Title is required" });
       }
@@ -172,9 +183,22 @@ function createCollectionLikeRoutes(config) {
           [singleResponseKey]: { id: existing.id, title: existing.title },
         });
       }
-      let newId = getIdFromTitle(trimmedTitle);
-      while (list.some((c) => String(c.id) === String(newId))) {
-        newId++;
+      const parsedRequestedId =
+        requestedId != null && /^\d+$/.test(String(requestedId)) ? Number(requestedId) : null;
+      let newId;
+      if (parsedRequestedId != null && parsedRequestedId >= 1) {
+        if (list.some((c) => String(c.id) === String(parsedRequestedId))) {
+          return res.status(409).json({
+            error: `${humanName} with this id already exists`,
+            [singleResponseKey]: { id: parsedRequestedId, title: trimmedTitle },
+          });
+        }
+        newId = parsedRequestedId;
+      } else {
+        newId = getIdFromTitle(trimmedTitle);
+        while (list.some((c) => String(c.id) === String(newId))) {
+          newId++;
+        }
       }
       const newItem = {
         id: newId,
@@ -215,6 +239,7 @@ function createCollectionLikeRoutes(config) {
       });
       data.background = background || null;
       data.externalBackgroundUrl = null;
+      appendIgdbCompanyInfo(data, newItem);
       res.status(201).json({ status: "success", [singleResponseKey]: data });
     });
 
@@ -291,6 +316,7 @@ function createCollectionLikeRoutes(config) {
       });
       data.background = background || storedExternalBackgroundUrl(entry) || null;
       data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
+      appendIgdbCompanyInfo(data, entry);
       res.json(data);
     });
 

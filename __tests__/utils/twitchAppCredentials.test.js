@@ -131,4 +131,5 @@ describe("twitchAppCredentials", () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toBe(IGDB_CREDENTIALS_ERROR_LOCAL);
   });
+
 });

@@ -86,6 +86,7 @@ const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gam
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { attachIgdbCompanyInfoForNewItems } = require("../utils/igdbCompany");
 
 
 /**
@@ -688,7 +689,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   });
 
   // Endpoint: update game fields
-  app.put("/games/:gameId", requireToken, (req, res) => {
+  app.put("/games/:gameId", requireToken, async (req, res) => {
     const gameId = Number(req.params.gameId);
     const updates = req.body;
     
@@ -962,7 +963,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       for (const oldId of oldIds) {
         if (!newIds.has(oldId)) removeGameFromDeveloper(metadataPath, oldId, gameId);
       }
-      if (newDevItems.length > 0) ensureDevelopersExistBatch(metadataPath, newDevItems, gameId);
+      if (newDevItems.length > 0) {
+        ensureDevelopersExistBatch(metadataPath, newDevItems, gameId);
+      }
       filteredUpdates.developers = newDevIds.length > 0 ? newDevIds : null;
     }
     if ("publishers" in filteredUpdates) {
@@ -976,7 +979,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       for (const oldId of oldIds) {
         if (!newIds.has(oldId)) removeGameFromPublisher(metadataPath, oldId, gameId);
       }
-      if (newPubItems.length > 0) ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
+      if (newPubItems.length > 0) {
+        ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
+      }
       filteredUpdates.publishers = newPubIds.length > 0 ? newPubIds : null;
     }
     // Franchise and collection (series): accept [{ id, name }] or number[]; ensure blocks exist and link game
@@ -1680,8 +1685,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
-  // Endpoint: add game from IGDB to library
-  app.post("/games/add-from-igdb", requireToken, async (req, res) => {
+  app.post("/igdb/import-game", requireToken, async (req, res) => {
     const {
       igdbId,
       name,
@@ -1820,7 +1824,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const validateDeveloperPublisherArray = (arr) => {
         if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
         const filtered = arr.filter((item) => item && typeof item === "object" && item.id != null && item.name);
-        return filtered.map((x) => ({ id: Number(x.id), name: String(x.name).trim(), logo: x.logo || null, description: x.description || "" })).filter((x) => !isNaN(x.id) && x.name);
+        return filtered
+          .map((x) => ({
+            id: Number(x.id),
+            name: String(x.name).trim(),
+            logo: x.logo || null,
+            description: x.description || "",
+          }))
+          .filter((x) => !isNaN(x.id) && x.name);
       };
       const rawDevelopers = validateDeveloperPublisherArray(developers);
       const rawPublishers = validateDeveloperPublisherArray(publishers);
@@ -1895,8 +1906,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         ...(storedGameTypeId != null ? { type: storedGameTypeId } : {}),
       };
 
-      if (rawDevelopers && rawDevelopers.length > 0) ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
-      if (rawPublishers && rawPublishers.length > 0) ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
+      if (rawDevelopers && rawDevelopers.length > 0) {
+        await attachIgdbCompanyInfoForNewItems(metadataPath, "developers", rawDevelopers, req);
+        ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
+      }
+      if (rawPublishers && rawPublishers.length > 0) {
+        await attachIgdbCompanyInfoForNewItems(metadataPath, "publishers", rawPublishers, req);
+        ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
+      }
       if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseExistBatch(metadataPath, franchiseForEnsure, gameId);
       if (collectionForEnsure && collectionForEnsure.length > 0) ensureSeriesExistBatch(metadataPath, collectionForEnsure, gameId);
 
