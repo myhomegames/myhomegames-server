@@ -223,3 +223,23 @@ describe('POST /igdb/games-by-publisher-by-name', () => {
   });
 
 });
+
+describe('GET /igdb/company/:companyId', () => {
+  test('should return 400 for invalid company ID', async () => {
+    const response = await request(app)
+      .get('/igdb/company/invalid')
+      .set('X-Auth-Token', 'test-token')
+      .expect(400);
+
+    expect(response.body).toHaveProperty('error', 'Invalid company ID');
+  });
+
+  test('should return 400 when Twitch credentials are missing', async () => {
+    const response = await request(app)
+      .get('/igdb/company/195')
+      .set('X-Auth-Token', 'test-token')
+      .expect(400);
+
+    expect(response.body).toHaveProperty('error');
+  });
+});

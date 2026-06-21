@@ -24,6 +24,7 @@ const {
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { mergeIgdbCompanyInfo } = require("../utils/igdbCompany");
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -350,6 +351,38 @@ function createCollectionLikeRoutes(config) {
         res.status(500).json({ error: `Failed to reload ${humanName.toLowerCase()} metadata` });
       }
     });
+
+    if (contentFolder === "developers" || contentFolder === "publishers") {
+      app.post(`${normalizedRouteBase}/:id/merge-igdb-company-info`, requireToken, (req, res) => {
+        const id = normalizeId(req.params.id);
+        const remote = req.body && req.body.igdbCompanyInfo;
+        if (!remote || typeof remote !== "object") {
+          return res.status(400).json({ error: "Missing igdbCompanyInfo object in request body" });
+        }
+
+        try {
+          const entry = loadItemById(metadataPath, contentFolder, id);
+          if (!entry) {
+            return res.status(404).json({ error: `${humanName} not found` });
+          }
+
+          const { info, changed } = mergeIgdbCompanyInfo(entry.igdbCompanyInfo, remote);
+          if (changed) {
+            entry.igdbCompanyInfo = info;
+            saveItem(metadataPath, contentFolder, entry);
+            upsertCacheEntry(entry);
+          }
+
+          res.json({
+            status: changed ? "merged" : "unchanged",
+            [singleResponseKey]: buildDetailPayload(entry),
+          });
+        } catch (e) {
+          console.error(`Failed to merge IGDB company info for ${contentFolder}/${id}:`, e.message);
+          res.status(500).json({ error: "Failed to merge IGDB company info" });
+        }
+      });
+    }
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);

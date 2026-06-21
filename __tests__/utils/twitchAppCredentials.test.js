@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 const {
   resolveTwitchAppCredentials,
+  resolveTwitchAppCredentialsForServerIgdb,
   requireTwitchAppCredentials,
   IGDB_CREDENTIALS_ERROR_GATEWAY,
   IGDB_CREDENTIALS_ERROR_LOCAL,
@@ -130,6 +131,17 @@ describe("twitchAppCredentials", () => {
     expect(out).toBeNull();
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toBe(IGDB_CREDENTIALS_ERROR_LOCAL);
+  });
+
+  test("resolveTwitchAppCredentialsForServerIgdb uses stored creds when tunnel enabled and headers missing", () => {
+    process.env.CLOUDFLARE_TUNNEL_ENABLED = "true";
+    saveStoredTwitchAppCredentials(testMetadataPath, {
+      clientId: "stored-id",
+      clientSecret: "stored-secret",
+    });
+
+    const creds = resolveTwitchAppCredentialsForServerIgdb(mockReq({}));
+    expect(creds).toMatchObject({ clientId: "stored-id", clientSecret: "stored-secret", source: "stored-settings" });
   });
 
 });

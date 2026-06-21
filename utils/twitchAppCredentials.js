@@ -65,6 +65,40 @@ function requireTwitchAppCredentials(req, res, options = {}) {
   return creds;
 }
 
+/**
+ * Twitch credentials for server-initiated IGDB calls (metadata reload, backfill).
+ * Uses request headers when present; otherwise stored credentials and env even in tunnel mode.
+ */
+function resolveTwitchAppCredentialsForServerIgdb(req) {
+  const headerClientId = String(req?.header?.("X-Twitch-Client-Id") || "").trim();
+  const headerClientSecret = String(req?.header?.("X-Twitch-Client-Secret") || "").trim();
+  if (headerClientId && headerClientSecret) {
+    return { clientId: headerClientId, clientSecret: headerClientSecret, source: "headers" };
+  }
+
+  if (!isCloudflareTunnelEnabled()) {
+    const fromReq = resolveTwitchAppCredentials(req);
+    if (fromReq.clientId && fromReq.clientSecret) {
+      return { ...fromReq, source: "resolveTwitchAppCredentials" };
+    }
+  }
+
+  if (metadataPath) {
+    const stored = loadStoredTwitchAppCredentials(metadataPath);
+    if (stored?.clientId && stored?.clientSecret) {
+      return { clientId: stored.clientId, clientSecret: stored.clientSecret, source: "stored-settings" };
+    }
+  }
+
+  const clientId = String(process.env.TWITCH_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.TWITCH_CLIENT_SECRET || "").trim();
+  if (clientId && clientSecret) {
+    return { clientId, clientSecret, source: "env" };
+  }
+
+  return { clientId: "", clientSecret: "", source: "none" };
+}
+
 module.exports = {
   IGDB_CREDENTIALS_ERROR: IGDB_CREDENTIALS_ERROR_GATEWAY,
   IGDB_CREDENTIALS_ERROR_GATEWAY,
@@ -72,5 +106,6 @@ module.exports = {
   igdbCredentialsError,
   setTwitchCredentialsMetadataPath,
   resolveTwitchAppCredentials,
+  resolveTwitchAppCredentialsForServerIgdb,
   requireTwitchAppCredentials,
 };

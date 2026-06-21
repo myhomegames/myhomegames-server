@@ -3,6 +3,7 @@
 
 const https = require("https");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { resolveIgdbCompanyInfoForEntry } = require("../utils/igdbCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 
 // IGDB Access Token cache (per clientId)
@@ -1065,6 +1066,37 @@ function registerIGDBRoutes(app, requireToken) {
       res.status(500).json({ error: "Failed to fetch games from IGDB", detail: err.message });
     }
   };
+
+  async function handleCompanyInfo(req, res) {
+    const companyId = parseInt(req.params.companyId, 10);
+    const name = typeof req.query.name === "string" ? req.query.name.trim() : "";
+
+    if (Number.isNaN(companyId) || companyId < 1) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Invalid company ID" });
+    }
+
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      const igdbCompanyInfo = await resolveIgdbCompanyInfoForEntry(
+        { id: companyId, title: name },
+        accessToken,
+        clientId
+      );
+      res.setHeader("Content-Type", "application/json");
+      res.json({ igdbCompanyInfo: igdbCompanyInfo || null });
+    } catch (err) {
+      console.error("IGDB company info error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch company from IGDB", detail: err.message });
+    }
+  }
+
+  app.get("/igdb/company/:companyId", requireToken, handleCompanyInfo);
 
   app.get("/igdb/games-by-developer/:companyId", requireToken, handleGamesByDeveloper);
   app.post("/igdb/games-by-developer/:companyId", requireToken, handleGamesByDeveloper);

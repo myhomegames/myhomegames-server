@@ -87,6 +87,12 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmp
 const { getTitleForSort } = require("../utils/sortUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
 const { attachIgdbCompanyInfoForNewItems } = require("../utils/igdbCompany");
+const {
+  mergeIgdbGameMetadata,
+  idsToAdd,
+  devPubItemsToAdd,
+  franchiseCollectionItemsToAdd,
+} = require("../utils/igdbGameMerge");
 
 
 /**
@@ -1387,10 +1393,107 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
+  // Endpoint: merge IGDB game metadata into local game (missing fields only)
+  app.post("/games/:gameId/merge-igdb-metadata", requireToken, (req, res) => {
+    const gameId = Number(req.params.gameId);
+    const igdbPayload = req.body;
+
+    if (!igdbPayload || typeof igdbPayload !== "object") {
+      return res.status(400).json({ error: "Missing IGDB game payload in request body" });
+    }
+
+    try {
+      let game = allGames[gameId];
+      if (!game) {
+        game = reloadSingleGameIntoCache(metadataPath, allGames, gameId);
+      }
+      if (!game) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+
+      const { game: mergedMeta, changed: metaChanged, parsed } = mergeIgdbGameMetadata(game, igdbPayload);
+      if (!parsed) {
+        return res.status(400).json({ error: "Invalid IGDB game payload" });
+      }
+
+      const localTags = getGameTagIdsFromBlocks(metadataPath, gameId);
+      let tagsChanged = false;
+
+      const resolveAndAddTags = (localKey, normalizeFn, igdbNames, addFn) => {
+        if (!igdbNames || !Array.isArray(igdbNames) || igdbNames.length === 0) return;
+        const remoteIds = normalizeFn(metadataPath, igdbNames);
+        const toAdd = idsToAdd(localTags[localKey], remoteIds);
+        if (toAdd.length > 0) {
+          toAdd.forEach((id) => addFn(metadataPath, id, gameId));
+          tagsChanged = true;
+        }
+      };
+
+      resolveAndAddTags("genre", normalizeCategoryFieldToIds, parsed.genres, addGameToCategory);
+      resolveAndAddTags("themes", normalizeThemeFieldToIds, parsed.themes, addGameToTheme);
+      resolveAndAddTags("platforms", normalizePlatformFieldToIds, parsed.platforms, addGameToPlatform);
+      resolveAndAddTags("gameModes", normalizeGameModeFieldToIds, parsed.gameModes, addGameToGameMode);
+      resolveAndAddTags(
+        "playerPerspectives",
+        normalizePlayerPerspectiveFieldToIds,
+        parsed.playerPerspectives,
+        addGameToPlayerPerspective
+      );
+      resolveAndAddTags("gameEngines", normalizeGameEngineFieldToIds, parsed.gameEngines, addGameToGameEngine);
+
+      const newDevelopers = devPubItemsToAdd(localTags.developers, parsed.rawDevelopers);
+      if (newDevelopers.length > 0) {
+        ensureDevelopersExistBatch(metadataPath, newDevelopers, gameId);
+        tagsChanged = true;
+      }
+
+      const newPublishers = devPubItemsToAdd(localTags.publishers, parsed.rawPublishers);
+      if (newPublishers.length > 0) {
+        ensurePublishersExistBatch(metadataPath, newPublishers, gameId);
+        tagsChanged = true;
+      }
+
+      const newFranchises = franchiseCollectionItemsToAdd(localTags.franchise, parsed.franchiseForEnsure);
+      if (newFranchises.length > 0) {
+        ensureFranchiseExistBatch(metadataPath, newFranchises, gameId);
+        tagsChanged = true;
+      }
+
+      const newCollections = franchiseCollectionItemsToAdd(localTags.collection, parsed.collectionForEnsure);
+      if (newCollections.length > 0) {
+        ensureSeriesExistBatch(metadataPath, newCollections, gameId);
+        tagsChanged = true;
+      }
+
+      if (metaChanged) {
+        saveGame(metadataPath, { ...mergedMeta, id: gameId });
+      }
+
+      if (metaChanged || tagsChanged) {
+        reloadSingleGameIntoCache(metadataPath, allGames, gameId);
+        invalidateLibraryGamesResponseCache();
+        if (updateRecommendedSections && typeof updateRecommendedSections === "function") {
+          updateRecommendedSections(metadataPath, allGames);
+        }
+      }
+
+      const updatedGame = allGames[gameId];
+      const devs = getDevelopersCache ? getDevelopersCache() : null;
+      const pubs = getPublishersCache ? getPublishersCache() : null;
+      res.json({
+        status: metaChanged || tagsChanged ? "merged" : "unchanged",
+        game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames),
+      });
+    } catch (e) {
+      console.error(`Failed to merge IGDB metadata for game ${gameId}:`, e.message);
+      res.status(500).json({ error: "Failed to merge IGDB game metadata" });
+    }
+  });
+
   // Endpoint: reload metadata for a single game
   app.post("/games/:gameId/reload", requireToken, (req, res) => {
     const gameId = Number(req.params.gameId);
-    
+
     try {
       const game = reloadSingleGameIntoCache(metadataPath, allGames, gameId);
       if (!game) {
@@ -1398,7 +1501,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
 
       invalidateLibraryGamesResponseCache();
-      
+
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
       res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs, allGames) });
