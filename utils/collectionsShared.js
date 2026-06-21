@@ -94,6 +94,28 @@ function loadItems(metadataPath, contentFolder) {
   );
 }
 
+/** Load one item from disk by id (reads a single metadata.json). */
+function loadItemById(metadataPath, contentFolder, id) {
+  const normalized = normalizeId(id);
+  if (normalized == null) return null;
+  const metaPath = getMetadataPath(metadataPath, contentFolder, normalized);
+  if (!fs.existsSync(metaPath)) return null;
+  const meta = readJsonFile(metaPath, null);
+  if (!meta || !meta.title) return null;
+  const ec = meta.externalCoverUrl;
+  const externalCoverUrl = typeof ec === "string" && ec.trim() ? ec.trim() : null;
+  return {
+    id: normalized,
+    title: meta.title,
+    summary: meta.summary || "",
+    games: meta.games || [],
+    childs: normalizeChildIds(meta.childs, normalized),
+    showTitle: meta.showTitle !== false,
+    ...meta,
+    externalCoverUrl,
+  };
+}
+
 /**
  * Save a single item (removes id from stored data - it's in folder name)
  */
@@ -365,6 +387,7 @@ function computeFinalGameIdsForOrder(currentGameIds, requestedGameIds, allGames)
 module.exports = {
   getMetadataPath,
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   normalizeId,

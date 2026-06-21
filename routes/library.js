@@ -528,6 +528,37 @@ function deleteGame(metadataPath, gameId) {
   }
 }
 
+function reloadSingleGameIntoCache(metadataPath, allGames, gameId) {
+  const game = loadGame(metadataPath, gameId);
+  if (!game) {
+    delete allGames[gameId];
+    return null;
+  }
+  game.id = Number(gameId) || gameId;
+  const executableNames = getExecutablesWithOrder(metadataPath, gameId, game);
+  if (executableNames.length > 0) {
+    game.executables = executableNames;
+  } else {
+    delete game.executables;
+  }
+  const tagIds = getGameTagIdsFromBlocks(metadataPath, gameId);
+  for (const [key, ids] of Object.entries(tagIds)) {
+    game[key] = ids;
+  }
+  if (!game.genre) game.genre = [];
+  if (!game.themes) game.themes = [];
+  if (!game.platforms) game.platforms = [];
+  if (!game.gameModes) game.gameModes = [];
+  if (!game.playerPerspectives) game.playerPerspectives = [];
+  if (!game.gameEngines) game.gameEngines = [];
+  if (!game.developers) game.developers = [];
+  if (!game.publishers) game.publishers = [];
+  if (!game.franchise) game.franchise = [];
+  if (!game.collection) game.collection = [];
+  allGames[game.id] = game;
+  return game;
+}
+
 function loadLibraryGames(metadataPath, allGames) {
   const gamesDir = path.join(metadataPath, "content", "games");
   const games = [];
@@ -1361,14 +1392,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const gameId = Number(req.params.gameId);
     
     try {
-      // Reload library games to refresh metadata
-      loadLibraryGames(metadataPath, allGames);
-      
-      // Check if game exists after reload
-      const game = allGames[gameId];
+      const game = reloadSingleGameIntoCache(metadataPath, allGames, gameId);
       if (!game) {
         return res.status(404).json({ error: "Game not found" });
       }
+
+      invalidateLibraryGamesResponseCache();
       
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;

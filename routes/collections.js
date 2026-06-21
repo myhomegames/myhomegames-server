@@ -6,6 +6,7 @@ const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
 const {
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   findById,
@@ -757,28 +758,32 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionId = req.params.id;
     
     try {
-      // Reload collections to refresh metadata
-      collectionsCache = loadCollections(metadataPath);
-      
-      const collection = findById(collectionsCache, collectionId);
-      if (!collection) {
+      const entry = loadItemById(metadataPath, CONTENT_FOLDER, collectionId);
+      if (!entry) {
+        const idx = findIndexById(collectionsCache, collectionId);
+        if (idx !== -1) collectionsCache.splice(idx, 1);
         return res.status(404).json({ error: "Collection not found" });
       }
+
+      const cacheIndex = findIndexById(collectionsCache, entry.id);
+      if (cacheIndex !== -1) {
+        collectionsCache[cacheIndex] = entry;
+      } else {
+        collectionsCache.push(entry);
+      }
       
-      // Format collection data like other endpoints
       const collectionData = {
-        id: collection.id,
-        title: collection.title,
-        summary: collection.summary || "",
-        showTitle: collection.showTitle,
-        cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
-        gameCount: (collection.games || []).length,
-        childs: Array.isArray(collection.childs) ? collection.childs : [],
+        id: entry.id,
+        title: entry.title,
+        summary: entry.summary || "",
+        showTitle: entry.showTitle,
+        cover: `/collection-covers/${encodeURIComponent(String(entry.id))}`,
+        gameCount: (entry.games || []).length,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
       };
-      // Check if cover exists locally
       const localCover = getLocalMediaPath({
         metadataPath,
-        resourceId: collection.id,
+        resourceId: entry.id,
         resourceType: 'collections',
         mediaType: 'cover',
         urlPrefix: '/collection-covers'
@@ -788,16 +793,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       }
       const background = getLocalMediaPath({
         metadataPath,
-        resourceId: collection.id,
+        resourceId: entry.id,
         resourceType: 'collections',
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      const extBg = externalBackgroundUrlFromCollectionEntry(entry);
       collectionData.background = background || extBg || undefined;
       collectionData.externalBackgroundUrl = extBg;
       
-      // Return updated collection data
       res.json({ status: "reloaded", collection: collectionData });
     } catch (e) {
       console.error(`Failed to reload collection ${collectionId}:`, e.message);

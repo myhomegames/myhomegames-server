@@ -11,6 +11,7 @@ const multer = require("multer");
 const { getCoverUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
 const {
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   findById,
@@ -139,6 +140,46 @@ function createCollectionLikeRoutes(config) {
     const updateCache = () => {
       cache = loadItems(metadataPath, contentFolder);
     };
+
+    function buildDetailPayload(entry) {
+      const data = {
+        id: entry.id,
+        title: entry.title,
+        summary: entry.summary || "",
+        showTitle: entry.showTitle !== false,
+        gameCount: (entry.games || []).filter((g) => allGames[g]).length,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
+      };
+      const cover = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "cover",
+        urlPrefix: `/${coverPrefix}`,
+      });
+      data.cover = cover || storedExternalCoverUrl(entry) || null;
+      data.externalCoverUrl = storedExternalCoverUrl(entry);
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: entry.id,
+        resourceType: contentFolder,
+        mediaType: "background",
+        urlPrefix: `/${backgroundPrefix}`,
+      });
+      data.background = background || storedExternalBackgroundUrl(entry) || null;
+      data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
+      appendIgdbCompanyInfo(data, entry);
+      return data;
+    }
+
+    function upsertCacheEntry(entry) {
+      const idx = findIndexById(cache, entry.id);
+      if (idx !== -1) {
+        cache[idx] = entry;
+      } else {
+        cache.push(entry);
+      }
+    }
 
     const upload = multer({ storage: multer.memoryStorage() });
 
@@ -290,34 +331,24 @@ function createCollectionLikeRoutes(config) {
         entry = findById(list, id);
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const data = {
-        id: entry.id,
-        title: entry.title,
-        summary: entry.summary || "",
-        showTitle: entry.showTitle !== false,
-        gameCount: (entry.games || []).filter((g) => allGames[g]).length,
-        childs: Array.isArray(entry.childs) ? entry.childs : [],
-      };
-      const cover = getLocalMediaPath({
-        metadataPath,
-        resourceId: entry.id,
-        resourceType: contentFolder,
-        mediaType: "cover",
-        urlPrefix: `/${coverPrefix}`,
-      });
-      data.cover = cover || storedExternalCoverUrl(entry) || null;
-      data.externalCoverUrl = storedExternalCoverUrl(entry);
-      const background = getLocalMediaPath({
-        metadataPath,
-        resourceId: entry.id,
-        resourceType: contentFolder,
-        mediaType: "background",
-        urlPrefix: `/${backgroundPrefix}`,
-      });
-      data.background = background || storedExternalBackgroundUrl(entry) || null;
-      data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
-      appendIgdbCompanyInfo(data, entry);
-      res.json(data);
+      res.json(buildDetailPayload(entry));
+    });
+
+    app.post(`${normalizedRouteBase}/:id/reload`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      try {
+        const entry = loadItemById(metadataPath, contentFolder, id);
+        if (!entry) {
+          const idx = findIndexById(cache, id);
+          if (idx !== -1) cache.splice(idx, 1);
+          return res.status(404).json({ error: `${humanName} not found` });
+        }
+        upsertCacheEntry(entry);
+        res.json({ status: "reloaded", [singleResponseKey]: buildDetailPayload(entry) });
+      } catch (e) {
+        console.error(`Failed to reload ${humanName.toLowerCase()} ${id}:`, e.message);
+        res.status(500).json({ error: `Failed to reload ${humanName.toLowerCase()} metadata` });
+      }
     });
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
