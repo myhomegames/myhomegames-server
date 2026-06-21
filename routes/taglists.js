@@ -91,29 +91,6 @@ function createTagRoutes(config) {
     return tags;
   }
 
-  function loadTagById(metadataPath, tagId) {
-    const id = Number(tagId);
-    if (Number.isNaN(id)) return null;
-    const tagsDir = path.join(metadataPath, "content", contentFolder);
-    const metadataFilePath = path.join(tagsDir, String(id), "metadata.json");
-    const metadata = readJsonFile(metadataFilePath, null);
-    if (!metadata || !metadata.title) return null;
-    const tagData = {
-      id,
-      title: metadata.title,
-      showTitle: metadata.showTitle,
-    };
-    const coverPath = path.join(tagsDir, String(id), "cover.webp");
-    const hasCover = fs.existsSync(coverPath);
-    if (hasCover) {
-      tagData.cover = `/${coverPrefix}/${encodeURIComponent(metadata.title)}`;
-    } else {
-      tagData.cover = `${normalizedRouteBase}/${id}/cover.webp`;
-    }
-    tagData.hasCover = hasCover;
-    return tagData;
-  }
-
   function formatTagPayload(tag) {
     const tagData = {
       id: tag.id,
@@ -559,22 +536,6 @@ function createTagRoutes(config) {
       } catch (err) {
         console.error(`Failed to delete ${humanName.toLowerCase()} ${tag.title}:`, err.message);
         res.status(500).json({ error: `Failed to delete ${humanName.toLowerCase()}` });
-      }
-    });
-
-    app.post(`${normalizedRouteBase}/:id/reload`, requireToken, (req, res) => {
-      try {
-        const tag = loadTagById(metadataPath, req.params.id);
-        if (!tag) {
-          return res.status(404).json({ error: `${humanName} not found` });
-        }
-        res.json({
-          status: "reloaded",
-          [responseKey]: formatTagPayload(tag),
-        });
-      } catch (err) {
-        console.error(`Failed to reload ${humanName.toLowerCase()} ${req.params.id}:`, err.message);
-        res.status(500).json({ error: `Failed to reload ${humanName.toLowerCase()} metadata` });
       }
     });
 

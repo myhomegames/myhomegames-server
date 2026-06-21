@@ -741,34 +741,6 @@ function runTagListTests(config) {
       expect(tagModule[ensureFnName](testMetadataPath, 123)).toBeNull();
     });
   });
-
-  describe(`POST ${normalizedRouteBase}/:id/reload`, () => {
-    test(`should reload metadata for a single ${humanName.toLowerCase()}`, async () => {
-      const listResponse = await request(app)
-        .get(normalizedRouteBase)
-        .set("X-Auth-Token", "test-token")
-        .expect(200);
-
-      if (listResponse.body[listKey].length > 0) {
-        const itemId = listResponse.body[listKey][0].id;
-        const response = await request(app)
-          .post(`${normalizedRouteBase}/${itemId}/reload`)
-          .set("X-Auth-Token", "test-token")
-          .expect(200);
-
-        expect(response.body).toHaveProperty("status", "reloaded");
-        expect(response.body).toHaveProperty(responseKey);
-        expect(response.body[responseKey]).toHaveProperty("id", itemId);
-      }
-    });
-
-    test(`should return 404 for non-existent ${humanName.toLowerCase()}`, async () => {
-      await request(app)
-        .post(`${normalizedRouteBase}/999999999/reload`)
-        .set("X-Auth-Token", "test-token")
-        .expect(404);
-    });
-  });
 }
 
 module.exports = {
