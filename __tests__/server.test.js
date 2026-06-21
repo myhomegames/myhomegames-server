@@ -257,6 +257,11 @@ describe('POST /reload-games', () => {
     expect(typeof response.body.playerPerspectives).toBe('number');
   });
 
+  test('should reload games without auth token', async () => {
+    const response = await request(app).post('/reload-games').expect(200);
+    expect(response.body).toHaveProperty('status', 'reloaded');
+  });
+
 });
 
 describe('GET /version', () => {

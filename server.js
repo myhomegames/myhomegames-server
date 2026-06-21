@@ -771,7 +771,7 @@ app.get("/launcher", optionalLauncherToken, (req, res) => {
 });
 
 // Reload games list (admin endpoint) — protected by token
-app.post("/reload-games", requireToken, (req, res) => {
+app.post("/reload-games", optionalToken, (req, res) => {
   allGames = {};
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
   // Recommended games are now just IDs pointing to games already in allGames
