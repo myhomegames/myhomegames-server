@@ -6,7 +6,7 @@ const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
 
 const LOG_PREFIX = "[igdb-company]";
 const IGDB_COMPANY_FIELDS =
-  "id,name,status.name,changed_company_id.id,changed_company_id.name,country,change_date,change_date_format,start_date,start_date_format";
+  "id,name,status.name,changed_company_id.id,changed_company_id.name,country,change_date,change_date_format,start_date,start_date_format,parent.id,parent.name,company_type_histories.company_type.name,company_type_histories.parent_company.id,company_type_histories.parent_company.name";
 
 function log(message, extra) {
   if (extra !== undefined) {
@@ -38,9 +38,59 @@ function summarizeLocalInfo(info) {
     country: info.country ?? null,
     changedOn: info.changedOn ?? null,
     started: info.started ?? null,
+    knownAs: info.knownAs ?? null,
+    legalName: info.legalName ?? null,
+    formerly: info.formerly ?? null,
+    parentCompanyId: info.parentCompany?.id ?? null,
+    parentCompanyName: info.parentCompany?.name ?? null,
     updatedToId: info.updatedTo?.id ?? null,
     updatedToName: info.updatedTo?.name ?? null,
   };
+}
+
+function normalizeCompanyTypeName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase();
+}
+
+function companyTypeHistoryValue(history) {
+  const parent = history && history.parent_company;
+  const value = parent && typeof parent.name === "string" ? parent.name.trim() : "";
+  return value || null;
+}
+
+function applyCompanyTypeHistories(info, histories) {
+  if (!Array.isArray(histories) || histories.length === 0) return;
+
+  const knownAs = [];
+  const formerly = [];
+
+  for (const history of histories) {
+    const type = normalizeCompanyTypeName(history && history.company_type && history.company_type.name);
+    const value = companyTypeHistoryValue(history);
+    if (!type || !value) continue;
+
+    if (type === "known as") {
+      knownAs.push(value);
+    } else if (type === "legal name") {
+      info.legalName = value;
+    } else if (type === "formerly") {
+      formerly.push(value);
+    } else if (type === "parent company" && !info.parentCompany) {
+      const parent = history.parent_company;
+      if (parent && parent.id != null && parent.name) {
+        info.parentCompany = { id: parent.id, name: parent.name };
+      }
+    }
+  }
+
+  if (knownAs.length > 0) {
+    info.knownAs = knownAs.join(", ");
+  }
+  if (formerly.length > 0) {
+    info.formerly = formerly.join(", ");
+  }
 }
 
 function mapIgdbCompanyToInfo(company) {
@@ -67,6 +117,14 @@ function mapIgdbCompanyToInfo(company) {
   const started = formatIGDBDateWithFormat(company.start_date, company.start_date_format);
   if (started) {
     info.started = started;
+  }
+
+  applyCompanyTypeHistories(info, company.company_type_histories);
+  if (!info.parentCompany && company.parent && company.parent.id != null && company.parent.name) {
+    info.parentCompany = {
+      id: company.parent.id,
+      name: company.parent.name,
+    };
   }
 
   return Object.keys(info).length > 0 ? info : null;
@@ -230,10 +288,32 @@ function mergeIgdbCompanyInfo(local, remote) {
   const merged = local && typeof local === "object" ? { ...local } : {};
   let changed = false;
 
-  for (const key of ["status", "country", "changedOn", "started"]) {
+  for (const key of ["status", "country", "changedOn", "started", "knownAs", "legalName", "formerly"]) {
     if (!isMissingLocalValue(remote[key]) && isMissingLocalValue(merged[key])) {
       merged[key] = remote[key];
       changed = true;
+    }
+  }
+
+  if (remote.parentCompany && typeof remote.parentCompany === "object") {
+    if (isMissingLocalValue(merged.parentCompany)) {
+      merged.parentCompany = { ...remote.parentCompany };
+      changed = true;
+    } else if (typeof merged.parentCompany === "object") {
+      const parentCompany = { ...merged.parentCompany };
+      let parentCompanyChanged = false;
+      if (isMissingLocalValue(parentCompany.id) && remote.parentCompany.id != null) {
+        parentCompany.id = remote.parentCompany.id;
+        parentCompanyChanged = true;
+      }
+      if (isMissingLocalValue(parentCompany.name) && !isMissingLocalValue(remote.parentCompany.name)) {
+        parentCompany.name = remote.parentCompany.name;
+        parentCompanyChanged = true;
+      }
+      if (parentCompanyChanged) {
+        merged.parentCompany = parentCompany;
+        changed = true;
+      }
     }
   }
 

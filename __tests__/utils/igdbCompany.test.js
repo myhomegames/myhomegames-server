@@ -26,6 +26,41 @@ describe("mapIgdbCompanyToInfo", () => {
     });
   });
 
+  test("maps company type histories and parent company", () => {
+    const info = mapIgdbCompanyToInfo({
+      id: 10,
+      start_date: 315532800,
+      start_date_format: 2,
+      parent: { id: 99, name: "Mattel" },
+      company_type_histories: [
+        {
+          company_type: { name: "Known as" },
+          parent_company: { id: 11, name: "Capcom USA" },
+        },
+        {
+          company_type: { name: "Legal name" },
+          parent_company: { id: 12, name: "Capcom U.S.A., Inc." },
+        },
+        {
+          company_type: { name: "Formerly" },
+          parent_company: { id: 13, name: "Mattel Media" },
+        },
+        {
+          company_type: { name: "Parent company" },
+          parent_company: { id: 99, name: "Mattel" },
+        },
+      ],
+    });
+
+    expect(info).toEqual({
+      started: "1980",
+      knownAs: "Capcom USA",
+      legalName: "Capcom U.S.A., Inc.",
+      formerly: "Mattel Media",
+      parentCompany: { id: 99, name: "Mattel" },
+    });
+  });
+
   test("returns null when company has no display fields", () => {
     expect(mapIgdbCompanyToInfo({ id: 1 })).toBeNull();
     expect(mapIgdbCompanyToInfo(null)).toBeNull();
@@ -43,6 +78,10 @@ describe("mergeIgdbCompanyInfo", () => {
       country: "United States of America",
       changedOn: "2020",
       started: "1980",
+      knownAs: "Capcom USA",
+      legalName: "Capcom U.S.A., Inc.",
+      formerly: "Mattel Media",
+      parentCompany: { id: 99, name: "Mattel" },
       updatedTo: { id: 99, name: "New Co" },
     };
 
@@ -54,7 +93,29 @@ describe("mergeIgdbCompanyInfo", () => {
       country: "Japan",
       changedOn: "2020",
       started: "1980",
+      knownAs: "Capcom USA",
+      legalName: "Capcom U.S.A., Inc.",
+      formerly: "Mattel Media",
+      parentCompany: { id: 99, name: "Mattel" },
       updatedTo: { id: 99, name: "New Co" },
+    });
+  });
+
+  test("does not overwrite existing parentCompany fields", () => {
+    const local = {
+      parentCompany: { id: 1, name: "Keep Parent" },
+    };
+    const remote = {
+      parentCompany: { id: 2, name: "Replace Parent" },
+      legalName: "Legal Co",
+    };
+
+    const { info, changed } = mergeIgdbCompanyInfo(local, remote);
+
+    expect(changed).toBe(true);
+    expect(info).toEqual({
+      parentCompany: { id: 1, name: "Keep Parent" },
+      legalName: "Legal Co",
     });
   });
 
