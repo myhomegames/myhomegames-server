@@ -1,14 +1,13 @@
 const https = require("https");
 const { loadItems, findById } = require("./collectionsShared");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
-const { countryNameFromIso3166Numeric } = require("./iso3166NumericCountry");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
 
 const LOG_PREFIX = "[igdb-company]";
 const IGDB_COMPANY_FIELDS =
   "id,name,description,status.name,changed_company_id.id,changed_company_id.name,country,change_date,change_date_format,start_date,start_date_format,parent.id,parent.name,company_size.id,company_size.name,company_type_histories.company_type.name,company_type_histories.company.id,company_type_histories.company.name,company_type_histories.parent_company.id,company_type_histories.parent_company.name";
 
-const FORMERLY_PREDECESSOR_STATUSES = new Set(["renamed", "merged"]);
+const FORMERLY_PREDECESSOR_STATUSES = new Set(["renamed", "merged", "defunct"]);
 
 function log(message, extra) {
   if (extra !== undefined) {
@@ -37,7 +36,7 @@ function summarizeLocalInfo(info) {
   if (!info || typeof info !== "object") return null;
   return {
     status: info.status ?? null,
-    country: info.country ?? null,
+    countryCode: info.countryCode ?? null,
     changedOn: info.changedOn ?? null,
     started: info.started ?? null,
     knownAs: info.knownAs ?? null,
@@ -200,9 +199,12 @@ function mapIgdbCompanyToInfo(company) {
       name: company.changed_company_id.name,
     };
   }
-  const countryName = countryNameFromIso3166Numeric(company.country);
-  if (countryName) {
-    info.country = countryName;
+  if (company.country != null && company.country !== "") {
+    const countryCode =
+      typeof company.country === "number" ? company.country : parseInt(String(company.country), 10);
+    if (!Number.isNaN(countryCode)) {
+      info.countryCode = countryCode;
+    }
   }
   const changedOn = formatIGDBDateWithFormat(company.change_date, company.change_date_format);
   if (changedOn) {
@@ -484,7 +486,7 @@ function mergeIgdbCompanyInfo(local, remote) {
   const merged = local && typeof local === "object" ? { ...local } : {};
   let changed = false;
 
-  for (const key of ["status", "country", "changedOn", "started", "knownAs", "legalName", "companySize", "companySizeId"]) {
+  for (const key of ["status", "countryCode", "changedOn", "started", "knownAs", "legalName", "companySize", "companySizeId"]) {
     if (!isMissingLocalValue(remote[key]) && isMissingLocalValue(merged[key])) {
       merged[key] = remote[key];
       changed = true;

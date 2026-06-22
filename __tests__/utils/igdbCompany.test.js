@@ -21,7 +21,7 @@ describe("mapIgdbCompanyToInfo", () => {
     expect(info).toEqual({
       status: "Renamed",
       updatedTo: { id: 2, name: "3D Realms" },
-      country: "United States of America",
+      countryCode: 840,
       changedOn: "1996",
       started: "1980",
     });
@@ -135,7 +135,7 @@ describe("mapIgdbCompanyToInfo", () => {
 
     expect(info).toEqual({
       status: "active",
-      country: "Japan",
+      countryCode: 392,
       started: "1979-05-30",
       companySize: "1001-5000 employees",
       companySizeId: 7,
@@ -162,17 +162,25 @@ describe("pickRenamedPredecessorCompany", () => {
 
     expect(company).toEqual({ id: 41283, name: "Flagship" });
   });
+
+  test("returns defunct predecessors such as Purple Moon for Mattel", () => {
+    const company = pickRenamedPredecessorCompany([
+      { id: 19312, name: "Purple Moon", status: { name: "defunct" }, change_date: 917827200 },
+    ]);
+
+    expect(company).toEqual({ id: 19312, name: "Purple Moon" });
+  });
 });
 
 describe("mergeIgdbCompanyInfo", () => {
   test("fills only missing local fields from remote", () => {
     const local = {
       status: "Active",
-      country: "Japan",
+      countryCode: 392,
     };
     const remote = {
       status: "Defunct",
-      country: "United States of America",
+      countryCode: 840,
       changedOn: "2020",
       started: "1980",
       knownAs: "Capcom USA",
@@ -188,7 +196,7 @@ describe("mergeIgdbCompanyInfo", () => {
     expect(changed).toBe(true);
     expect(info).toEqual({
       status: "Active",
-      country: "Japan",
+      countryCode: 392,
       changedOn: "2020",
       started: "1980",
       knownAs: "Capcom USA",
