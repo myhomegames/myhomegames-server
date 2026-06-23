@@ -24,7 +24,7 @@ const {
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { mergeIgdbCompanyInfo } = require("../utils/igdbCompany");
+const { mergeIgdbCompanyInfo, normalizeStoredIgdbCompanyInfo } = require("../utils/igdbCompany");
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -454,7 +454,8 @@ function createCollectionLikeRoutes(config) {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
+      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs, igdbCompanyInfo } =
+        req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         saveItem(metadataPath, contentFolder, entry);
@@ -513,6 +514,22 @@ function createCollectionLikeRoutes(config) {
         saveItem(metadataPath, contentFolder, entry);
         updateCache();
       }
+      if (
+        (contentFolder === "developers" || contentFolder === "publishers") &&
+        Object.prototype.hasOwnProperty.call(req.body, "igdbCompanyInfo")
+      ) {
+        if (igdbCompanyInfo != null && typeof igdbCompanyInfo !== "object") {
+          return res.status(400).json({ error: "igdbCompanyInfo must be an object or null" });
+        }
+        const normalized = normalizeStoredIgdbCompanyInfo(igdbCompanyInfo);
+        if (normalized) {
+          entry.igdbCompanyInfo = normalized;
+        } else {
+          delete entry.igdbCompanyInfo;
+        }
+        saveItem(metadataPath, contentFolder, entry);
+        updateCache();
+      }
       const cover = getLocalMediaPath({
         metadataPath,
         resourceId: entry.id,
@@ -538,6 +555,9 @@ function createCollectionLikeRoutes(config) {
       });
       responsePayload.background = background || storedExternalBackgroundUrl(entry) || null;
       responsePayload.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
+      if (contentFolder === "developers" || contentFolder === "publishers") {
+        appendIgdbCompanyInfo(responsePayload, entry);
+      }
       res.json({
         status: "success",
         [singleResponseKey]: responsePayload,

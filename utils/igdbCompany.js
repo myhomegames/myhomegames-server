@@ -563,6 +563,107 @@ function mergeIgdbCompanyInfo(local, remote) {
   return { info, changed };
 }
 
+const IGDB_COMPANY_SIZE_NAMES = {
+  1: "0-1 employees",
+  2: "2-10 employees",
+  3: "11-50 employees",
+  4: "51-200 employees",
+  5: "201-500 employees",
+  6: "501-1000 employees",
+  7: "1001-5000 employees",
+  8: "5000+ employees",
+};
+
+const IGDB_COMPANY_STATUS_VALUES = new Set(["active", "defunct", "merge", "renamed"]);
+
+function normalizeOptionalString(value) {
+  if (value == null) return null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeCompanyReference(ref) {
+  if (ref == null) return null;
+  if (typeof ref !== "object") return null;
+  const name = normalizeOptionalString(ref.name);
+  if (!name) return null;
+  const idRaw = ref.id;
+  if (idRaw == null || idRaw === "") {
+    return { name };
+  }
+  const id = Number(idRaw);
+  if (Number.isNaN(id)) return { name };
+  return { id, name };
+}
+
+function normalizeCountryCode(value) {
+  if (value == null || value === "") return null;
+  const code = Number(value);
+  if (Number.isNaN(code) || code < 1) return null;
+  return code;
+}
+
+function normalizeCompanySizeId(value) {
+  if (value == null || value === "") return null;
+  const id = Number(value);
+  if (Number.isNaN(id) || !IGDB_COMPANY_SIZE_NAMES[id]) return null;
+  return id;
+}
+
+function normalizeCompanyStatus(value) {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) return null;
+  const key = trimmed.toLowerCase();
+  if (!IGDB_COMPANY_STATUS_VALUES.has(key)) return null;
+  if (key === "merge") return "Merge";
+  if (key === "renamed") return "Renamed";
+  if (key === "defunct") return "Defunct";
+  return "Active";
+}
+
+/** Normalize user-edited IGDB company metadata before persisting on developer/publisher items. */
+function normalizeStoredIgdbCompanyInfo(input) {
+  if (input == null) return null;
+  if (typeof input !== "object") return null;
+
+  const info = {};
+  const status = normalizeCompanyStatus(input.status);
+  if (status) info.status = status;
+
+  const countryCode = normalizeCountryCode(input.countryCode);
+  if (countryCode != null) info.countryCode = countryCode;
+
+  const started = normalizeOptionalString(input.started);
+  if (started) info.started = started;
+
+  const changedOn = normalizeOptionalString(input.changedOn);
+  if (changedOn) info.changedOn = changedOn;
+
+  const knownAs = normalizeOptionalString(input.knownAs);
+  if (knownAs) info.knownAs = knownAs;
+
+  const legalName = normalizeOptionalString(input.legalName);
+  if (legalName) info.legalName = legalName;
+
+  const companySizeId = normalizeCompanySizeId(input.companySizeId);
+  if (companySizeId != null) {
+    info.companySizeId = companySizeId;
+    info.companySize = IGDB_COMPANY_SIZE_NAMES[companySizeId];
+  }
+
+  const formerly = normalizeCompanyReference(input.formerly);
+  if (formerly) info.formerly = formerly;
+
+  const parentCompany = normalizeCompanyReference(input.parentCompany);
+  if (parentCompany) info.parentCompany = parentCompany;
+
+  const updatedTo = normalizeCompanyReference(input.updatedTo);
+  if (updatedTo) info.updatedTo = updatedTo;
+
+  return Object.keys(info).length > 0 ? info : null;
+}
+
 /** Fetch IGDB company info for new developer/publisher items during POST /igdb/import-game. */
 async function attachIgdbCompanyInfoForNewItems(metadataPath, contentFolder, items, req) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
@@ -608,6 +709,7 @@ module.exports = {
   pickCompanyByTitle,
   isMissingLocalValue,
   mergeIgdbCompanyInfo,
+  normalizeStoredIgdbCompanyInfo,
   resolveIgdbCompanyInfoForEntry,
   attachIgdbCompanyInfoForNewItems,
 };

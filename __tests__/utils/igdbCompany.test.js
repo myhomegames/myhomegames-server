@@ -2,6 +2,7 @@ const {
   mapIgdbCompanyToInfo,
   pickRenamedPredecessorCompany,
   mergeIgdbCompanyInfo,
+  normalizeStoredIgdbCompanyInfo,
   pickCompanyByTitle,
 } = require("../../utils/igdbCompany");
 
@@ -268,6 +269,42 @@ describe("mergeIgdbCompanyInfo", () => {
 
     expect(changed).toBe(false);
     expect(info).toEqual({ status: "Active" });
+  });
+});
+
+describe("normalizeStoredIgdbCompanyInfo", () => {
+  test("normalizes editable IGDB company fields", () => {
+    expect(
+      normalizeStoredIgdbCompanyInfo({
+        status: "merge",
+        countryCode: "392",
+        started: " 1983 ",
+        changedOn: "1996",
+        knownAs: "Capcom USA",
+        legalName: "Capcom U.S.A., Inc.",
+        companySizeId: 4,
+        formerly: { id: "13", name: "Mattel Media" },
+        parentCompany: { name: "Mattel" },
+        updatedTo: { id: 2, name: "3D Realms" },
+      })
+    ).toEqual({
+      status: "Merge",
+      countryCode: 392,
+      started: "1983",
+      changedOn: "1996",
+      knownAs: "Capcom USA",
+      legalName: "Capcom U.S.A., Inc.",
+      companySizeId: 4,
+      companySize: "51-200 employees",
+      formerly: { id: 13, name: "Mattel Media" },
+      parentCompany: { name: "Mattel" },
+      updatedTo: { id: 2, name: "3D Realms" },
+    });
+  });
+
+  test("returns null when all fields are empty", () => {
+    expect(normalizeStoredIgdbCompanyInfo({})).toBeNull();
+    expect(normalizeStoredIgdbCompanyInfo(null)).toBeNull();
   });
 });
 
