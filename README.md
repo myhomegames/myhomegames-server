@@ -84,6 +84,10 @@ MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich t
   - Used by tag cover endpoint (`/:tagId/cover.webp`) when no local `cover.webp` exists
   - Example: `https://myhomegames.vige.it` (without `/app`)
 - `API_BASE` - Base URL of the API server (public hostname when using Cloudflare Tunnel)
+- `CLOUDFLARE_TUNNEL_ENABLED` - Enable automatic `cloudflared` tunnel (see [DEVELOPMENT.md](DEVELOPMENT.md#cloudflare-tunnel-public-https-without-local-certificates))
+- `CLOUDFLARED_VERSION` - Pin Cloudflare CLI release (e.g. `2026.6.1`); unset = auto-update to latest on tunnel start
+- `CLOUDFLARED_SKIP_UPDATE` - Set to `true` to download the binary only when missing (skip version checks)
+- `CLOUDFLARED_BIN` - Optional path to an external `cloudflared` executable (advanced; default is `METADATA_PATH/bin/cloudflared`)
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
 - `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive on first startup when no skins are present (default: `plex-<version>.mhg-skin.zip` from the **latest** [myhomegames-skins](https://github.com/myhomegames/myhomegames-skins/releases) GitHub release)
 - `MHG_SKINS_GITHUB_REPO` (optional) - `owner/repo` for that lookup (default: `myhomegames/myhomegames-skins`)
@@ -112,6 +116,10 @@ The server expects the following directory structure under `METADATA_PATH`:
 ```
 ${METADATA_PATH}/
 ├── settings.json                    # Application settings (language, etc.)
+├── bin/
+│   └── cloudflared                  # Cloudflare tunnel CLI (downloaded/updated automatically)
+├── tokens/
+│   └── cloudflare-tunnel-run.json   # Per-user tunnel run token (when using Cloudflare Tunnel)
 ├── skins/                           # Web UI themes (zip-installed or manual)
 │   └── ${uuid}/                     # id folder name is the skin id
 │       ├── skin.json                # { "name", "web": { persistentLibraryShell, collectionsShortcutList, libraryPagesVerticalList, headerTitleFilter, disableAlphabetNavigator } }

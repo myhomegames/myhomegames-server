@@ -51,7 +51,16 @@ openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PA
 
 ## Cloudflare Tunnel (public HTTPS without local certificates)
 
-The server can start **cloudflared** automatically (npm package `cloudflared`) and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+The server can start **cloudflared** automatically and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+
+**Two different “versions”**
+
+| What | Example | Where |
+|------|---------|--------|
+| **npm wrapper** (`cloudflared` dependency in `package.json`) | `0.7.1` | Node API (`Tunnel`, `install`, …) |
+| **Cloudflare CLI binary** (downloaded at runtime) | `2026.6.1` | `METADATA_PATH/bin/cloudflared` |
+
+The npm package version is **not** the tunnel release. The executable is fetched from [Cloudflare releases](https://github.com/cloudflare/cloudflared/releases).
 
 **Prerequisites**
 
@@ -69,7 +78,42 @@ HTTP_PORT=4000
 
 The run token is **not** in `.env`. On startup the web app fetches a per-user token from the tunnel manager (Cloudflare Access) and `POST`s it to `http://localhost:4000/tunnel/connect`, or reconnects with stored credentials via `POST /tunnel/reconnect`. The server stores the run token under `METADATA_PATH/tokens/cloudflare-tunnel-run.json` and starts `cloudflared` on boot when present.
 
-On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+**Binary install and updates**
+
+When the tunnel starts, `ensureCloudflaredBinary` (`utils/cloudflaredBinary.js`):
+
+1. Ensures `METADATA_PATH/bin/cloudflared` exists (creates the directory if needed).
+2. Copies a **newer** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir).
+3. Downloads or updates the Cloudflare CLI:
+   - **Missing binary** → downloads `latest` from GitHub.
+   - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
+   - **Already up to date** → no download.
+
+To pin or disable auto-update:
+
+```env
+# Optional — pin a specific Cloudflare release (e.g. 2026.6.1)
+# CLOUDFLARED_VERSION=2026.6.1
+
+# Optional — only download when the binary is missing (legacy behaviour)
+# CLOUDFLARED_SKIP_UPDATE=true
+
+# Optional — use an external executable instead of metadata/bin (advanced)
+# CLOUDFLARED_BIN=/opt/homebrew/bin/cloudflared
+```
+
+Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+
+**Manual binary refresh (development)**
+
+After `npm install`, the wrapper may place a copy under `node_modules/cloudflared/bin/`. To refresh it to the latest Cloudflare release:
+
+```bash
+node node_modules/cloudflared/lib/cloudflared.js bin install latest
+node_modules/cloudflared/bin/cloudflared --version
+```
+
+Packaged builds (`npm run build`) also copy that binary into the app bundle for offline first run.
 
 **Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
