@@ -11,47 +11,12 @@ const CATALOG_COMPANY_API_FIELDS =
 
 const FORMERLY_PREDECESSOR_STATUSES = new Set(["renamed", "merged", "defunct"]);
 
-function log(message, extra) {
-  if (extra !== undefined) {
-    console.log(`${LOG_PREFIX} ${message}`, extra);
-  } else {
-    console.log(`${LOG_PREFIX} ${message}`);
-  }
-}
-
 function logWarn(message, extra) {
   if (extra !== undefined) {
     console.warn(`${LOG_PREFIX} ${message}`, extra);
   } else {
     console.warn(`${LOG_PREFIX} ${message}`);
   }
-}
-
-function maskClientId(clientId) {
-  const id = String(clientId || "").trim();
-  if (!id) return "(empty)";
-  if (id.length <= 6) return "***";
-  return `***${id.slice(-4)}`;
-}
-
-function summarizeLocalInfo(info) {
-  if (!info || typeof info !== "object") return null;
-  return {
-    status: info.status ?? null,
-    countryCode: info.countryCode ?? null,
-    changedOn: info.changedOn ?? null,
-    started: info.started ?? null,
-    knownAs: info.knownAs ?? null,
-    legalName: info.legalName ?? null,
-    companySize: info.companySize ?? null,
-    companySizeId: info.companySizeId ?? null,
-    formerlyId: info.formerly?.id ?? null,
-    formerlyName: info.formerly?.name ?? null,
-    parentCompanyId: info.parentCompany?.id ?? null,
-    parentCompanyName: info.parentCompany?.name ?? null,
-    updatedToId: info.updatedTo?.id ?? null,
-    updatedToName: info.updatedTo?.name ?? null,
-  };
 }
 
 function normalizeCompanyTypeName(name) {
@@ -220,7 +185,6 @@ async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessTok
     async (companies) => {
       const company = companies.length > 0 ? companies[0] : null;
       if (!company) {
-        log(`IGDB storage-patch ${companyId}: no company returned`);
         return null;
       }
 
@@ -366,8 +330,6 @@ function mapCatalogCompanyToInfo(company) {
 }
 
 function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
-  log(`IGDB request (${context})`, { clientId: maskClientId(clientId), query: postData.trim() });
-
   const options = {
     hostname: "api.igdb.com",
     path,
@@ -398,7 +360,6 @@ function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
           }
           const parsed = JSON.parse(data);
           const rows = Array.isArray(parsed) ? parsed : [];
-          log(`IGDB response (${context})`, { count: rows.length });
           resolve(rows);
         } catch (e) {
           logWarn(`IGDB parse error (${context})`, e.message);
@@ -416,13 +377,7 @@ function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
 }
 
 function runCatalogCompaniesQuery(postData, accessToken, clientId, context) {
-  return runIgdbApiQuery("/v4/companies", postData, accessToken, clientId, context).then((companies) => {
-    log(`IGDB companies (${context})`, {
-      ids: companies.map((c) => c.id),
-      names: companies.map((c) => c.name),
-    });
-    return companies;
-  });
+  return runIgdbApiQuery("/v4/companies", postData, accessToken, clientId, context);
 }
 
 function fetchCompanyTypeHistoriesForCompany(companyId, accessToken, clientId) {
@@ -510,7 +465,6 @@ function fetchRemoteCompanyProfile(companyId, accessToken, clientId) {
   return runCatalogCompaniesQuery(postData, accessToken, clientId, `by-id:${companyId}`).then(async (companies) => {
     const company = companies.length > 0 ? companies[0] : null;
     if (!company) {
-      log(`IGDB by-id ${companyId}: no company returned`);
       return null;
     }
     const info = await enrichCompanyProfile(company, accessToken, clientId);
@@ -551,14 +505,11 @@ async function resolveCompanyProfileForEntry(entry, accessToken, clientId) {
   const title = entry && typeof entry.title === "string" ? entry.title.trim() : "";
 
   if (!Number.isNaN(id) && id >= 1) {
-    log(`lookup by id=${id} title="${title}"`);
     try {
       const byId = await fetchRemoteCompanyProfile(id, accessToken, clientId);
       if (byId) {
-        log(`lookup by id=${id}: success`, summarizeLocalInfo(byId));
         return byId;
       }
-      log(`lookup by id=${id}: no usable data, trying name search`);
     } catch (err) {
       logWarn(`lookup by id=${id} failed`, err instanceof Error ? err.message : err);
     }
@@ -585,7 +536,6 @@ async function resolveCompanyProfileForEntry(entry, accessToken, clientId) {
       logWarn(`lookup by name "${title}": match id=${match.id} but no display fields`);
       return null;
     }
-    log(`lookup by name "${title}": success (catalog id=${match.id})`, summarizeLocalInfo(info));
     return info;
   } catch (err) {
     logWarn(`lookup by name "${title}" failed`, err instanceof Error ? err.message : err);
@@ -823,7 +773,6 @@ async function attachCompanyProfileForNewItems(metadataPath, contentFolder, item
       const info = await fetchRemoteCompanyProfile(id, accessToken, creds.clientId);
       if (info && typeof item === "object" && item) {
         attachFetchedCompanyProfileFields(item, info);
-        log(`attach ${contentFolder}/${id}`, summarizeLocalInfo(info));
       }
     } catch (err) {
       logWarn(`attach failed ${contentFolder}/${id}`, err instanceof Error ? err.message : err);
