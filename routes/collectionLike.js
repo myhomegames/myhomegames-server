@@ -25,6 +25,19 @@ const {
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
 const { mergeIgdbCompanyInfo, normalizeStoredIgdbCompanyInfo } = require("../utils/igdbCompany");
+const {
+  isCompanyRoleFolder,
+  loadRoleItems,
+  loadRoleItemById,
+  saveRoleItem,
+  deleteRoleItem,
+  ensureCompanyRoleEntry,
+  hasLocalCompanyCover,
+  getCompanyContentDir,
+  removeGameFromAllRoleItems,
+  addChildToRoleItem,
+  removeChildFromRoleItem,
+} = require("../utils/companyStorage");
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -55,6 +68,46 @@ function createCollectionLikeRoutes(config) {
   } = config;
 
   const normalizedRouteBase = routeBase.startsWith("/") ? routeBase : `/${routeBase}`;
+  const useCompanyStorage = isCompanyRoleFolder(contentFolder);
+
+  function storageLoadItems(metadataPathArg) {
+    return useCompanyStorage
+      ? loadRoleItems(metadataPathArg, contentFolder)
+      : loadItems(metadataPathArg, contentFolder);
+  }
+
+  function storageLoadItemById(metadataPathArg, id) {
+    return useCompanyStorage
+      ? loadRoleItemById(metadataPathArg, contentFolder, id)
+      : loadItemById(metadataPathArg, contentFolder, id);
+  }
+
+  function storageSaveItem(metadataPathArg, entry) {
+    if (useCompanyStorage) {
+      saveRoleItem(metadataPathArg, contentFolder, entry);
+      return;
+    }
+    saveItem(metadataPathArg, contentFolder, entry);
+  }
+
+  function storageDeleteItem(metadataPathArg, itemId) {
+    if (useCompanyStorage) {
+      deleteRoleItem(metadataPathArg, contentFolder, itemId);
+      return;
+    }
+    deleteItem(metadataPathArg, contentFolder, itemId);
+  }
+
+  function getItemContentDir(metadataPathArg, itemId) {
+    if (useCompanyStorage) {
+      return getCompanyContentDir(metadataPathArg, itemId);
+    }
+    return path.join(metadataPathArg, "content", contentFolder, String(itemId));
+  }
+
+  function getMediaResourceType() {
+    return useCompanyStorage ? "companies" : contentFolder;
+  }
 
   function getIdFromTitle(title) {
     let hash = 0;
@@ -69,7 +122,7 @@ function createCollectionLikeRoutes(config) {
 
   function ensureBatch(metadataPath, items, gameId) {
     if (!items || !Array.isArray(items) || items.length === 0) return;
-    const list = loadItems(metadataPath, contentFolder);
+    const list = storageLoadItems(metadataPath);
     const byId = new Map(list.map((d) => [d.id, d]));
 
     for (const item of items) {
@@ -98,48 +151,56 @@ function createCollectionLikeRoutes(config) {
           externalCoverUrl: logo || null,
           ...(igdbCompanyInfo ? { igdbCompanyInfo } : {}),
         };
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         byId.set(numId, entry);
       }
       if (gameId && (!entry.games || !entry.games.includes(gameId))) {
         entry.games = entry.games || [];
         entry.games.push(gameId);
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
       }
     }
   }
 
   function removeGameFrom(metadataPath, resourceId, gameId) {
-    const list = loadItems(metadataPath, contentFolder);
+    const list = storageLoadItems(metadataPath);
     const entry = list.find((d) => Number(d.id) === Number(resourceId));
     if (!entry || !entry.games) return;
     const idx = entry.games.findIndex((g) => Number(g) === Number(gameId));
     if (idx !== -1) {
       entry.games.splice(idx, 1);
-      saveItem(metadataPath, contentFolder, entry);
+      storageSaveItem(metadataPath, entry);
     }
   }
 
   function removeGameFromAllFunc(metadataPath, gameId, updateCacheCallback, cache) {
+    if (useCompanyStorage) {
+      return removeGameFromAllRoleItems(metadataPath, contentFolder, gameId, updateCacheCallback, cache);
+    }
     return removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallback, cache);
   }
 
   /** Delete item if it has no games left and no local cover (so orphaned and no custom cover). */
   function deleteItemIfUnused(metadataPath, itemId) {
-    const list = loadItems(metadataPath, contentFolder);
+    const list = storageLoadItems(metadataPath);
     const entry = findById(list, itemId);
     if (!entry) return;
     const games = entry.games || [];
     if (games.length > 0) return;
+    if (useCompanyStorage) {
+      if (hasLocalCompanyCover(metadataPath, itemId)) return;
+      deleteRoleItem(metadataPath, contentFolder, itemId);
+      return;
+    }
     const coverPath = path.join(metadataPath, "content", contentFolder, String(itemId), "cover.webp");
     if (fs.existsSync(coverPath)) return;
-    deleteItem(metadataPath, contentFolder, itemId);
+    storageDeleteItem(metadataPath, itemId);
   }
 
   function registerRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames, removeFromAllGamesFn) {
-    let cache = loadItems(metadataPath, contentFolder);
+    let cache = storageLoadItems(metadataPath);
     const updateCache = () => {
-      cache = loadItems(metadataPath, contentFolder);
+      cache = storageLoadItems(metadataPath);
     };
 
     function buildDetailPayload(entry) {
@@ -184,9 +245,17 @@ function createCollectionLikeRoutes(config) {
 
     const upload = multer({ storage: multer.memoryStorage() });
 
+    function resolveMediaFilePath(itemId, mediaType) {
+      if (useCompanyStorage) {
+        const companyPath = path.join(getCompanyContentDir(metadataPath, itemId), `${mediaType}.webp`);
+        if (fs.existsSync(companyPath)) return companyPath;
+      }
+      return path.join(metadataPath, "content", contentFolder, String(itemId), `${mediaType}.webp`);
+    }
+
     app.get(`/${coverPrefix}/:resourceId`, (req, res) => {
       const id = req.params.resourceId;
-      const coverPath = path.join(metadataPath, "content", contentFolder, String(id), "cover.webp");
+      const coverPath = resolveMediaFilePath(id, "cover");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET");
       if (!fs.existsSync(coverPath)) {
@@ -199,7 +268,7 @@ function createCollectionLikeRoutes(config) {
 
     app.get(`/${backgroundPrefix}/:resourceId`, (req, res) => {
       const id = req.params.resourceId;
-      const backgroundPath = path.join(metadataPath, "content", contentFolder, String(id), "background.webp");
+      const backgroundPath = resolveMediaFilePath(id, "background");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET");
       if (!fs.existsSync(backgroundPath)) {
@@ -217,7 +286,7 @@ function createCollectionLikeRoutes(config) {
       }
       const trimmedTitle = title.trim();
       updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
       const existing = list.find((c) => String(c.title).toLowerCase() === trimmedTitle.toLowerCase());
       if (existing) {
         return res.status(409).json({
@@ -251,7 +320,7 @@ function createCollectionLikeRoutes(config) {
         childs: [],
       };
       try {
-        saveItem(metadataPath, contentFolder, newItem);
+        storageSaveItem(metadataPath, newItem);
         updateCache();
       } catch (e) {
         console.error(`Failed to save ${humanName}:`, e.message);
@@ -287,7 +356,7 @@ function createCollectionLikeRoutes(config) {
 
     app.get(normalizedRouteBase, requireToken, (req, res) => {
       updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
       res.json({
         [listResponseKey]: list.map((d) => {
           const gameIds = d.games || [];
@@ -324,12 +393,20 @@ function createCollectionLikeRoutes(config) {
 
     app.get(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
-      let entry = findById(list, id);
-      if (!entry) {
-        updateCache();
-        list = cache;
+      let entry;
+      if (useCompanyStorage) {
+        entry = storageLoadItemById(metadataPath, id);
+        if (entry) {
+          upsertCacheEntry(entry);
+        }
+      } else {
+        let list = cache.length ? cache : storageLoadItems(metadataPath);
         entry = findById(list, id);
+        if (!entry) {
+          updateCache();
+          list = cache;
+          entry = findById(list, id);
+        }
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       res.json(buildDetailPayload(entry));
@@ -338,7 +415,7 @@ function createCollectionLikeRoutes(config) {
     app.post(`${normalizedRouteBase}/:id/reload`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       try {
-        const entry = loadItemById(metadataPath, contentFolder, id);
+        const entry = storageLoadItemById(metadataPath, id);
         if (!entry) {
           const idx = findIndexById(cache, id);
           if (idx !== -1) cache.splice(idx, 1);
@@ -361,7 +438,7 @@ function createCollectionLikeRoutes(config) {
         }
 
         try {
-          const entry = loadItemById(metadataPath, contentFolder, id);
+          const entry = storageLoadItemById(metadataPath, id);
           if (!entry) {
             return res.status(404).json({ error: `${humanName} not found` });
           }
@@ -369,7 +446,7 @@ function createCollectionLikeRoutes(config) {
           const { info, changed } = mergeIgdbCompanyInfo(entry.igdbCompanyInfo, remote);
           if (changed) {
             entry.igdbCompanyInfo = info;
-            saveItem(metadataPath, contentFolder, entry);
+            storageSaveItem(metadataPath, entry);
             upsertCacheEntry(entry);
           }
 
@@ -386,7 +463,7 @@ function createCollectionLikeRoutes(config) {
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      let list = cache.length ? cache : storageLoadItems(metadataPath);
       let entry = findById(list, id);
       if (!entry) {
         updateCache();
@@ -434,14 +511,14 @@ function createCollectionLikeRoutes(config) {
         return res.status(400).json({ error: "gameIds must be an array" });
       }
       updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
       const entry = findById(list, id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const currentGameIds = entry.games || [];
       const finalGameIds = computeFinalGameIdsForOrder(currentGameIds, gameIds, allGames);
       entry.games = finalGameIds;
       try {
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
         res.json({ status: "success" });
       } catch (e) {
@@ -452,23 +529,23 @@ function createCollectionLikeRoutes(config) {
 
     app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs, igdbCompanyInfo } =
         req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (summary !== undefined) {
         entry.summary = typeof summary === "string" ? summary.trim() : "";
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (showTitle !== undefined) {
         entry.showTitle = showTitle !== false;
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (externalCoverUrl !== undefined) {
@@ -480,7 +557,7 @@ function createCollectionLikeRoutes(config) {
           const t = externalCoverUrl.trim();
           entry.externalCoverUrl = t.length > 0 ? t : null;
         }
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (externalBackgroundUrl !== undefined) {
@@ -492,7 +569,7 @@ function createCollectionLikeRoutes(config) {
           const t = externalBackgroundUrl.trim();
           entry.externalBackgroundUrl = t.length > 0 ? t : null;
         }
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (childs !== undefined) {
@@ -511,7 +588,7 @@ function createCollectionLikeRoutes(config) {
           normalizedChilds.push(id);
         }
         entry.childs = normalizedChilds;
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (
@@ -527,7 +604,7 @@ function createCollectionLikeRoutes(config) {
         } else {
           delete entry.igdbCompanyInfo;
         }
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       const cover = getLocalMediaPath({
@@ -566,13 +643,13 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const idx = findIndexById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const idx = findIndexById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (idx === -1) return res.status(404).json({ error: `${humanName} not found` });
       const entry = cache[idx];
       if (removeFromAllGamesFn) {
         removeFromAllGamesFn(metadataPath, metadataGamesDir, id, allGames);
       }
-      deleteItem(metadataPath, contentFolder, id);
+      storageDeleteItem(metadataPath, id);
       cache.splice(idx, 1);
       res.json({ status: "success" });
     });
@@ -580,7 +657,9 @@ function createCollectionLikeRoutes(config) {
     app.post(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       const childId = normalizeId(req.params.childId);
-      const added = addChildToItem(metadataPath, contentFolder, id, childId);
+      const added = useCompanyStorage
+        ? addChildToRoleItem(metadataPath, contentFolder, id, childId)
+        : addChildToItem(metadataPath, contentFolder, id, childId);
       if (!added) {
         return res.status(404).json({ error: `${humanName} parent or child not found, or child already linked` });
       }
@@ -591,7 +670,9 @@ function createCollectionLikeRoutes(config) {
     app.delete(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       const childId = normalizeId(req.params.childId);
-      const removed = removeChildFromItem(metadataPath, contentFolder, id, childId);
+      const removed = useCompanyStorage
+        ? removeChildFromRoleItem(metadataPath, contentFolder, id, childId)
+        : removeChildFromItem(metadataPath, contentFolder, id, childId);
       if (!removed) {
         return res.status(404).json({ error: `${humanName} parent or child link not found` });
       }
@@ -601,13 +682,13 @@ function createCollectionLikeRoutes(config) {
 
     app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const file = req.file;
       if (!file || !file.mimetype.startsWith("image/")) {
         return res.status(400).json({ error: "No image file provided" });
       }
-      const dir = path.join(metadataPath, "content", contentFolder, String(id));
+      const dir = getItemContentDir(metadataPath, id);
       ensureDirectoryExists(dir);
       fs.writeFileSync(path.join(dir, "cover.webp"), file.buffer);
       updateCache();
@@ -630,7 +711,7 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id/delete-cover`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       try {
         deleteMediaFile({
@@ -665,13 +746,13 @@ function createCollectionLikeRoutes(config) {
 
     app.post(`${normalizedRouteBase}/:id/upload-background`, requireToken, upload.single("file"), (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const file = req.file;
       if (!file || !file.mimetype.startsWith("image/")) {
         return res.status(400).json({ error: "No image file provided" });
       }
-      const dir = path.join(metadataPath, "content", contentFolder, String(id));
+      const dir = getItemContentDir(metadataPath, id);
       ensureDirectoryExists(dir);
       fs.writeFileSync(path.join(dir, "background.webp"), file.buffer);
       updateCache();
@@ -694,7 +775,7 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id/delete-background`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       try {
         deleteMediaFile({
@@ -729,7 +810,7 @@ function createCollectionLikeRoutes(config) {
 
     return {
       reload: () => {
-        cache = loadItems(metadataPath, contentFolder);
+        cache = storageLoadItems(metadataPath);
         return cache;
       },
       getCache: () => cache,
@@ -738,7 +819,7 @@ function createCollectionLikeRoutes(config) {
   }
 
   return {
-    loadItems: (p) => loadItems(p, contentFolder),
+    loadItems: (p) => storageLoadItems(p),
     ensureBatch,
     removeGameFrom,
     removeGameFromAll: removeGameFromAllFunc,

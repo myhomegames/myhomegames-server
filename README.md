@@ -141,6 +141,17 @@ ${METADATA_PATH}/
     │   └── ${categoryId}/          # Per-category content directories (numeric ID)
     │       ├── metadata.json       # Category metadata with title field
     │       └── cover.webp          # Category cover image (optional)
+    ├── companies/
+    │   └── ${companyId}/           # Shared IGDB company profile (developers & publishers)
+    │       ├── metadata.json       # title, summary, childs, igdbCompanyInfo, external URLs, …
+    │       ├── cover.webp          # Company cover image (optional)
+    │       └── background.webp     # Company background image (optional)
+    ├── developers/
+    │   └── ${companyId}/           # Developer role link for a company
+    │       └── metadata.json       # { "games": [ … ] } only
+    ├── publishers/
+    │   └── ${companyId}/           # Publisher role link for a company
+    │       └── metadata.json       # { "games": [ … ] } only
     └── recommended/
         └── ${sectionId}/           # Per-section content directories
             └── metadata.json       # Section metadata with games array (without id field)
@@ -154,6 +165,7 @@ All JSON files and settings are stored outside the codebase in the metadata path
 - **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name). Optional fallback image URLs when no local `cover.webp` / `background.webp` exist: `externalCoverUrl`, `externalBackgroundUrl`. Executable scripts are stored in **`content/games/${gameId}/scripts/`** as `.sh` or `.bat` files. Script order is defined by a numeric prefix in the filename: `01-label.sh`, `02-another-1.sh` (the number followed by a hyphen; the optional `-1` is the platform id).
 - **`content/collections/${collectionId}/metadata.json`**: Collection metadata files. Each collection has its own folder with a metadata.json file containing collection properties like `title`, `summary`, `games` array, etc. (the `id` field is derived from the folder name).
 - **`content/categories/${categoryId}/metadata.json`**: Category metadata files. Each category has its own folder (named with a numeric ID derived from the title) with a metadata.json file containing a `title` field.
+- **`content/companies/${companyId}/metadata.json`**: Shared company profile (title, summary, IGDB metadata, hierarchy). Developer and publisher lists store only `{ "games": [...] }` under `content/developers/` and `content/publishers/` with the same numeric IGDB company id.
 - **`content/recommended/${sectionId}/metadata.json`**: Recommended section metadata files. Each section has its own folder with a metadata.json file containing a `games` array (the `id` field is derived from the folder name).
 - **`skins/${uuid}/`**: Optional web UI skins. Installed via the web app (Settings) as a zip, or placed manually. Uploading a zip whose resolved display name matches an existing skin’s `skin.json` **name** replaces that folder in place (same UUID, so the active theme stays valid). See **`SKINS.md`** in the **myhomegames-skins** repository for archive format and API.
 

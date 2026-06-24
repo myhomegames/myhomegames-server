@@ -391,6 +391,7 @@ module.exports = {
   saveItem,
   deleteItem,
   normalizeId,
+  normalizeChildIds,
   findById,
   findIndexById,
   removeGameFromAll,
