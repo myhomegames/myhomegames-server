@@ -3,10 +3,10 @@ const { loadItems, findById } = require("./collectionsShared");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
 const { attachFetchedCompanyProfileFields, pickCompanyProfileFields } = require("./companyProfileFields");
-const { syncIgdbParentCompanyChildLink } = require("./companyStorage");
+const { syncParentCompanyChildLink } = require("./companyStorage");
 
-const LOG_PREFIX = "[igdb-company]";
-const IGDB_COMPANY_FIELDS =
+const LOG_PREFIX = "[catalog-company]";
+const CATALOG_COMPANY_API_FIELDS =
   "id,name,description,logo.image_id,status.name,changed_company_id.id,changed_company_id.name,country,change_date,change_date_format,start_date,start_date_format,parent.id,parent.name,company_size.id,company_size.name,company_type_histories.company_type.name,company_type_histories.company.id,company_type_histories.company.name,company_type_histories.parent_company.id,company_type_histories.parent_company.name";
 
 const FORMERLY_PREDECESSOR_STATUSES = new Set(["renamed", "merged", "defunct"]);
@@ -64,7 +64,7 @@ function companyReferenceName(reference) {
   return reference && typeof reference.name === "string" ? reference.name.trim() : "";
 }
 
-const IGDB_COMPANY_TYPE_HISTORY_FIELDS =
+const CATALOG_COMPANY_TYPE_HISTORY_FIELDS =
   "company_type.name,company.id,company.name,parent_company.id,parent_company.name";
 
 function companyTypeHistoryCompanyRef(history, mainCompanyId, typeName) {
@@ -192,18 +192,18 @@ function companyDisplayName(company) {
   return company && typeof company.name === "string" ? company.name.trim() : "";
 }
 
-function igdbCompanyLogoUrl(company) {
+function catalogCompanyLogoUrl(company) {
   const imageId = company && company.logo && company.logo.image_id;
   if (!imageId) return null;
   return `https://images.igdb.com/igdb/image/upload/t_1080p/${imageId}.png`;
 }
 
-function mapIgdbCompanyToStoragePatch(company, profileInfo) {
+function mapCatalogCompanyStoragePatch(company, profileInfo) {
   if (!company || company.id == null) return null;
 
   const title = companyDisplayName(company);
   const summary = typeof company.description === "string" ? company.description.trim() : "";
-  const externalCoverUrl = igdbCompanyLogoUrl(company);
+  const externalCoverUrl = catalogCompanyLogoUrl(company);
   const patch = {
     ...(title ? { title } : {}),
     ...(summary ? { summary } : {}),
@@ -215,8 +215,8 @@ function mapIgdbCompanyToStoragePatch(company, profileInfo) {
 }
 
 async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessToken, clientId) {
-  const postData = `fields ${IGDB_COMPANY_FIELDS}; where id = ${companyId};`;
-  return runIgdbCompaniesQuery(postData, accessToken, clientId, `storage-patch:${companyId}`).then(
+  const postData = `fields ${CATALOG_COMPANY_API_FIELDS}; where id = ${companyId};`;
+  return runCatalogCompaniesQuery(postData, accessToken, clientId, `storage-patch:${companyId}`).then(
     async (companies) => {
       const company = companies.length > 0 ? companies[0] : null;
       if (!company) {
@@ -226,7 +226,7 @@ async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessTok
 
       const profileInfo = await enrichCompanyProfile(company, accessToken, clientId);
       const normalizedProfile = profileInfo ? normalizeStoredCompanyProfile(profileInfo) : null;
-      const patch = mapIgdbCompanyToStoragePatch(company, normalizedProfile);
+      const patch = mapCatalogCompanyStoragePatch(company, normalizedProfile);
       if (!patch && fallbackName) {
         return { title: fallbackName };
       }
@@ -238,7 +238,7 @@ async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessTok
   );
 }
 
-async function syncIgdbParentCompanyChildLinkWithIgdb(
+async function syncParentCompanyChildLinkFromCatalog(
   metadataPath,
   roleFolder,
   childEntry,
@@ -266,12 +266,12 @@ async function syncIgdbParentCompanyChildLinkWithIgdb(
     );
   }
 
-  return syncIgdbParentCompanyChildLink(metadataPath, roleFolder, childEntry, {
+  return syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, {
     parentProfilePatch: parentProfilePatch || { title: parentName },
   });
 }
 
-async function ensureIgdbParentCompanyLinksForItems(metadataPath, roleFolder, items, req) {
+async function ensureParentCompanyLinksForItems(metadataPath, roleFolder, items, req) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
 
   const creds = resolveTwitchAppCredentials(req);
@@ -300,7 +300,7 @@ async function ensureIgdbParentCompanyLinksForItems(metadataPath, roleFolder, it
     if (!childEntry || !pickCompanyProfileFields(childEntry).parentCompany) continue;
 
     try {
-      await syncIgdbParentCompanyChildLinkWithIgdb(
+      await syncParentCompanyChildLinkFromCatalog(
         metadataPath,
         roleFolder,
         childEntry,
@@ -309,12 +309,12 @@ async function ensureIgdbParentCompanyLinksForItems(metadataPath, roleFolder, it
       );
     } catch (err) {
       logWarn(`parent link failed ${roleFolder}/${id}`, err instanceof Error ? err.message : err);
-      syncIgdbParentCompanyChildLink(metadataPath, roleFolder, childEntry);
+      syncParentCompanyChildLink(metadataPath, roleFolder, childEntry);
     }
   }
 }
 
-function mapIgdbCompanyToInfo(company) {
+function mapCatalogCompanyToInfo(company) {
   if (!company || company.id == null) return null;
 
   const info = {};
@@ -415,7 +415,7 @@ function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
   });
 }
 
-function runIgdbCompaniesQuery(postData, accessToken, clientId, context) {
+function runCatalogCompaniesQuery(postData, accessToken, clientId, context) {
   return runIgdbApiQuery("/v4/companies", postData, accessToken, clientId, context).then((companies) => {
     log(`IGDB companies (${context})`, {
       ids: companies.map((c) => c.id),
@@ -426,7 +426,7 @@ function runIgdbCompaniesQuery(postData, accessToken, clientId, context) {
 }
 
 function fetchCompanyTypeHistoriesForCompany(companyId, accessToken, clientId) {
-  const postData = `fields ${IGDB_COMPANY_TYPE_HISTORY_FIELDS}; where company = ${companyId}; limit 50;`;
+  const postData = `fields ${CATALOG_COMPANY_TYPE_HISTORY_FIELDS}; where company = ${companyId}; limit 50;`;
   return runIgdbApiQuery(
     "/v4/company_type_histories",
     postData,
@@ -455,7 +455,7 @@ function pickRenamedPredecessorCompany(predecessors) {
 
 function fetchRenamedPredecessorCompany(successorCompanyId, accessToken, clientId) {
   const postData = `fields id,name,status.name,change_date; where changed_company_id = ${successorCompanyId}; sort change_date desc; limit 20;`;
-  return runIgdbCompaniesQuery(postData, accessToken, clientId, `renamed-of:${successorCompanyId}`).then(
+  return runCatalogCompaniesQuery(postData, accessToken, clientId, `renamed-of:${successorCompanyId}`).then(
     pickRenamedPredecessorCompany
   );
 }
@@ -476,7 +476,7 @@ function applyFormerlyFallback(info, formerlyCompany) {
 async function enrichCompanyProfile(company, accessToken, clientId) {
   if (!company || company.id == null) return null;
 
-  let info = mapIgdbCompanyToInfo(company);
+  let info = mapCatalogCompanyToInfo(company);
 
   if (needsCompanyTypeHistoryEnrichment(info)) {
     try {
@@ -506,8 +506,8 @@ async function enrichCompanyProfile(company, accessToken, clientId) {
 }
 
 function fetchRemoteCompanyProfile(companyId, accessToken, clientId) {
-  const postData = `fields ${IGDB_COMPANY_FIELDS}; where id = ${companyId};`;
-  return runIgdbCompaniesQuery(postData, accessToken, clientId, `by-id:${companyId}`).then(async (companies) => {
+  const postData = `fields ${CATALOG_COMPANY_API_FIELDS}; where id = ${companyId};`;
+  return runCatalogCompaniesQuery(postData, accessToken, clientId, `by-id:${companyId}`).then(async (companies) => {
     const company = companies.length > 0 ? companies[0] : null;
     if (!company) {
       log(`IGDB by-id ${companyId}: no company returned`);
@@ -516,7 +516,7 @@ function fetchRemoteCompanyProfile(companyId, accessToken, clientId) {
     const info = await enrichCompanyProfile(company, accessToken, clientId);
     if (!info) {
       logWarn(`IGDB by-id ${companyId}: company found but no display fields`, {
-        igdbName: company.name ?? null,
+        catalogName: company.name ?? null,
         rawStatus: company.status?.name ?? null,
         rawCountry: company.country ?? null,
       });
@@ -538,12 +538,12 @@ function pickCompanyByTitle(companies, title) {
   return companies.find((company) => normalizeCompanyName(company.name) === key) || null;
 }
 
-function searchIgdbCompaniesByName(name, accessToken, clientId, limit = 10) {
+function searchCatalogCompaniesByName(name, accessToken, clientId, limit = 10) {
   const trimmed = String(name || "").trim();
   if (!trimmed) return Promise.resolve([]);
   const escapedName = trimmed.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const postData = `fields ${IGDB_COMPANY_FIELDS}; search "${escapedName}"; limit ${limit};`;
-  return runIgdbCompaniesQuery(postData, accessToken, clientId, `by-name:"${trimmed}"`);
+  const postData = `fields ${CATALOG_COMPANY_API_FIELDS}; search "${escapedName}"; limit ${limit};`;
+  return runCatalogCompaniesQuery(postData, accessToken, clientId, `by-name:"${trimmed}"`);
 }
 
 async function resolveCompanyProfileForEntry(entry, accessToken, clientId) {
@@ -572,7 +572,7 @@ async function resolveCompanyProfileForEntry(entry, accessToken, clientId) {
   }
 
   try {
-    const candidates = await searchIgdbCompaniesByName(title, accessToken, clientId);
+    const candidates = await searchCatalogCompaniesByName(title, accessToken, clientId);
     const match = pickCompanyByTitle(candidates, title);
     if (!match) {
       logWarn(`lookup by name "${title}": no exact match`, {
@@ -585,7 +585,7 @@ async function resolveCompanyProfileForEntry(entry, accessToken, clientId) {
       logWarn(`lookup by name "${title}": match id=${match.id} but no display fields`);
       return null;
     }
-    log(`lookup by name "${title}": success (igdb id=${match.id})`, summarizeLocalInfo(info));
+    log(`lookup by name "${title}": success (catalog id=${match.id})`, summarizeLocalInfo(info));
     return info;
   } catch (err) {
     logWarn(`lookup by name "${title}" failed`, err instanceof Error ? err.message : err);
@@ -692,7 +692,7 @@ function mergeCompanyProfile(local, remote) {
   return { info, changed };
 }
 
-const IGDB_COMPANY_SIZE_NAMES = {
+const CATALOG_COMPANY_SIZE_NAMES = {
   1: "0-1 employees",
   2: "2-10 employees",
   3: "11-50 employees",
@@ -703,7 +703,7 @@ const IGDB_COMPANY_SIZE_NAMES = {
   8: "5000+ employees",
 };
 
-const IGDB_COMPANY_STATUS_VALUES = new Set(["active", "defunct", "merge", "merged", "renamed"]);
+const CATALOG_COMPANY_STATUS_VALUES = new Set(["active", "defunct", "merge", "merged", "renamed"]);
 
 function normalizeOptionalString(value) {
   if (value == null) return null;
@@ -736,7 +736,7 @@ function normalizeCountryCode(value) {
 function normalizeCompanySizeId(value) {
   if (value == null || value === "") return null;
   const id = Number(value);
-  if (Number.isNaN(id) || !IGDB_COMPANY_SIZE_NAMES[id]) return null;
+  if (Number.isNaN(id) || !CATALOG_COMPANY_SIZE_NAMES[id]) return null;
   return id;
 }
 
@@ -745,14 +745,14 @@ function normalizeCompanyStatus(value) {
   if (!trimmed) return null;
   let key = trimmed.toLowerCase();
   if (key === "merged") key = "merge";
-  if (!IGDB_COMPANY_STATUS_VALUES.has(key)) return null;
+  if (!CATALOG_COMPANY_STATUS_VALUES.has(key)) return null;
   if (key === "merge") return "Merge";
   if (key === "renamed") return "Renamed";
   if (key === "defunct") return "Defunct";
   return "Active";
 }
 
-/** Normalize user-edited IGDB company metadata before persisting on developer/publisher items. */
+/** Normalize user-edited company metadata before persisting on developer/publisher items. */
 function normalizeStoredCompanyProfile(input) {
   if (input == null) return null;
   if (typeof input !== "object") return null;
@@ -779,7 +779,7 @@ function normalizeStoredCompanyProfile(input) {
   const companySizeId = normalizeCompanySizeId(input.companySizeId);
   if (companySizeId != null) {
     info.companySizeId = companySizeId;
-    info.companySize = IGDB_COMPANY_SIZE_NAMES[companySizeId];
+    info.companySize = CATALOG_COMPANY_SIZE_NAMES[companySizeId];
   }
 
   const formerly = normalizeCompanyReference(input.formerly);
@@ -794,7 +794,7 @@ function normalizeStoredCompanyProfile(input) {
   return Object.keys(info).length > 0 ? info : null;
 }
 
-/** Fetch IGDB company info for new developer/publisher items during POST /igdb/import-game. */
+/** @deprecated Prefer client/importer flow: GET /igdb/company/:id then POST merge-company-profile. */
 async function attachCompanyProfileForNewItems(metadataPath, contentFolder, items, req) {
   if (!items || !Array.isArray(items) || items.length === 0) return;
 
@@ -832,8 +832,8 @@ async function attachCompanyProfileForNewItems(metadataPath, contentFolder, item
 }
 
 module.exports = {
-  mapIgdbCompanyToInfo,
-  mapIgdbCompanyToStoragePatch,
+  mapCatalogCompanyToInfo,
+  mapCatalogCompanyStoragePatch,
   pickRenamedPredecessorCompany,
   fetchRemoteCompanyProfile,
   fetchRemoteCompanyStoragePatch,
@@ -844,6 +844,6 @@ module.exports = {
   normalizeStoredCompanyProfile,
   resolveCompanyProfileForEntry,
   attachCompanyProfileForNewItems,
-  syncIgdbParentCompanyChildLinkWithIgdb,
-  ensureIgdbParentCompanyLinksForItems,
+  syncParentCompanyChildLinkFromCatalog,
+  ensureParentCompanyLinksForItems,
 };

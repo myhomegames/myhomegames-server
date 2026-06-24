@@ -1,4 +1,4 @@
-const { coerceToGameTypeId } = require("../../utils/igdbGameType");
+const { coerceToGameTypeId } = require("../../utils/gameType");
 
 describe("coerceToGameTypeId", () => {
   test("returns null for null and undefined", () => {

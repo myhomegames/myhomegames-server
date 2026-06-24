@@ -433,7 +433,7 @@ function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCach
  * When parentCompany is set on the child profile, ensure the parent exists in the same role
  * and link the child under it (parent.childs).
  */
-function syncIgdbParentCompanyChildLink(metadataPath, roleFolder, childEntry, options = {}) {
+function syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, options = {}) {
   if (!isCompanyRoleFolder(roleFolder) || !childEntry || childEntry.id == null) {
     return false;
   }
@@ -492,7 +492,7 @@ module.exports = {
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
-  syncIgdbParentCompanyChildLink,
+  syncParentCompanyChildLink,
   migrateLegacyRoleMetadata,
   isLegacyRoleMetadata,
 };

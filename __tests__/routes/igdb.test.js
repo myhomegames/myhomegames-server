@@ -95,8 +95,8 @@ describe('GET /igdb/game-names-by-ids', () => {
       .set('X-Auth-Token', 'test-token')
       .expect(400);
 
-    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', igdbCredentialsError());
+    const { catalogApiCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', catalogApiCredentialsError());
   });
 
 });
@@ -133,8 +133,8 @@ describe('GET /igdb/games-by-genre/:tagId', () => {
       .get('/igdb/games-by-genre/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', igdbCredentialsError());
+    const { catalogApiCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', catalogApiCredentialsError());
   });
 });
 
@@ -169,8 +169,8 @@ describe('GET /igdb/games-by-developer/:companyId', () => {
       .get('/igdb/games-by-developer/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', igdbCredentialsError());
+    const { catalogApiCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', catalogApiCredentialsError());
   });
 });
 
@@ -205,8 +205,8 @@ describe('GET /igdb/games-by-publisher/:companyId', () => {
       .get('/igdb/games-by-publisher/1')
       .set('X-Auth-Token', 'test-token')
       .expect(400);
-    const { igdbCredentialsError } = require('../../utils/twitchAppCredentials');
-    expect(response.body).toHaveProperty('error', igdbCredentialsError());
+    const { catalogApiCredentialsError } = require('../../utils/twitchAppCredentials');
+    expect(response.body).toHaveProperty('error', catalogApiCredentialsError());
   });
 });
 

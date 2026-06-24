@@ -1,5 +1,5 @@
 /**
- * IGDB game_type id (Game → game_type reference).
+ * Catalog game_type id (Game → game_type reference; values from IGDB API).
  * @see https://api-docs.igdb.com/#game-type
  *
  * metadata.json and JSON API expose only the numeric id; labels are resolved on the client.

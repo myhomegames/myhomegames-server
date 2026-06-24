@@ -3,10 +3,10 @@
 const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
 const { loadStoredTwitchAppCredentials } = require("./twitchAppCredentialsStore");
 
-const IGDB_CREDENTIALS_ERROR_GATEWAY =
+const CATALOG_API_CREDENTIALS_ERROR_GATEWAY =
   "IGDB API credentials are not available. Configure them on the API gateway (e.g. Cloudflare Worker).";
 
-const IGDB_CREDENTIALS_ERROR_LOCAL =
+const CATALOG_API_CREDENTIALS_ERROR_LOCAL =
   "IGDB API credentials are not available. Configure Client ID and Client Secret in Settings, or set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in the server .env file.";
 
 let metadataPath = null;
@@ -15,10 +15,10 @@ function setTwitchCredentialsMetadataPath(nextPath) {
   metadataPath = typeof nextPath === "string" && nextPath.trim() ? nextPath.trim() : null;
 }
 
-function igdbCredentialsError() {
+function catalogApiCredentialsError() {
   return isCloudflareTunnelEnabled()
-    ? IGDB_CREDENTIALS_ERROR_GATEWAY
-    : IGDB_CREDENTIALS_ERROR_LOCAL;
+    ? CATALOG_API_CREDENTIALS_ERROR_GATEWAY
+    : CATALOG_API_CREDENTIALS_ERROR_LOCAL;
 }
 
 /**
@@ -59,7 +59,7 @@ function requireTwitchAppCredentials(req, res, options = {}) {
   const creds = resolveTwitchAppCredentials(req);
   if (!creds.clientId || !creds.clientSecret) {
     res.setHeader("Content-Type", contentType);
-    res.status(400).json({ error: igdbCredentialsError() });
+    res.status(400).json({ error: catalogApiCredentialsError() });
     return null;
   }
   return creds;
@@ -100,10 +100,10 @@ function resolveTwitchAppCredentialsForServerIgdb(req) {
 }
 
 module.exports = {
-  IGDB_CREDENTIALS_ERROR: IGDB_CREDENTIALS_ERROR_GATEWAY,
-  IGDB_CREDENTIALS_ERROR_GATEWAY,
-  IGDB_CREDENTIALS_ERROR_LOCAL,
-  igdbCredentialsError,
+  IGDB_CREDENTIALS_ERROR: CATALOG_API_CREDENTIALS_ERROR_GATEWAY,
+  CATALOG_API_CREDENTIALS_ERROR_GATEWAY,
+  CATALOG_API_CREDENTIALS_ERROR_LOCAL,
+  catalogApiCredentialsError,
   setTwitchCredentialsMetadataPath,
   resolveTwitchAppCredentials,
   resolveTwitchAppCredentialsForServerIgdb,

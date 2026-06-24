@@ -19,7 +19,7 @@ const {
   getResourceToGameIdsMap,
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { coerceToGameTypeId } = require("../utils/gameType");
 
 const CONTENT_FOLDER = "collections";
 

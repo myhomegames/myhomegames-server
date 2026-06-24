@@ -85,14 +85,13 @@ const {
 const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { attachCompanyProfileForNewItems, ensureIgdbParentCompanyLinksForItems } = require("../utils/igdbCompany");
+const { coerceToGameTypeId } = require("../utils/gameType");
 const {
-  mergeIgdbGameMetadata,
+  mergeCatalogGameMetadata,
   idsToAdd,
   devPubItemsToAdd,
   franchiseCollectionItemsToAdd,
-} = require("../utils/igdbGameMerge");
+} = require("../utils/catalogGameMerge");
 
 
 /**
@@ -604,7 +603,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     libraryGamesResponseCache = Object.create(null);
   }
 
-  // Endpoint: get existing game IDs (lightweight, for importer to exclude from IGDB search)
+  // Endpoint: get existing game IDs (lightweight, for importer to exclude from catalog search)
   app.get("/games/ids", requireToken, (req, res) => {
     const gamesDir = path.join(metadataPath, "content", "games");
     const ids = [];
@@ -1393,13 +1392,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
-  // Endpoint: merge IGDB game metadata into local game (missing fields only)
-  app.post("/games/:gameId/merge-igdb-metadata", requireToken, (req, res) => {
+  // Endpoint: merge remote catalog game metadata into local game (missing fields only)
+  const handleMergeCatalogMetadata = (req, res) => {
     const gameId = Number(req.params.gameId);
-    const igdbPayload = req.body;
+    const catalogPayload = req.body;
 
-    if (!igdbPayload || typeof igdbPayload !== "object") {
-      return res.status(400).json({ error: "Missing IGDB game payload in request body" });
+    if (!catalogPayload || typeof catalogPayload !== "object") {
+      return res.status(400).json({ error: "Missing catalog game payload in request body" });
     }
 
     try {
@@ -1411,17 +1410,17 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return res.status(404).json({ error: "Game not found" });
       }
 
-      const { game: mergedMeta, changed: metaChanged, parsed } = mergeIgdbGameMetadata(game, igdbPayload);
+      const { game: mergedMeta, changed: metaChanged, parsed } = mergeCatalogGameMetadata(game, catalogPayload);
       if (!parsed) {
-        return res.status(400).json({ error: "Invalid IGDB game payload" });
+        return res.status(400).json({ error: "Invalid catalog game payload" });
       }
 
       const localTags = getGameTagIdsFromBlocks(metadataPath, gameId);
       let tagsChanged = false;
 
-      const resolveAndAddTags = (localKey, normalizeFn, igdbNames, addFn) => {
-        if (!igdbNames || !Array.isArray(igdbNames) || igdbNames.length === 0) return;
-        const remoteIds = normalizeFn(metadataPath, igdbNames);
+      const resolveAndAddTags = (localKey, normalizeFn, remoteNames, addFn) => {
+        if (!remoteNames || !Array.isArray(remoteNames) || remoteNames.length === 0) return;
+        const remoteIds = normalizeFn(metadataPath, remoteNames);
         const toAdd = idsToAdd(localTags[localKey], remoteIds);
         if (toAdd.length > 0) {
           toAdd.forEach((id) => addFn(metadataPath, id, gameId));
@@ -1485,10 +1484,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames),
       });
     } catch (e) {
-      console.error(`Failed to merge IGDB metadata for game ${gameId}:`, e.message);
-      res.status(500).json({ error: "Failed to merge IGDB game metadata" });
+      console.error(`Failed to merge catalog metadata for game ${gameId}:`, e.message);
+      res.status(500).json({ error: "Failed to merge catalog game metadata" });
     }
-  });
+  };
+  app.post("/games/:gameId/merge-catalog-metadata", requireToken, handleMergeCatalogMetadata);
 
   // Endpoint: reload metadata for a single game
   app.post("/games/:gameId/reload", requireToken, (req, res) => {
@@ -1817,9 +1817,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
-  app.post("/igdb/import-game", requireToken, async (req, res) => {
+  const handleImportCatalogGame = (req, res) => {
     const {
-      igdbId,
+      gameId: gameIdFromBody,
+      igdbId: legacyGameIdFromBody,
       name,
       summary,
       cover,
@@ -1849,15 +1850,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       type: gameTypeFromClient,
     } = req.body;
     
-    if (!igdbId || !name) {
-      return res.status(400).json({ error: "Missing required fields: igdbId and name" });
+    const catalogGameId = gameIdFromBody ?? legacyGameIdFromBody;
+
+    if (!catalogGameId || !name) {
+      return res.status(400).json({ error: "Missing required fields: gameId and name" });
     }
 
     try {
-      // Use IGDB ID directly as game ID
-      const gameId = Number(igdbId);
+      const gameId = Number(catalogGameId);
       
-      // Check if game with this IGDB ID already exists (check both in-memory and file)
+      // Check if game with this catalog ID already exists (check both in-memory and file)
       // First check cache
       if (allGames[gameId]) {
         return res.status(409).json({ 
@@ -1918,7 +1920,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         }
       }
 
-      // Filter and validate all IGDB fields
+      // Filter and validate all catalog fields
       const validateStringArray = (arr) => {
         if (arr && Array.isArray(arr) && arr.length > 0) {
           const filtered = arr.filter((item) => item && typeof item === "string" && item.trim());
@@ -1927,8 +1929,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return null;
       };
 
-      // Normalize tag field from IGDB: client may send string[] or [{ id, name }]; return string[] of names for library tag resolution
-      const normalizeTagNamesFromIgdb = (arr) => {
+      // Normalize tag field from catalog: client may send string[] or [{ id, name }]; return string[] of names for library tag resolution
+      const normalizeCatalogTagNames = (arr) => {
         if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
         const names = [];
         for (const item of arr) {
@@ -1946,13 +1948,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       let validScreenshots = validateStringArray(screenshots);
-      let validThemes = normalizeTagNamesFromIgdb(themes) || validateStringArray(themes);
-      let validPlatforms = normalizeTagNamesFromIgdb(platforms) || validateStringArray(platforms);
-      let validGameModes = normalizeTagNamesFromIgdb(gameModes) || validateStringArray(gameModes);
-      let validPlayerPerspectives = normalizeTagNamesFromIgdb(playerPerspectives) || validateStringArray(playerPerspectives);
+      let validThemes = normalizeCatalogTagNames(themes) || validateStringArray(themes);
+      let validPlatforms = normalizeCatalogTagNames(platforms) || validateStringArray(platforms);
+      let validGameModes = normalizeCatalogTagNames(gameModes) || validateStringArray(gameModes);
+      let validPlayerPerspectives = normalizeCatalogTagNames(playerPerspectives) || validateStringArray(playerPerspectives);
       let validWebsites = validateObjectArray(websites);
       let validAgeRatings = validateObjectArray(ageRatings);
-      // Developers and publishers: [{ id, name, logo?, description? }] from IGDB
+      // Developers and publishers: [{ id, name, logo?, description? }] from catalog
       const validateDeveloperPublisherArray = (arr) => {
         if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
         const filtered = arr.filter((item) => item && typeof item === "object" && item.id != null && item.name);
@@ -1968,12 +1970,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const rawDevelopers = validateDeveloperPublisherArray(developers);
       const rawPublishers = validateDeveloperPublisherArray(publishers);
       let validVideos = validateStringArray(videos);
-      let validGameEngines = normalizeTagNamesFromIgdb(gameEngines) || validateStringArray(gameEngines);
+      let validGameEngines = normalizeCatalogTagNames(gameEngines) || validateStringArray(gameEngines);
       let validKeywords = validateStringArray(keywords);
       let validAlternativeNames = validateStringArray(alternativeNames);
       let validSimilarGames = validateObjectArray(similarGames);
 
-      // Normalize franchise/collection from IGDB to [{ id, name }] for ensureFranchiseExistBatch/ensureSeriesExistBatch (names used only for initial metadata)
+      // Normalize franchise/collection from catalog to [{ id, name }] for ensureFranchiseExistBatch/ensureSeriesExistBatch (names used only for initial metadata)
       const normalizeOne = (v) => {
         if (v == null) return null;
         if (typeof v === "object" && v !== null && typeof v.name === "string" && v.name.trim()) {
@@ -2039,14 +2041,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       if (rawDevelopers && rawDevelopers.length > 0) {
-        await attachCompanyProfileForNewItems(metadataPath, "developers", rawDevelopers, req);
         ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
-        await ensureIgdbParentCompanyLinksForItems(metadataPath, "developers", rawDevelopers, req);
       }
       if (rawPublishers && rawPublishers.length > 0) {
-        await attachCompanyProfileForNewItems(metadataPath, "publishers", rawPublishers, req);
         ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
-        await ensureIgdbParentCompanyLinksForItems(metadataPath, "publishers", rawPublishers, req);
       }
       if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseExistBatch(metadataPath, franchiseForEnsure, gameId);
       if (collectionForEnsure && collectionForEnsure.length > 0) ensureSeriesExistBatch(metadataPath, collectionForEnsure, gameId);
@@ -2075,12 +2073,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const pubs = getPublishersCache ? getPublishersCache() : null;
       res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
-      console.error(`Failed to add game from IGDB:`, error);
+      console.error(`Failed to add game from catalog:`, error);
       res.status(500).json({ error: "Failed to add game to library", detail: error.message });
     }
-  });
+  };
+  app.post("/catalog/import-game", requireToken, handleImportCatalogGame);
+  app.post("/igdb/import-game", requireToken, handleImportCatalogGame);
 
-  // Endpoint: create a new game from scratch (no IGDB). ID = creation timestamp.
+  // Endpoint: create a new game from scratch (no catalog lookup). ID = creation timestamp.
   app.post("/games/create", requireToken, async (req, res) => {
     const { title } = req.body;
     const name = typeof title === "string" ? title.trim() : "";

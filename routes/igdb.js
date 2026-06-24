@@ -2,8 +2,8 @@
 // IGDB API routes for game search and details
 
 const https = require("https");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { resolveCompanyProfileForEntry } = require("../utils/igdbCompany");
+const { coerceToGameTypeId } = require("../utils/gameType");
+const { resolveCompanyProfileForEntry } = require("../utils/catalogCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 
 // IGDB Access Token cache (per clientId)

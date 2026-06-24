@@ -7,8 +7,8 @@ const {
   resolveTwitchAppCredentials,
   resolveTwitchAppCredentialsForServerIgdb,
   requireTwitchAppCredentials,
-  IGDB_CREDENTIALS_ERROR_GATEWAY,
-  IGDB_CREDENTIALS_ERROR_LOCAL,
+  CATALOG_API_CREDENTIALS_ERROR_GATEWAY,
+  CATALOG_API_CREDENTIALS_ERROR_LOCAL,
   setTwitchCredentialsMetadataPath,
 } = require("../../utils/twitchAppCredentials");
 const { saveStoredTwitchAppCredentials } = require("../../utils/twitchAppCredentialsStore");
@@ -121,7 +121,7 @@ describe("twitchAppCredentials", () => {
     const out = requireTwitchAppCredentials(mockReq({}), res);
     expect(out).toBeNull();
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe(IGDB_CREDENTIALS_ERROR_GATEWAY);
+    expect(res.body.error).toBe(CATALOG_API_CREDENTIALS_ERROR_GATEWAY);
   });
 
   test("requireTwitchAppCredentials returns local error when tunnel disabled", () => {
@@ -130,7 +130,7 @@ describe("twitchAppCredentials", () => {
     const out = requireTwitchAppCredentials(mockReq({}), res);
     expect(out).toBeNull();
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe(IGDB_CREDENTIALS_ERROR_LOCAL);
+    expect(res.body.error).toBe(CATALOG_API_CREDENTIALS_ERROR_LOCAL);
   });
 
   test("resolveTwitchAppCredentialsForServerIgdb uses stored creds when tunnel enabled and headers missing", () => {

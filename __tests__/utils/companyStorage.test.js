@@ -7,7 +7,7 @@ const {
   saveRoleItem,
   deleteRoleItem,
   migrateLegacyRoleMetadata,
-  syncIgdbParentCompanyChildLink,
+  syncParentCompanyChildLink,
 } = require("../../utils/companyStorage");
 
 describe("companyStorage", () => {
@@ -103,7 +103,7 @@ describe("companyStorage", () => {
     ).toBe("Legacy Co");
   });
 
-  test("syncIgdbParentCompanyChildLink links child under parentCompany", () => {
+  test("syncParentCompanyChildLink links child under parentCompany", () => {
     saveRoleItem(metadataPath, "publishers", {
       id: 10,
       title: "Child Publisher",
@@ -113,7 +113,7 @@ describe("companyStorage", () => {
       parentCompany: { id: 20, name: "Parent Corp" },
     });
 
-    const linked = syncIgdbParentCompanyChildLink(metadataPath, "publishers", {
+    const linked = syncParentCompanyChildLink(metadataPath, "publishers", {
       id: 10,
       title: "Child Publisher",
       parentCompany: { id: 20, name: "Parent Corp" },
@@ -127,7 +127,7 @@ describe("companyStorage", () => {
     expect(parent.games).toEqual([]);
   });
 
-  test("syncIgdbParentCompanyChildLink applies IGDB profile patch when creating parent", () => {
+  test("syncParentCompanyChildLink applies IGDB profile patch when creating parent", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 10,
       title: "Child Dev",
@@ -137,7 +137,7 @@ describe("companyStorage", () => {
       parentCompany: { id: 20, name: "Parent Corp" },
     });
 
-    syncIgdbParentCompanyChildLink(
+    syncParentCompanyChildLink(
       metadataPath,
       "developers",
       { id: 10, parentCompany: { id: 20, name: "Parent Corp" } },
@@ -161,7 +161,7 @@ describe("companyStorage", () => {
     expect(parent.childs).toEqual([10]);
   });
 
-  test("syncIgdbParentCompanyChildLink is idempotent when link already exists", () => {
+  test("syncParentCompanyChildLink is idempotent when link already exists", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 5,
       title: "Child Dev",
@@ -176,8 +176,8 @@ describe("companyStorage", () => {
       parentCompany: { id: 20, name: "Parent Dev" },
     };
 
-    expect(syncIgdbParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(true);
-    expect(syncIgdbParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(false);
+    expect(syncParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(true);
+    expect(syncParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(false);
 
     const parent = loadRoleItemById(metadataPath, "developers", 20);
     expect(parent.childs).toEqual([5]);

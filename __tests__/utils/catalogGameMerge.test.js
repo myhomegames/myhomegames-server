@@ -1,17 +1,17 @@
 const {
-  parseIgdbGamePayload,
-  mergeIgdbGameMetadata,
+  parseCatalogGamePayload,
+  mergeCatalogGameMetadata,
   mergeStringArray,
   mergeAgeRatings,
   mergeSimilarGameIds,
   idsToAdd,
   devPubItemsToAdd,
   franchiseCollectionItemsToAdd,
-} = require("../../utils/igdbGameMerge");
+} = require("../../utils/catalogGameMerge");
 
-describe("parseIgdbGamePayload", () => {
+describe("parseCatalogGamePayload", () => {
   test("maps IGDB game response to local merge shape", () => {
-    const parsed = parseIgdbGamePayload({
+    const parsed = parseCatalogGamePayload({
       summary: "A great game",
       releaseDateFull: { year: 2020, month: 3, day: 15, timestamp: 1584230400 },
       criticRating: 85,
@@ -42,8 +42,8 @@ describe("parseIgdbGamePayload", () => {
   });
 
   test("returns null for invalid payload", () => {
-    expect(parseIgdbGamePayload(null)).toBeNull();
-    expect(parseIgdbGamePayload("bad")).toBeNull();
+    expect(parseCatalogGamePayload(null)).toBeNull();
+    expect(parseCatalogGamePayload("bad")).toBeNull();
   });
 });
 
@@ -93,7 +93,7 @@ describe("merge helpers", () => {
   });
 });
 
-describe("mergeIgdbGameMetadata", () => {
+describe("mergeCatalogGameMetadata", () => {
   test("fills only missing local fields from IGDB payload", () => {
     const local = {
       id: 123,
@@ -103,7 +103,7 @@ describe("mergeIgdbGameMetadata", () => {
       criticratings: 7.5,
       websites: ["https://existing.com"],
     };
-    const igdbPayload = {
+    const catalogPayload = {
       name: "IGDB Title",
       summary: "IGDB summary",
       releaseDateFull: { year: 2020, month: 6, day: 1, timestamp: 1590969600 },
@@ -115,7 +115,7 @@ describe("mergeIgdbGameMetadata", () => {
       genres: ["Action"],
     };
 
-    const { game, changed } = mergeIgdbGameMetadata(local, igdbPayload);
+    const { game, changed } = mergeCatalogGameMetadata(local, catalogPayload);
 
     expect(changed).toBe(true);
     expect(game.title).toBe("Local Title");
@@ -132,7 +132,7 @@ describe("mergeIgdbGameMetadata", () => {
 
   test("returns unchanged when payload is invalid", () => {
     const local = { id: 1, title: "Game" };
-    const { game, changed } = mergeIgdbGameMetadata(local, null);
+    const { game, changed } = mergeCatalogGameMetadata(local, null);
     expect(changed).toBe(false);
     expect(game).toEqual(local);
   });

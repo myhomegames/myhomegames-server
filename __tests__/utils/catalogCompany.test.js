@@ -1,15 +1,15 @@
 const {
-  mapIgdbCompanyToInfo,
-  mapIgdbCompanyToStoragePatch,
+  mapCatalogCompanyToInfo,
+  mapCatalogCompanyStoragePatch,
   pickRenamedPredecessorCompany,
   mergeCompanyProfile,
   normalizeStoredCompanyProfile,
   pickCompanyByTitle,
-} = require("../../utils/igdbCompany");
+} = require("../../utils/catalogCompany");
 
-describe("mapIgdbCompanyToInfo", () => {
-  test("maps IGDB company fields to stored info", () => {
-    const info = mapIgdbCompanyToInfo({
+describe("mapCatalogCompanyToInfo", () => {
+  test("maps catalog company fields to stored info", () => {
+    const info = mapCatalogCompanyToInfo({
       id: 1,
       status: { name: "Renamed" },
       changed_company_id: { id: 2, name: "3D Realms" },
@@ -30,7 +30,7 @@ describe("mapIgdbCompanyToInfo", () => {
   });
 
   test("maps company type histories and parent company", () => {
-    const info = mapIgdbCompanyToInfo({
+    const info = mapCatalogCompanyToInfo({
       id: 10,
       start_date: 315532800,
       start_date_format: 2,
@@ -65,7 +65,7 @@ describe("mapIgdbCompanyToInfo", () => {
   });
 
   test("maps formerly from company_type_histories.company when parent_company is absent", () => {
-    const info = mapIgdbCompanyToInfo({
+    const info = mapCatalogCompanyToInfo({
       id: 10,
       company_type_histories: [
         {
@@ -81,7 +81,7 @@ describe("mapIgdbCompanyToInfo", () => {
   });
 
   test("maps formerly when parent_company is the current company", () => {
-    const info = mapIgdbCompanyToInfo({
+    const info = mapCatalogCompanyToInfo({
       id: 10,
       company_type_histories: [
         {
@@ -98,7 +98,7 @@ describe("mapIgdbCompanyToInfo", () => {
   });
 
   test("keeps only the first formerly entry from company_type_histories", () => {
-    const info = mapIgdbCompanyToInfo({
+    const info = mapCatalogCompanyToInfo({
       id: 10,
       company_type_histories: [
         {
@@ -117,8 +117,8 @@ describe("mapIgdbCompanyToInfo", () => {
     });
   });
 
-  test("normalizes merged IGDB status to Merge", () => {
-    const info = mapIgdbCompanyToInfo({
+  test("normalizes merged catalog status to Merge", () => {
+    const info = mapCatalogCompanyToInfo({
       id: 1,
       status: { name: "merged" },
     });
@@ -127,12 +127,12 @@ describe("mapIgdbCompanyToInfo", () => {
   });
 
   test("returns null when company has no display fields", () => {
-    expect(mapIgdbCompanyToInfo({ id: 1 })).toBeNull();
-    expect(mapIgdbCompanyToInfo(null)).toBeNull();
+    expect(mapCatalogCompanyToInfo({ id: 1 })).toBeNull();
+    expect(mapCatalogCompanyToInfo(null)).toBeNull();
   });
 
   test("maps company size and legal name from description for Capcom-like companies", () => {
-    const info = mapIgdbCompanyToInfo({
+    const info = mapCatalogCompanyToInfo({
       id: 37,
       name: "Capcom",
       status: { name: "active" },
@@ -183,9 +183,9 @@ describe("pickRenamedPredecessorCompany", () => {
   });
 });
 
-describe("mapIgdbCompanyToStoragePatch", () => {
-  test("maps IGDB company to storage patch with profile fields", () => {
-    const patch = mapIgdbCompanyToStoragePatch(
+describe("mapCatalogCompanyStoragePatch", () => {
+  test("maps catalog company to storage patch with profile fields", () => {
+    const patch = mapCatalogCompanyStoragePatch(
       {
         id: 99,
         name: "Mattel",
@@ -308,7 +308,7 @@ describe("mergeCompanyProfile", () => {
 });
 
 describe("normalizeStoredCompanyProfile", () => {
-  test("normalizes editable IGDB company fields", () => {
+    test("normalizes editable company profile fields", () => {
     expect(
       normalizeStoredCompanyProfile({
         status: "merge",

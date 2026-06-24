@@ -1,8 +1,8 @@
 const { createReleaseDate } = require("./dateUtils");
-const { coerceToGameTypeId } = require("./igdbGameType");
-const { isMissingLocalValue } = require("./igdbCompany");
+const { coerceToGameTypeId } = require("./gameType");
+const { isMissingLocalValue } = require("./catalogCompany");
 
-const LOG_PREFIX = "[igdb-game-merge]";
+const LOG_PREFIX = "[catalog-game-merge]";
 
 function log(message, extra) {
   if (extra !== undefined) {
@@ -20,7 +20,7 @@ function validateStringArray(arr) {
   return null;
 }
 
-function normalizeTagNamesFromIgdb(arr) {
+function normalizeCatalogTagNames(arr) {
   if (!arr || !Array.isArray(arr) || arr.length === 0) return null;
   const names = [];
   for (const item of arr) {
@@ -71,51 +71,51 @@ function normalizeFranchiseOrCollectionToArray(v) {
 /**
  * Parse GET /igdb/game/:id response into local merge shape (metadata + tag raw data).
  */
-function parseIgdbGamePayload(igdbPayload) {
-  if (!igdbPayload || typeof igdbPayload !== "object") return null;
+function parseCatalogGamePayload(catalogPayload) {
+  if (!catalogPayload || typeof catalogPayload !== "object") return null;
 
   const releaseDateObj = createReleaseDate(
-    igdbPayload.releaseDateFull?.timestamp ?? igdbPayload.releaseDate
+    catalogPayload.releaseDateFull?.timestamp ?? catalogPayload.releaseDate
   );
 
-  const validGenres = validateStringArray(igdbPayload.genres);
-  const validThemes = normalizeTagNamesFromIgdb(igdbPayload.themes) || validateStringArray(igdbPayload.themes);
-  const validPlatforms = normalizeTagNamesFromIgdb(igdbPayload.platforms) || validateStringArray(igdbPayload.platforms);
-  const validGameModes = normalizeTagNamesFromIgdb(igdbPayload.gameModes) || validateStringArray(igdbPayload.gameModes);
+  const validGenres = validateStringArray(catalogPayload.genres);
+  const validThemes = normalizeCatalogTagNames(catalogPayload.themes) || validateStringArray(catalogPayload.themes);
+  const validPlatforms = normalizeCatalogTagNames(catalogPayload.platforms) || validateStringArray(catalogPayload.platforms);
+  const validGameModes = normalizeCatalogTagNames(catalogPayload.gameModes) || validateStringArray(catalogPayload.gameModes);
   const validPlayerPerspectives =
-    normalizeTagNamesFromIgdb(igdbPayload.playerPerspectives) || validateStringArray(igdbPayload.playerPerspectives);
-  const validWebsites = validateObjectArray(igdbPayload.websites);
-  const validAgeRatings = validateObjectArray(igdbPayload.ageRatings);
-  const rawDevelopers = validateDeveloperPublisherArray(igdbPayload.developers);
-  const rawPublishers = validateDeveloperPublisherArray(igdbPayload.publishers);
-  const validScreenshots = validateStringArray(igdbPayload.screenshots);
-  const validVideos = validateStringArray(igdbPayload.videos);
+    normalizeCatalogTagNames(catalogPayload.playerPerspectives) || validateStringArray(catalogPayload.playerPerspectives);
+  const validWebsites = validateObjectArray(catalogPayload.websites);
+  const validAgeRatings = validateObjectArray(catalogPayload.ageRatings);
+  const rawDevelopers = validateDeveloperPublisherArray(catalogPayload.developers);
+  const rawPublishers = validateDeveloperPublisherArray(catalogPayload.publishers);
+  const validScreenshots = validateStringArray(catalogPayload.screenshots);
+  const validVideos = validateStringArray(catalogPayload.videos);
   const validGameEngines =
-    normalizeTagNamesFromIgdb(igdbPayload.gameEngines) || validateStringArray(igdbPayload.gameEngines);
-  const validKeywords = validateStringArray(igdbPayload.keywords);
-  const validAlternativeNames = validateStringArray(igdbPayload.alternativeNames);
-  const validSimilarGames = validateObjectArray(igdbPayload.similarGames);
-  const franchiseForEnsure = normalizeFranchiseOrCollectionToArray(igdbPayload.franchise);
+    normalizeCatalogTagNames(catalogPayload.gameEngines) || validateStringArray(catalogPayload.gameEngines);
+  const validKeywords = validateStringArray(catalogPayload.keywords);
+  const validAlternativeNames = validateStringArray(catalogPayload.alternativeNames);
+  const validSimilarGames = validateObjectArray(catalogPayload.similarGames);
+  const franchiseForEnsure = normalizeFranchiseOrCollectionToArray(catalogPayload.franchise);
   const collectionForEnsure = normalizeFranchiseOrCollectionToArray(
-    igdbPayload.collection ?? igdbPayload.series
+    catalogPayload.collection ?? catalogPayload.series
   );
 
-  const storedGameTypeId = coerceToGameTypeId(igdbPayload.type);
+  const storedGameTypeId = coerceToGameTypeId(catalogPayload.type);
 
   return {
-    summary: typeof igdbPayload.summary === "string" && igdbPayload.summary.trim() ? igdbPayload.summary : null,
+    summary: typeof catalogPayload.summary === "string" && catalogPayload.summary.trim() ? catalogPayload.summary : null,
     year: releaseDateObj ? releaseDateObj.year : null,
     month: releaseDateObj ? releaseDateObj.month : null,
     day: releaseDateObj ? releaseDateObj.day : null,
     criticratings:
-      igdbPayload.criticRating !== undefined && igdbPayload.criticRating !== null
-        ? igdbPayload.criticRating / 10
+      catalogPayload.criticRating !== undefined && catalogPayload.criticRating !== null
+        ? catalogPayload.criticRating / 10
         : null,
     userratings:
-      igdbPayload.userRating !== undefined && igdbPayload.userRating !== null
-        ? igdbPayload.userRating / 10
+      catalogPayload.userRating !== undefined && catalogPayload.userRating !== null
+        ? catalogPayload.userRating / 10
         : null,
-    stars: igdbPayload.stars !== undefined && igdbPayload.stars !== null ? igdbPayload.stars : null,
+    stars: catalogPayload.stars !== undefined && catalogPayload.stars !== null ? catalogPayload.stars : null,
     websites:
       validWebsites && validWebsites.length
         ? validWebsites
@@ -132,12 +132,12 @@ function parseIgdbGamePayload(igdbPayload) {
         ? [...new Set(validSimilarGames.map((s) => Number(s.id)).filter((id) => !Number.isNaN(id)))]
         : null,
     externalCoverUrl:
-      igdbPayload.cover && typeof igdbPayload.cover === "string" && igdbPayload.cover.trim()
-        ? igdbPayload.cover.trim()
+      catalogPayload.cover && typeof catalogPayload.cover === "string" && catalogPayload.cover.trim()
+        ? catalogPayload.cover.trim()
         : null,
     externalBackgroundUrl:
-      igdbPayload.background && typeof igdbPayload.background === "string" && igdbPayload.background.trim()
-        ? igdbPayload.background.trim()
+      catalogPayload.background && typeof catalogPayload.background === "string" && catalogPayload.background.trim()
+        ? catalogPayload.background.trim()
         : null,
     type: storedGameTypeId,
     genres: validGenres,
@@ -215,8 +215,8 @@ function mergeSimilarGameIds(local, remote) {
 /**
  * Merge IGDB game payload into local game metadata — only fills missing scalar/array fields.
  */
-function mergeIgdbGameMetadata(localGame, igdbPayload) {
-  const parsed = parseIgdbGamePayload(igdbPayload);
+function mergeCatalogGameMetadata(localGame, catalogPayload) {
+  const parsed = parseCatalogGamePayload(catalogPayload);
   if (!parsed) {
     return { game: localGame, changed: false, parsed: null };
   }
@@ -289,8 +289,8 @@ function franchiseCollectionItemsToAdd(localIds, items) {
 }
 
 module.exports = {
-  parseIgdbGamePayload,
-  mergeIgdbGameMetadata,
+  parseCatalogGamePayload,
+  mergeCatalogGameMetadata,
   mergeStringArray,
   mergeAgeRatings,
   mergeSimilarGameIds,

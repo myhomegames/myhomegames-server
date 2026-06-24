@@ -601,7 +601,7 @@ describe('PUT /games/:gameId', () => {
   test('should update criticRating and userRating via PUT', async () => {
     const igdbId = 888881;
     const addRes = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -641,7 +641,7 @@ describe('PUT /games/:gameId', () => {
     const igdbId = 999990;
 
     const addRes = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -1761,7 +1761,7 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999995,
@@ -1824,7 +1824,7 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999996,
@@ -1885,7 +1885,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add a game with this category
     const addGameResponse = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999994,
@@ -1951,7 +1951,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add first game with this category
     const addGame1Response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999993,
@@ -1968,7 +1968,7 @@ describe('DELETE /games/:gameId', () => {
     
     // Add second game with the same category
     const addGame2Response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999992,
@@ -2026,7 +2026,7 @@ describe('DELETE /games/:gameId', () => {
     const igdbId = 999991;
 
     const addGameResponse = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId,
@@ -2080,7 +2080,7 @@ describe('DELETE /games/:gameId', () => {
   });
 });
 
-describe('POST /igdb/import-game', () => {
+describe('POST /catalog/import-game', () => {
   test('should add game from IGDB and create missing categories', async () => {
     // Get initial categories count
     const categoriesBefore = await request(app)
@@ -2092,7 +2092,7 @@ describe('POST /igdb/import-game', () => {
     
     // Add a game with new genres
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999999,
@@ -2161,7 +2161,7 @@ describe('POST /igdb/import-game', () => {
     
     // Add a game with the same genre
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999998,
@@ -2206,7 +2206,7 @@ describe('POST /igdb/import-game', () => {
 
   test('should return 400 if required fields are missing', async () => {
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         name: 'Test Game'
@@ -2214,7 +2214,7 @@ describe('POST /igdb/import-game', () => {
       })
       .expect(400);
     
-    expect(response.body).toHaveProperty('error', 'Missing required fields: igdbId and name');
+    expect(response.body).toHaveProperty('error', 'Missing required fields: gameId and name');
   });
 
   test('should return 409 if game already exists', async () => {
@@ -2247,7 +2247,7 @@ describe('POST /igdb/import-game', () => {
       
       // Try to add the same game again
       const response = await request(app)
-        .post('/igdb/import-game')
+        .post('/catalog/import-game')
         .set('X-Auth-Token', 'test-token')
         .send({
           igdbId: existingGameId,
@@ -2286,7 +2286,7 @@ describe('POST /igdb/import-game', () => {
     
     // Add the game - should succeed
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: gameId,
@@ -2328,7 +2328,7 @@ describe('POST /igdb/import-game', () => {
 
   test('should handle games without genres', async () => {
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999997,
@@ -2350,10 +2350,67 @@ describe('POST /igdb/import-game', () => {
   });
 
 
+  test('legacy POST /igdb/import-game alias still works', async () => {
+    const response = await request(app)
+      .post('/igdb/import-game')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        gameId: 9999940,
+        name: 'Legacy import route game',
+        summary: 'Test summary',
+        releaseDate: 1609459200,
+      })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('status', 'success');
+    expect(response.body.gameId).toBe(9999940);
+
+    await request(app)
+      .delete('/games/9999940')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+  });
+
+  test('merge-company-profile after catalog import succeeds with parent company link', async () => {
+    const publisherId = 88888001;
+    const parentId = 88888002;
+    const gameId = 88888003;
+
+    await request(app)
+      .post('/catalog/import-game')
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        gameId,
+        name: 'Merge profile import test game',
+        summary: 'Test summary',
+        releaseDate: 1609459200,
+        publishers: [{ id: publisherId, name: 'Child Publisher', description: '' }],
+      })
+      .expect(200);
+
+    const mergeRes = await request(app)
+      .post(`/publishers/${publisherId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        status: 'Active',
+        parentCompany: { id: parentId, name: 'Parent Publisher' },
+      })
+      .expect(200);
+
+    expect(mergeRes.body).toHaveProperty('status', 'merged');
+    expect(mergeRes.body.publisher).toHaveProperty('parentCompany');
+    expect(mergeRes.body.publisher.parentCompany).toMatchObject({
+      id: parentId,
+      name: 'Parent Publisher',
+    });
+
+    await request(app).delete(`/games/${gameId}`).set('X-Auth-Token', 'test-token').expect(200);
+  });
+
   test('should preserve genre case', async () => {
     // Add a game with uppercase genres
     const response = await request(app)
-      .post('/igdb/import-game')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         igdbId: 999995,
