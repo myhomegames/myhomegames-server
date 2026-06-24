@@ -1819,8 +1819,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
   const handleImportCatalogGame = (req, res) => {
     const {
-      gameId: gameIdFromBody,
-      igdbId: legacyGameIdFromBody,
+      gameId: catalogGameId,
       name,
       summary,
       cover,
@@ -1849,8 +1848,6 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       similarGames,
       type: gameTypeFromClient,
     } = req.body;
-    
-    const catalogGameId = gameIdFromBody ?? legacyGameIdFromBody;
 
     if (!catalogGameId || !name) {
       return res.status(400).json({ error: "Missing required fields: gameId and name" });
@@ -2078,7 +2075,6 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   };
   app.post("/catalog/import-game", requireToken, handleImportCatalogGame);
-  app.post("/igdb/import-game", requireToken, handleImportCatalogGame);
 
   // Endpoint: create a new game from scratch (no catalog lookup). ID = creation timestamp.
   app.post("/games/create", requireToken, async (req, res) => {

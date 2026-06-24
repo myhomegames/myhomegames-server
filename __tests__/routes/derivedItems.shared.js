@@ -128,7 +128,7 @@ function runDerivedItemTests(config) {
         .post(`/catalog/import-game`)
         .set("X-Auth-Token", "test-token")
         .send({
-          igdbId: testIgdbId,
+          gameId: testIgdbId,
           name: `Test Game for ${humanName}`,
           summary: "Test summary",
           releaseDate: 1609459200,

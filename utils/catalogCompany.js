@@ -1,8 +1,7 @@
 const https = require("https");
-const { loadItems, findById } = require("./collectionsShared");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
-const { attachFetchedCompanyProfileFields, pickCompanyProfileFields } = require("./companyProfileFields");
+const { pickCompanyProfileFields } = require("./companyProfileFields");
 const { syncParentCompanyChildLink } = require("./companyStorage");
 
 const LOG_PREFIX = "[catalog-company]";
@@ -233,49 +232,6 @@ async function syncParentCompanyChildLinkFromCatalog(
   return syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, {
     parentProfilePatch: parentProfilePatch || { title: parentName },
   });
-}
-
-async function ensureParentCompanyLinksForItems(metadataPath, roleFolder, items, req) {
-  if (!items || !Array.isArray(items) || items.length === 0) return;
-
-  const creds = resolveTwitchAppCredentials(req);
-  if (!creds.clientId || !creds.clientSecret) {
-    logWarn(`parent link skip ${roleFolder}: Twitch credentials unavailable`);
-    return;
-  }
-
-  let accessToken;
-  try {
-    const { getIGDBAccessToken } = require("../routes/igdb");
-    accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
-  } catch (err) {
-    logWarn(`parent link skip ${roleFolder}: token error`, err instanceof Error ? err.message : err);
-    return;
-  }
-
-  const { loadRoleItemById } = require("./companyStorage");
-
-  for (const item of items) {
-    const id = typeof item === "object" && item && item.id != null ? Number(item.id) : NaN;
-    if (Number.isNaN(id) || id < 1) continue;
-
-    const entry = loadRoleItemById(metadataPath, roleFolder, id);
-    const childEntry = entry || (typeof item === "object" ? item : null);
-    if (!childEntry || !pickCompanyProfileFields(childEntry).parentCompany) continue;
-
-    try {
-      await syncParentCompanyChildLinkFromCatalog(
-        metadataPath,
-        roleFolder,
-        childEntry,
-        accessToken,
-        creds.clientId,
-      );
-    } catch (err) {
-      logWarn(`parent link failed ${roleFolder}/${id}`, err instanceof Error ? err.message : err);
-      syncParentCompanyChildLink(metadataPath, roleFolder, childEntry);
-    }
-  }
 }
 
 function mapCatalogCompanyToInfo(company) {
@@ -744,42 +700,6 @@ function normalizeStoredCompanyProfile(input) {
   return Object.keys(info).length > 0 ? info : null;
 }
 
-/** @deprecated Prefer client/importer flow: GET /igdb/company/:id then POST merge-company-profile. */
-async function attachCompanyProfileForNewItems(metadataPath, contentFolder, items, req) {
-  if (!items || !Array.isArray(items) || items.length === 0) return;
-
-  const creds = resolveTwitchAppCredentials(req);
-  if (!creds.clientId || !creds.clientSecret) {
-    logWarn(`attach skip ${contentFolder}: Twitch credentials unavailable on /igdb/* request`);
-    return;
-  }
-
-  let accessToken;
-  try {
-    const { getIGDBAccessToken } = require("../routes/igdb");
-    accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
-  } catch (err) {
-    logWarn(`attach skip ${contentFolder}: token error`, err instanceof Error ? err.message : err);
-    return;
-  }
-
-  const list = loadItems(metadataPath, contentFolder);
-
-  for (const item of items) {
-    const id = typeof item === "object" && item && item.id != null ? Number(item.id) : NaN;
-    if (Number.isNaN(id) || id < 1 || findById(list, id)) continue;
-
-    try {
-      const info = await fetchRemoteCompanyProfile(id, accessToken, creds.clientId);
-      if (info && typeof item === "object" && item) {
-        attachFetchedCompanyProfileFields(item, info);
-      }
-    } catch (err) {
-      logWarn(`attach failed ${contentFolder}/${id}`, err instanceof Error ? err.message : err);
-    }
-  }
-}
-
 module.exports = {
   mapCatalogCompanyToInfo,
   mapCatalogCompanyStoragePatch,
@@ -792,7 +712,5 @@ module.exports = {
   mergeCompanyProfile,
   normalizeStoredCompanyProfile,
   resolveCompanyProfileForEntry,
-  attachCompanyProfileForNewItems,
   syncParentCompanyChildLinkFromCatalog,
-  ensureParentCompanyLinksForItems,
 };

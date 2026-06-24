@@ -599,12 +599,12 @@ describe('PUT /games/:gameId', () => {
   });
 
   test('should update criticRating and userRating via PUT', async () => {
-    const igdbId = 888881;
+    const catalogGameId = 888881;
     const addRes = await request(app)
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game for Rating Update',
         summary: 'Test',
         releaseDate: 1609459200,
@@ -638,13 +638,13 @@ describe('PUT /games/:gameId', () => {
 
   test('should delete orphaned franchise when removing from game via PUT', async () => {
     const franchiseId = 66666;
-    const igdbId = 999990;
+    const catalogGameId = 999990;
 
     const addRes = await request(app)
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game to Remove Franchise',
         summary: 'Test',
         releaseDate: 1609459200,
@@ -1764,7 +1764,7 @@ describe('DELETE /games/:gameId', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999995,
+        gameId: 999995,
         name: 'Test Game for Recommended Removal',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1827,7 +1827,7 @@ describe('DELETE /games/:gameId', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999996,
+        gameId: 999996,
         name: 'Test Game for Recommended Removal Old Format',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1888,7 +1888,7 @@ describe('DELETE /games/:gameId', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999994,
+        gameId: 999994,
         name: 'Test Game with Orphaned Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1954,7 +1954,7 @@ describe('DELETE /games/:gameId', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999993,
+        gameId: 999993,
         name: 'Test Game 1 with Shared Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1971,7 +1971,7 @@ describe('DELETE /games/:gameId', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999992,
+        gameId: 999992,
         name: 'Test Game 2 with Shared Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2023,13 +2023,13 @@ describe('DELETE /games/:gameId', () => {
   test('should delete orphaned franchise and series when deleting a game', async () => {
     const franchiseId = 88888;
     const seriesId = 77777;
-    const igdbId = 999991;
+    const catalogGameId = 999991;
 
     const addGameResponse = await request(app)
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game with Orphan Franchise and Series',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2095,7 +2095,7 @@ describe('POST /catalog/import-game', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999999,
+        gameId: 999999,
         name: 'Test Game from IGDB',
         summary: 'Test summary',
         cover: 'https://images.igdb.com/igdb/image/upload/t_cover_big/test.jpg',
@@ -2164,7 +2164,7 @@ describe('POST /catalog/import-game', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999998,
+        gameId: 999998,
         name: 'Test Game with Existing Genre',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2210,7 +2210,7 @@ describe('POST /catalog/import-game', () => {
       .set('X-Auth-Token', 'test-token')
       .send({
         name: 'Test Game'
-        // Missing igdbId
+        // Missing gameId
       })
       .expect(400);
     
@@ -2250,7 +2250,7 @@ describe('POST /catalog/import-game', () => {
         .post('/catalog/import-game')
         .set('X-Auth-Token', 'test-token')
         .send({
-          igdbId: existingGameId,
+          gameId: existingGameId,
           name: 'Duplicate Game',
           summary: 'Test summary'
         })
@@ -2289,7 +2289,7 @@ describe('POST /catalog/import-game', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: gameId,
+        gameId: gameId,
         name: 'Test Game with Existing Directory',
         summary: 'Test summary',
         cover: 'https://images.igdb.com/igdb/image/upload/t_cover_big/test.jpg',
@@ -2331,7 +2331,7 @@ describe('POST /catalog/import-game', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999997,
+        gameId: 999997,
         name: 'Test Game Without Genres',
         summary: 'Test summary',
         releaseDate: 1609459200
@@ -2349,27 +2349,6 @@ describe('POST /catalog/import-game', () => {
       .expect(200);
   });
 
-
-  test('legacy POST /igdb/import-game alias still works', async () => {
-    const response = await request(app)
-      .post('/igdb/import-game')
-      .set('X-Auth-Token', 'test-token')
-      .send({
-        gameId: 9999940,
-        name: 'Legacy import route game',
-        summary: 'Test summary',
-        releaseDate: 1609459200,
-      })
-      .expect(200);
-
-    expect(response.body).toHaveProperty('status', 'success');
-    expect(response.body.gameId).toBe(9999940);
-
-    await request(app)
-      .delete('/games/9999940')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-  });
 
   test('merge-company-profile after catalog import succeeds with parent company link', async () => {
     const publisherId = 88888001;
@@ -2413,7 +2392,7 @@ describe('POST /catalog/import-game', () => {
       .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999995,
+        gameId: 999995,
         name: 'Test Game with Uppercase Genres',
         summary: 'Test summary',
         releaseDate: 1609459200,
