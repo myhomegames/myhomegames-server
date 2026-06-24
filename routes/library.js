@@ -86,7 +86,7 @@ const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gam
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { attachIgdbCompanyInfoForNewItems } = require("../utils/igdbCompany");
+const { attachCompanyProfileForNewItems, ensureIgdbParentCompanyLinksForItems } = require("../utils/igdbCompany");
 const {
   mergeIgdbGameMetadata,
   idsToAdd,
@@ -2039,12 +2039,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       if (rawDevelopers && rawDevelopers.length > 0) {
-        await attachIgdbCompanyInfoForNewItems(metadataPath, "developers", rawDevelopers, req);
+        await attachCompanyProfileForNewItems(metadataPath, "developers", rawDevelopers, req);
         ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
+        await ensureIgdbParentCompanyLinksForItems(metadataPath, "developers", rawDevelopers, req);
       }
       if (rawPublishers && rawPublishers.length > 0) {
-        await attachIgdbCompanyInfoForNewItems(metadataPath, "publishers", rawPublishers, req);
+        await attachCompanyProfileForNewItems(metadataPath, "publishers", rawPublishers, req);
         ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
+        await ensureIgdbParentCompanyLinksForItems(metadataPath, "publishers", rawPublishers, req);
       }
       if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseExistBatch(metadataPath, franchiseForEnsure, gameId);
       if (collectionForEnsure && collectionForEnsure.length > 0) ensureSeriesExistBatch(metadataPath, collectionForEnsure, gameId);

@@ -24,7 +24,15 @@ const {
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { mergeIgdbCompanyInfo, normalizeStoredIgdbCompanyInfo } = require("../utils/igdbCompany");
+const { mergeCompanyProfile, normalizeStoredCompanyProfile, syncIgdbParentCompanyChildLinkWithIgdb } = require("../utils/igdbCompany");
+const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+const {
+  appendCompanyProfileFields,
+  applyNormalizedCompanyProfileFields,
+  extractCompanyProfileFieldsFromBody,
+  hasAnyCompanyProfileFieldInBody,
+  pickCompanyProfileFields,
+} = require("../utils/companyProfileFields");
 const {
   isCompanyRoleFolder,
   loadRoleItems,
@@ -37,6 +45,7 @@ const {
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
+  syncIgdbParentCompanyChildLink,
 } = require("../utils/companyStorage");
 
 function storedExternalCoverUrl(entry) {
@@ -49,10 +58,8 @@ function storedExternalBackgroundUrl(entry) {
   return typeof u === "string" && u.trim() ? u.trim() : null;
 }
 
-function appendIgdbCompanyInfo(data, entry) {
-  if (entry && entry.igdbCompanyInfo && typeof entry.igdbCompanyInfo === "object") {
-    data.igdbCompanyInfo = entry.igdbCompanyInfo;
-  }
+function appendCompanyProfileToPayload(data, entry) {
+  appendCompanyProfileFields(data, entry);
 }
 
 function createCollectionLikeRoutes(config) {
@@ -135,10 +142,7 @@ function createCollectionLikeRoutes(config) {
       const logo = typeof item === "object" && item && item.logo ? item.logo : null;
       const description =
         typeof item === "object" && item && typeof item.description === "string" ? item.description : "";
-      const igdbCompanyInfo =
-        typeof item === "object" && item && item.igdbCompanyInfo && typeof item.igdbCompanyInfo === "object"
-          ? item.igdbCompanyInfo
-          : null;
+      const companyProfileFields = pickCompanyProfileFields(item);
 
       let entry = byId.get(numId);
       if (!entry) {
@@ -149,7 +153,7 @@ function createCollectionLikeRoutes(config) {
           childs: [],
           summary: description || "",
           externalCoverUrl: logo || null,
-          ...(igdbCompanyInfo ? { igdbCompanyInfo } : {}),
+          ...companyProfileFields,
         };
         storageSaveItem(metadataPath, entry);
         byId.set(numId, entry);
@@ -159,6 +163,35 @@ function createCollectionLikeRoutes(config) {
         entry.games.push(gameId);
         storageSaveItem(metadataPath, entry);
       }
+      if (useCompanyStorage && pickCompanyProfileFields(entry).parentCompany) {
+        syncIgdbParentCompanyChildLink(metadataPath, contentFolder, entry);
+      }
+    }
+  }
+
+  async function syncParentCompanyChildLinkFromRequest(req, childEntry) {
+    if (!useCompanyStorage || !pickCompanyProfileFields(childEntry).parentCompany) {
+      return false;
+    }
+
+    const creds = resolveTwitchAppCredentials(req);
+    if (!creds.clientId || !creds.clientSecret) {
+      return syncIgdbParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+    }
+
+    try {
+      const { getIGDBAccessToken } = require("./igdb");
+      const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
+      return await syncIgdbParentCompanyChildLinkWithIgdb(
+        metadataPath,
+        contentFolder,
+        childEntry,
+        accessToken,
+        creds.clientId,
+      );
+    } catch (err) {
+      console.error(`Failed to enrich parent company for ${contentFolder}/${childEntry.id}:`, err.message);
+      return syncIgdbParentCompanyChildLink(metadataPath, contentFolder, childEntry);
     }
   }
 
@@ -230,7 +263,7 @@ function createCollectionLikeRoutes(config) {
       });
       data.background = background || storedExternalBackgroundUrl(entry) || null;
       data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
-      appendIgdbCompanyInfo(data, entry);
+      appendCompanyProfileToPayload(data, entry);
       return data;
     }
 
@@ -350,7 +383,7 @@ function createCollectionLikeRoutes(config) {
       });
       data.background = background || null;
       data.externalBackgroundUrl = null;
-      appendIgdbCompanyInfo(data, newItem);
+      appendCompanyProfileToPayload(data, newItem);
       res.status(201).json({ status: "success", [singleResponseKey]: data });
     });
 
@@ -430,11 +463,11 @@ function createCollectionLikeRoutes(config) {
     });
 
     if (contentFolder === "developers" || contentFolder === "publishers") {
-      app.post(`${normalizedRouteBase}/:id/merge-igdb-company-info`, requireToken, (req, res) => {
+      const handleMergeCompanyProfile = async (req, res) => {
         const id = normalizeId(req.params.id);
-        const remote = req.body && req.body.igdbCompanyInfo;
-        if (!remote || typeof remote !== "object") {
-          return res.status(400).json({ error: "Missing igdbCompanyInfo object in request body" });
+        const remote = extractCompanyProfileFieldsFromBody(req.body);
+        if (remote === undefined || remote === null || typeof remote !== "object") {
+          return res.status(400).json({ error: "Missing company profile fields in request body" });
         }
 
         try {
@@ -443,11 +476,16 @@ function createCollectionLikeRoutes(config) {
             return res.status(404).json({ error: `${humanName} not found` });
           }
 
-          const { info, changed } = mergeIgdbCompanyInfo(entry.igdbCompanyInfo, remote);
+          const localFields = pickCompanyProfileFields(entry);
+          const { info, changed } = mergeCompanyProfile(localFields, remote);
           if (changed) {
-            entry.igdbCompanyInfo = info;
+            applyNormalizedCompanyProfileFields(entry, info);
             storageSaveItem(metadataPath, entry);
             upsertCacheEntry(entry);
+          }
+          if (pickCompanyProfileFields(entry).parentCompany) {
+            await syncParentCompanyChildLinkFromRequest(req, entry);
+            updateCache();
           }
 
           res.json({
@@ -455,10 +493,12 @@ function createCollectionLikeRoutes(config) {
             [singleResponseKey]: buildDetailPayload(entry),
           });
         } catch (e) {
-          console.error(`Failed to merge IGDB company info for ${contentFolder}/${id}:`, e.message);
-          res.status(500).json({ error: "Failed to merge IGDB company info" });
+          console.error(`Failed to merge company profile for ${contentFolder}/${id}:`, e.message);
+          res.status(500).json({ error: "Failed to merge company profile" });
         }
-      });
+      };
+
+      app.post(`${normalizedRouteBase}/:id/merge-company-profile`, requireToken, handleMergeCompanyProfile);
     }
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
@@ -527,12 +567,11 @@ function createCollectionLikeRoutes(config) {
       }
     });
 
-    app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+    app.put(`${normalizedRouteBase}/:id`, requireToken, async (req, res) => {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs, igdbCompanyInfo } =
-        req.body;
+      const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
         storageSaveItem(metadataPath, entry);
@@ -593,19 +632,21 @@ function createCollectionLikeRoutes(config) {
       }
       if (
         (contentFolder === "developers" || contentFolder === "publishers") &&
-        Object.prototype.hasOwnProperty.call(req.body, "igdbCompanyInfo")
+        hasAnyCompanyProfileFieldInBody(req.body)
       ) {
-        if (igdbCompanyInfo != null && typeof igdbCompanyInfo !== "object") {
-          return res.status(400).json({ error: "igdbCompanyInfo must be an object or null" });
-        }
-        const normalized = normalizeStoredIgdbCompanyInfo(igdbCompanyInfo);
-        if (normalized) {
-          entry.igdbCompanyInfo = normalized;
+        const raw = extractCompanyProfileFieldsFromBody(req.body);
+        if (raw === null) {
+          applyNormalizedCompanyProfileFields(entry, null);
         } else {
-          delete entry.igdbCompanyInfo;
+          const normalized = normalizeStoredCompanyProfile(raw);
+          applyNormalizedCompanyProfileFields(entry, normalized);
         }
         storageSaveItem(metadataPath, entry);
         updateCache();
+        if (pickCompanyProfileFields(entry).parentCompany) {
+          await syncParentCompanyChildLinkFromRequest(req, entry);
+          updateCache();
+        }
       }
       const cover = getLocalMediaPath({
         metadataPath,
@@ -633,7 +674,7 @@ function createCollectionLikeRoutes(config) {
       responsePayload.background = background || storedExternalBackgroundUrl(entry) || null;
       responsePayload.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
       if (contentFolder === "developers" || contentFolder === "publishers") {
-        appendIgdbCompanyInfo(responsePayload, entry);
+        appendCompanyProfileToPayload(responsePayload, entry);
       }
       res.json({
         status: "success",

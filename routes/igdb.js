@@ -3,7 +3,7 @@
 
 const https = require("https");
 const { coerceToGameTypeId } = require("../utils/igdbGameType");
-const { resolveIgdbCompanyInfoForEntry } = require("../utils/igdbCompany");
+const { resolveCompanyProfileForEntry } = require("../utils/igdbCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 
 // IGDB Access Token cache (per clientId)
@@ -1082,13 +1082,16 @@ function registerIGDBRoutes(app, requireToken) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
-      const igdbCompanyInfo = await resolveIgdbCompanyInfoForEntry(
+      const remoteProfile = await resolveCompanyProfileForEntry(
         { id: companyId, title: name },
         accessToken,
         clientId
       );
       res.setHeader("Content-Type", "application/json");
-      res.json({ igdbCompanyInfo: igdbCompanyInfo || null });
+      if (!remoteProfile || typeof remoteProfile !== "object") {
+        return res.json(null);
+      }
+      res.json(remoteProfile);
     } catch (err) {
       console.error("IGDB company info error:", err);
       res.setHeader("Content-Type", "application/json");

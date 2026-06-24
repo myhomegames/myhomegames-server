@@ -5,6 +5,11 @@ const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
 const { normalizeId, normalizeChildIds, findById } = require("./collectionsShared");
 const { getTitleForSort } = require("./sortUtils");
+const {
+  pickFromFlat,
+  pickCompanyProfileFields,
+  COMPANY_PROFILE_FIELD_KEYS,
+} = require("./companyProfileFields");
 
 const COMPANIES_FOLDER = "companies";
 const ROLE_FOLDERS = new Set(["developers", "publishers"]);
@@ -51,24 +56,54 @@ function isLegacyRoleMetadata(meta) {
     meta.showTitle !== undefined ||
     meta.externalCoverUrl !== undefined ||
     meta.externalBackgroundUrl !== undefined ||
-    meta.igdbCompanyInfo !== undefined ||
     Array.isArray(meta.childs)
   );
 }
 
 function extractCompanyProfile(meta, companyId) {
-  const profile = {
+  return {
     title: typeof meta.title === "string" ? meta.title.trim() : "",
     summary: typeof meta.summary === "string" ? meta.summary.trim() : "",
     showTitle: meta.showTitle !== false,
     childs: normalizeChildIds(meta.childs, companyId),
     externalCoverUrl: storedExternalCoverUrl(meta),
     externalBackgroundUrl: storedExternalBackgroundUrl(meta),
+    ...pickFromFlat(meta),
   };
-  if (meta.igdbCompanyInfo && typeof meta.igdbCompanyInfo === "object") {
-    profile.igdbCompanyInfo = meta.igdbCompanyInfo;
+}
+
+function isEmptyCompanyProfileValue(value) {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (typeof value === "object") {
+    if (value.id != null && typeof value.name === "string" && value.name.trim() !== "") {
+      return false;
+    }
+    return true;
   }
-  return profile;
+  return false;
+}
+
+function mergeParentCompanyProfiles(existing, incoming) {
+  const merged = { ...existing };
+  for (const key of COMPANY_PROFILE_FIELD_KEYS) {
+    if (isEmptyCompanyProfileValue(existing[key]) && !isEmptyCompanyProfileValue(incoming[key])) {
+      merged[key] = incoming[key];
+    }
+  }
+  if (isEmptyCompanyProfileValue(existing.title) && incoming.title) {
+    merged.title = incoming.title;
+  }
+  if (isEmptyCompanyProfileValue(existing.summary) && incoming.summary) {
+    merged.summary = incoming.summary;
+  }
+  if (isEmptyCompanyProfileValue(existing.externalCoverUrl) && incoming.externalCoverUrl) {
+    merged.externalCoverUrl = incoming.externalCoverUrl;
+  }
+  if (isEmptyCompanyProfileValue(existing.externalBackgroundUrl) && incoming.externalBackgroundUrl) {
+    merged.externalBackgroundUrl = incoming.externalBackgroundUrl;
+  }
+  return merged;
 }
 
 function mergeCompanyProfiles(existing, incoming) {
@@ -114,9 +149,7 @@ function loadCompanyProfile(metadataPath, companyId) {
     childs: normalizeChildIds(meta.childs, companyId),
     externalCoverUrl: storedExternalCoverUrl(meta),
     externalBackgroundUrl: storedExternalBackgroundUrl(meta),
-    ...(meta.igdbCompanyInfo && typeof meta.igdbCompanyInfo === "object"
-      ? { igdbCompanyInfo: meta.igdbCompanyInfo }
-      : {}),
+    ...pickFromFlat(meta),
   };
 }
 
@@ -303,7 +336,7 @@ function deleteRoleItem(metadataPath, roleFolder, companyId) {
   deleteCompanyIfOrphaned(metadataPath, companyId);
 }
 
-function ensureCompanyRoleEntry(metadataPath, roleFolder, companyId, profilePatch = {}) {
+function ensureCompanyRoleEntry(metadataPath, roleFolder, companyId, profilePatch = {}, options = {}) {
   const normalizedId = normalizeId(companyId);
   if (normalizedId == null) return null;
 
@@ -313,7 +346,10 @@ function ensureCompanyRoleEntry(metadataPath, roleFolder, companyId, profilePatc
     if (!profile.title) return null;
     saveCompanyProfile(metadataPath, normalizedId, profile);
   } else if (Object.keys(profilePatch).length > 0) {
-    saveCompanyProfile(metadataPath, normalizedId, mergeCompanyProfiles(profile, profilePatch));
+    const merged = options.fillGapsOnly
+      ? mergeParentCompanyProfiles(profile, profilePatch)
+      : mergeCompanyProfiles(profile, profilePatch);
+    saveCompanyProfile(metadataPath, normalizedId, merged);
     profile = loadCompanyProfile(metadataPath, normalizedId);
   }
 
@@ -393,6 +429,51 @@ function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCach
   return count;
 }
 
+/**
+ * When parentCompany is set on the child profile, ensure the parent exists in the same role
+ * and link the child under it (parent.childs).
+ */
+function syncIgdbParentCompanyChildLink(metadataPath, roleFolder, childEntry, options = {}) {
+  if (!isCompanyRoleFolder(roleFolder) || !childEntry || childEntry.id == null) {
+    return false;
+  }
+
+  const parentRef = pickCompanyProfileFields(childEntry).parentCompany;
+  if (!parentRef || parentRef.id == null) return false;
+
+  const parentId = normalizeId(parentRef.id);
+  const childId = normalizeId(childEntry.id);
+  if (parentId == null || childId == null || String(parentId) === String(childId)) {
+    return false;
+  }
+
+  const parentName =
+    typeof parentRef.name === "string" && parentRef.name.trim()
+      ? parentRef.name.trim()
+      : String(parentId);
+
+  const parentProfilePatch =
+    options.parentProfilePatch && typeof options.parentProfilePatch === "object"
+      ? options.parentProfilePatch
+      : null;
+  const existingParent = loadCompanyProfile(metadataPath, parentId);
+  const patch = {
+    title: parentName,
+    ...(parentProfilePatch || {}),
+  };
+  if (!patch.title) patch.title = parentName;
+
+  ensureCompanyRoleEntry(metadataPath, roleFolder, parentId, patch, {
+    fillGapsOnly: Boolean(existingParent && parentProfilePatch),
+  });
+
+  if (!roleLinkExists(metadataPath, roleFolder, childId)) {
+    return false;
+  }
+
+  return addChildToRoleItem(metadataPath, roleFolder, parentId, childId);
+}
+
 module.exports = {
   COMPANIES_FOLDER,
   isCompanyRoleFolder,
@@ -411,6 +492,7 @@ module.exports = {
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
+  syncIgdbParentCompanyChildLink,
   migrateLegacyRoleMetadata,
   isLegacyRoleMetadata,
 };

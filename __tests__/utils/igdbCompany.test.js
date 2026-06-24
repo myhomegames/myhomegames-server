@@ -1,8 +1,9 @@
 const {
   mapIgdbCompanyToInfo,
+  mapIgdbCompanyToStoragePatch,
   pickRenamedPredecessorCompany,
-  mergeIgdbCompanyInfo,
-  normalizeStoredIgdbCompanyInfo,
+  mergeCompanyProfile,
+  normalizeStoredCompanyProfile,
   pickCompanyByTitle,
 } = require("../../utils/igdbCompany");
 
@@ -116,6 +117,15 @@ describe("mapIgdbCompanyToInfo", () => {
     });
   });
 
+  test("normalizes merged IGDB status to Merge", () => {
+    const info = mapIgdbCompanyToInfo({
+      id: 1,
+      status: { name: "merged" },
+    });
+
+    expect(info).toEqual({ status: "Merge" });
+  });
+
   test("returns null when company has no display fields", () => {
     expect(mapIgdbCompanyToInfo({ id: 1 })).toBeNull();
     expect(mapIgdbCompanyToInfo(null)).toBeNull();
@@ -135,7 +145,7 @@ describe("mapIgdbCompanyToInfo", () => {
     });
 
     expect(info).toEqual({
-      status: "active",
+      status: "Active",
       countryCode: 392,
       started: "1979-05-30",
       companySize: "1001-5000 employees",
@@ -173,7 +183,32 @@ describe("pickRenamedPredecessorCompany", () => {
   });
 });
 
-describe("mergeIgdbCompanyInfo", () => {
+describe("mapIgdbCompanyToStoragePatch", () => {
+  test("maps IGDB company to storage patch with profile fields", () => {
+    const patch = mapIgdbCompanyToStoragePatch(
+      {
+        id: 99,
+        name: "Mattel",
+        description: "Mattel is an American toy company.",
+        logo: { image_id: "co1234" },
+      },
+      {
+        status: "Active",
+        countryCode: 840,
+      },
+    );
+
+    expect(patch).toEqual({
+      title: "Mattel",
+      summary: "Mattel is an American toy company.",
+      externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/co1234.png",
+      status: "Active",
+      countryCode: 840,
+    });
+  });
+});
+
+describe("mergeCompanyProfile", () => {
   test("fills only missing local fields from remote", () => {
     const local = {
       status: "Active",
@@ -192,7 +227,7 @@ describe("mergeIgdbCompanyInfo", () => {
       updatedTo: { id: 99, name: "New Co" },
     };
 
-    const { info, changed } = mergeIgdbCompanyInfo(local, remote);
+    const { info, changed } = mergeCompanyProfile(local, remote);
 
     expect(changed).toBe(true);
     expect(info).toEqual({
@@ -218,7 +253,7 @@ describe("mergeIgdbCompanyInfo", () => {
       legalName: "Legal Co",
     };
 
-    const { info, changed } = mergeIgdbCompanyInfo(local, remote);
+    const { info, changed } = mergeCompanyProfile(local, remote);
 
     expect(changed).toBe(true);
     expect(info).toEqual({
@@ -236,7 +271,7 @@ describe("mergeIgdbCompanyInfo", () => {
       legalName: "Legal Co",
     };
 
-    const { info, changed } = mergeIgdbCompanyInfo(local, remote);
+    const { info, changed } = mergeCompanyProfile(local, remote);
 
     expect(changed).toBe(true);
     expect(info).toEqual({
@@ -254,7 +289,7 @@ describe("mergeIgdbCompanyInfo", () => {
       status: "Merge",
     };
 
-    const { info, changed } = mergeIgdbCompanyInfo(local, remote);
+    const { info, changed } = mergeCompanyProfile(local, remote);
 
     expect(changed).toBe(true);
     expect(info).toEqual({
@@ -265,17 +300,17 @@ describe("mergeIgdbCompanyInfo", () => {
 
   test("returns unchanged when remote is empty", () => {
     const local = { status: "Active" };
-    const { info, changed } = mergeIgdbCompanyInfo(local, null);
+    const { info, changed } = mergeCompanyProfile(local, null);
 
     expect(changed).toBe(false);
     expect(info).toEqual({ status: "Active" });
   });
 });
 
-describe("normalizeStoredIgdbCompanyInfo", () => {
+describe("normalizeStoredCompanyProfile", () => {
   test("normalizes editable IGDB company fields", () => {
     expect(
-      normalizeStoredIgdbCompanyInfo({
+      normalizeStoredCompanyProfile({
         status: "merge",
         countryCode: "392",
         started: " 1983 ",
@@ -303,8 +338,8 @@ describe("normalizeStoredIgdbCompanyInfo", () => {
   });
 
   test("returns null when all fields are empty", () => {
-    expect(normalizeStoredIgdbCompanyInfo({})).toBeNull();
-    expect(normalizeStoredIgdbCompanyInfo(null)).toBeNull();
+    expect(normalizeStoredCompanyProfile({})).toBeNull();
+    expect(normalizeStoredCompanyProfile(null)).toBeNull();
   });
 });
 

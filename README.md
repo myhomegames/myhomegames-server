@@ -143,7 +143,7 @@ ${METADATA_PATH}/
     │       └── cover.webp          # Category cover image (optional)
     ├── companies/
     │   └── ${companyId}/           # Shared IGDB company profile (developers & publishers)
-    │       ├── metadata.json       # title, summary, childs, igdbCompanyInfo, external URLs, …
+    │       ├── metadata.json       # title, summary, childs, company profile fields, external URLs, …
     │       ├── cover.webp          # Company cover image (optional)
     │       └── background.webp     # Company background image (optional)
     ├── developers/

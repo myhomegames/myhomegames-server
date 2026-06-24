@@ -7,6 +7,7 @@ const {
   saveRoleItem,
   deleteRoleItem,
   migrateLegacyRoleMetadata,
+  syncIgdbParentCompanyChildLink,
 } = require("../../utils/companyStorage");
 
 describe("companyStorage", () => {
@@ -100,6 +101,86 @@ describe("companyStorage", () => {
         fs.readFileSync(path.join(metadataPath, "content", "companies", "37", "metadata.json"), "utf8"),
       ).title,
     ).toBe("Legacy Co");
+  });
+
+  test("syncIgdbParentCompanyChildLink links child under parentCompany", () => {
+    saveRoleItem(metadataPath, "publishers", {
+      id: 10,
+      title: "Child Publisher",
+      summary: "",
+      games: [1],
+      childs: [],
+      parentCompany: { id: 20, name: "Parent Corp" },
+    });
+
+    const linked = syncIgdbParentCompanyChildLink(metadataPath, "publishers", {
+      id: 10,
+      title: "Child Publisher",
+      parentCompany: { id: 20, name: "Parent Corp" },
+    });
+
+    expect(linked).toBe(true);
+    const parent = loadRoleItemById(metadataPath, "publishers", 20);
+    expect(parent).not.toBeNull();
+    expect(parent.title).toBe("Parent Corp");
+    expect(parent.childs).toEqual([10]);
+    expect(parent.games).toEqual([]);
+  });
+
+  test("syncIgdbParentCompanyChildLink applies IGDB profile patch when creating parent", () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 10,
+      title: "Child Dev",
+      summary: "",
+      games: [1],
+      childs: [],
+      parentCompany: { id: 20, name: "Parent Corp" },
+    });
+
+    syncIgdbParentCompanyChildLink(
+      metadataPath,
+      "developers",
+      { id: 10, parentCompany: { id: 20, name: "Parent Corp" } },
+      {
+        parentProfilePatch: {
+          title: "Mattel, Inc.",
+          summary: "American toy company.",
+          externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/logo.png",
+          status: "Active",
+          countryCode: 840,
+        },
+      },
+    );
+
+    const parent = loadRoleItemById(metadataPath, "developers", 20);
+    expect(parent.title).toBe("Mattel, Inc.");
+    expect(parent.summary).toBe("American toy company.");
+    expect(parent.externalCoverUrl).toBe("https://images.igdb.com/igdb/image/upload/t_1080p/logo.png");
+    expect(parent.status).toBe("Active");
+    expect(parent.countryCode).toBe(840);
+    expect(parent.childs).toEqual([10]);
+  });
+
+  test("syncIgdbParentCompanyChildLink is idempotent when link already exists", () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 5,
+      title: "Child Dev",
+      summary: "",
+      games: [2],
+      childs: [],
+      parentCompany: { id: 20, name: "Parent Dev" },
+    });
+
+    const childEntry = {
+      id: 5,
+      parentCompany: { id: 20, name: "Parent Dev" },
+    };
+
+    expect(syncIgdbParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(true);
+    expect(syncIgdbParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(false);
+
+    const parent = loadRoleItemById(metadataPath, "developers", 20);
+    expect(parent.childs).toEqual([5]);
   });
 
   test("deleteRoleItem removes developer link but keeps company for publisher", () => {
