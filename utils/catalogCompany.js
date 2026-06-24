@@ -1,7 +1,7 @@
 const https = require("https");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
-const { pickCompanyProfileFields } = require("./companyProfileFields");
+const { pickCompanyProfileFields, COMPANY_PROFILE_FIELD_KEYS } = require("./companyProfileFields");
 const { syncParentCompanyChildLink } = require("./companyStorage");
 
 const LOG_PREFIX = "[catalog-company]";
@@ -658,6 +658,46 @@ function normalizeCompanyStatus(value) {
   return "Active";
 }
 
+const COMPANY_MERGE_STORAGE_KEYS = ["title", "summary", "externalCoverUrl", "externalBackgroundUrl"];
+
+function hasAnyCompanyMergeFieldInBody(body) {
+  if (!body || typeof body !== "object") return false;
+  for (const key of COMPANY_PROFILE_FIELD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) return true;
+  }
+  for (const key of COMPANY_MERGE_STORAGE_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    const value = body[key];
+    if (value != null && (typeof value !== "string" || value.trim() !== "")) return true;
+  }
+  return false;
+}
+
+/** Build gap-fill merge patch from merge-company-profile request body (profile + storage fields). */
+function buildCompanyMergePatchFromBody(body) {
+  if (!body || typeof body !== "object") return {};
+
+  const profileRaw = {};
+  for (const key of COMPANY_PROFILE_FIELD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      profileRaw[key] = body[key];
+    }
+  }
+
+  const patch = { ...(normalizeStoredCompanyProfile(profileRaw) || {}) };
+  for (const key of COMPANY_MERGE_STORAGE_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    const value = body[key];
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed || key === "summary") {
+        patch[key] = key === "summary" ? value : trimmed;
+      }
+    }
+  }
+  return patch;
+}
+
 /** Normalize user-edited company metadata before persisting on developer/publisher items. */
 function normalizeStoredCompanyProfile(input) {
   if (input == null) return null;
@@ -711,6 +751,8 @@ module.exports = {
   isMissingLocalValue,
   mergeCompanyProfile,
   normalizeStoredCompanyProfile,
+  buildCompanyMergePatchFromBody,
+  hasAnyCompanyMergeFieldInBody,
   resolveCompanyProfileForEntry,
   syncParentCompanyChildLinkFromCatalog,
 };

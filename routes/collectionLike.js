@@ -24,7 +24,14 @@ const {
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { coerceToGameTypeId } = require("../utils/gameType");
-const { mergeCompanyProfile, normalizeStoredCompanyProfile } = require("../utils/catalogCompany");
+const {
+  buildCompanyMergePatchFromBody,
+  hasAnyCompanyMergeFieldInBody,
+  normalizeStoredCompanyProfile,
+  syncParentCompanyChildLinkFromCatalog,
+} = require("../utils/catalogCompany");
+const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
+const { getIGDBAccessToken } = require("./igdb");
 const {
   appendCompanyProfileFields,
   applyNormalizedCompanyProfileFields,
@@ -40,12 +47,23 @@ const {
   deleteRoleItem,
   ensureCompanyRoleEntry,
   hasLocalCompanyCover,
+  mergeParentCompanyProfiles,
   getCompanyContentDir,
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
   syncParentCompanyChildLink,
 } = require("../utils/companyStorage");
+
+function companyMergeSnapshot(entry) {
+  return JSON.stringify({
+    title: entry.title,
+    summary: entry.summary,
+    externalCoverUrl: entry.externalCoverUrl,
+    externalBackgroundUrl: entry.externalBackgroundUrl,
+    ...pickCompanyProfileFields(entry),
+  });
+}
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -209,11 +227,32 @@ function createCollectionLikeRoutes(config) {
       cache = storageLoadItems(metadataPath);
     };
 
-    function syncParentCompanyChildLinkFromRequest(_req, childEntry) {
+    async function syncParentCompanyChildLinkFromRequest(req, childEntry) {
       if (!useCompanyStorage || !pickCompanyProfileFields(childEntry).parentCompany) {
         return false;
       }
-      return syncParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+
+      const creds = resolveTwitchAppCredentialsForServerIgdb(req);
+      if (!creds.clientId || !creds.clientSecret) {
+        return syncParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+      }
+
+      try {
+        const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
+        return await syncParentCompanyChildLinkFromCatalog(
+          metadataPath,
+          contentFolder,
+          childEntry,
+          accessToken,
+          creds.clientId,
+        );
+      } catch (err) {
+        console.warn(
+          `Parent company IGDB sync failed for ${contentFolder}/${childEntry.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+        return syncParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+      }
     }
 
     function buildDetailPayload(entry) {
@@ -445,8 +484,7 @@ function createCollectionLikeRoutes(config) {
     if (contentFolder === "developers" || contentFolder === "publishers") {
       const handleMergeCompanyProfile = async (req, res) => {
         const id = normalizeId(req.params.id);
-        const rawRemote = extractCompanyProfileFieldsFromBody(req.body);
-        if (rawRemote === undefined || rawRemote === null || typeof rawRemote !== "object") {
+        if (!hasAnyCompanyMergeFieldInBody(req.body)) {
           return res.status(400).json({ error: "Missing company profile fields in request body" });
         }
 
@@ -456,17 +494,20 @@ function createCollectionLikeRoutes(config) {
             return res.status(404).json({ error: `${humanName} not found` });
           }
 
-          const remote = normalizeStoredCompanyProfile(rawRemote);
-          const localFields = pickCompanyProfileFields(entry);
-          const { info, changed } = mergeCompanyProfile(localFields, remote || {});
-          if (changed && info) {
-            const normalized = normalizeStoredCompanyProfile(info);
-            applyNormalizedCompanyProfileFields(entry, normalized);
+          const remotePatch = buildCompanyMergePatchFromBody(req.body);
+          const merged = mergeParentCompanyProfiles(entry, remotePatch);
+          const changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
+          if (changed) {
+            entry.title = merged.title;
+            entry.summary = merged.summary;
+            entry.externalCoverUrl = merged.externalCoverUrl;
+            entry.externalBackgroundUrl = merged.externalBackgroundUrl;
+            applyNormalizedCompanyProfileFields(entry, pickCompanyProfileFields(merged));
             storageSaveItem(metadataPath, entry);
             upsertCacheEntry(entry);
           }
           if (pickCompanyProfileFields(entry).parentCompany) {
-            syncParentCompanyChildLinkFromRequest(req, entry);
+            await syncParentCompanyChildLinkFromRequest(req, entry);
             updateCache();
           }
 
@@ -626,7 +667,7 @@ function createCollectionLikeRoutes(config) {
         storageSaveItem(metadataPath, entry);
         updateCache();
         if (pickCompanyProfileFields(entry).parentCompany) {
-          syncParentCompanyChildLinkFromRequest(req, entry);
+          await syncParentCompanyChildLinkFromRequest(req, entry);
           updateCache();
         }
       }

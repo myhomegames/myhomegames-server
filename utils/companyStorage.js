@@ -489,6 +489,7 @@ module.exports = {
   deleteRoleItem,
   ensureCompanyRoleEntry,
   hasLocalCompanyCover,
+  mergeParentCompanyProfiles,
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,

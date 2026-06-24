@@ -4,6 +4,7 @@ const {
   pickRenamedPredecessorCompany,
   mergeCompanyProfile,
   normalizeStoredCompanyProfile,
+  buildCompanyMergePatchFromBody,
   pickCompanyByTitle,
 } = require("../../utils/catalogCompany");
 
@@ -204,6 +205,26 @@ describe("mapCatalogCompanyStoragePatch", () => {
       externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/co1234.png",
       status: "Active",
       countryCode: 840,
+    });
+  });
+});
+
+describe("buildCompanyMergePatchFromBody", () => {
+  test("includes profile and storage fields from request body", () => {
+    const patch = buildCompanyMergePatchFromBody({
+      status: "Active",
+      countryCode: 840,
+      title: "Capcom",
+      summary: "Japanese game company.",
+      externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/co1234.png",
+    });
+
+    expect(patch).toEqual({
+      status: "Active",
+      countryCode: 840,
+      title: "Capcom",
+      summary: "Japanese game company.",
+      externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/co1234.png",
     });
   });
 });

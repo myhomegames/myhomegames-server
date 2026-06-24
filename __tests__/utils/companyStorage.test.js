@@ -161,6 +161,40 @@ describe("companyStorage", () => {
     expect(parent.childs).toEqual([10]);
   });
 
+  test("syncParentCompanyChildLink fills missing parent cover on later patch", () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 10,
+      title: "Child Dev",
+      summary: "",
+      games: [1],
+      childs: [],
+      parentCompany: { id: 20, name: "Parent Corp" },
+    });
+
+    syncParentCompanyChildLink(metadataPath, "developers", {
+      id: 10,
+      parentCompany: { id: 20, name: "Parent Corp" },
+    });
+
+    syncParentCompanyChildLink(
+      metadataPath,
+      "developers",
+      { id: 10, parentCompany: { id: 20, name: "Parent Corp" } },
+      {
+        parentProfilePatch: {
+          title: "Mattel, Inc.",
+          summary: "American toy company.",
+          externalCoverUrl: "https://images.igdb.com/igdb/image/upload/t_1080p/logo.png",
+          status: "Active",
+        },
+      },
+    );
+
+    const parent = loadRoleItemById(metadataPath, "developers", 20);
+    expect(parent.externalCoverUrl).toBe("https://images.igdb.com/igdb/image/upload/t_1080p/logo.png");
+    expect(parent.status).toBe("Active");
+  });
+
   test("syncParentCompanyChildLink is idempotent when link already exists", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 5,

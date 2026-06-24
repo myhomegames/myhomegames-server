@@ -3,7 +3,7 @@
 
 const https = require("https");
 const { coerceToGameTypeId } = require("../utils/gameType");
-const { resolveCompanyProfileForEntry } = require("../utils/catalogCompany");
+const { fetchRemoteCompanyStoragePatch } = require("../utils/catalogCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
 
 // IGDB Access Token cache (per clientId)
@@ -1082,10 +1082,11 @@ function registerIGDBRoutes(app, requireToken) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
-      const remoteProfile = await resolveCompanyProfileForEntry(
-        { id: companyId, title: name },
+      const remoteProfile = await fetchRemoteCompanyStoragePatch(
+        companyId,
+        name,
         accessToken,
-        clientId
+        clientId,
       );
       res.setHeader("Content-Type", "application/json");
       if (!remoteProfile || typeof remoteProfile !== "object") {
