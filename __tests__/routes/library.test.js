@@ -1,4 +1,6 @@
 const request = require('supertest');
+const fs = require('fs');
+const path = require('path');
 
 // Import setup first to set environment variables
 const { testMetadataPath } = require('../setup');
@@ -2377,11 +2379,21 @@ describe('POST /catalog/import-game', () => {
       .expect(200);
 
     expect(mergeRes.body).toHaveProperty('status', 'merged');
-    expect(mergeRes.body.publisher).toHaveProperty('parentCompany');
-    expect(mergeRes.body.publisher.parentCompany).toMatchObject({
-      id: parentId,
-      name: 'Parent Publisher',
-    });
+    const parentRes = await request(app)
+      .get(`/publishers/${parentId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(parentRes.body.childs).toEqual(
+      expect.arrayContaining([publisherId]),
+    );
+
+    const childMeta = JSON.parse(
+      fs.readFileSync(
+        path.join(testMetadataPath, 'content', 'companies', String(publisherId), 'metadata.json'),
+        'utf8',
+      ),
+    );
+    expect(childMeta.parentCompany).toBeUndefined();
 
     await request(app).delete(`/games/${gameId}`).set('X-Auth-Token', 'test-token').expect(200);
   });

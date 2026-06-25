@@ -133,6 +133,7 @@ function saveCompanyProfile(metadataPath, companyId, profile) {
   const toSave = { ...profile };
   delete toSave.id;
   delete toSave.games;
+  delete toSave.parentCompany;
   toSave.childs = normalizeChildIds(toSave.childs, companyId);
   writeJsonFile(getCompanyMetadataPath(metadataPath, companyId), toSave);
 }
@@ -142,6 +143,10 @@ function loadCompanyProfile(metadataPath, companyId) {
   if (!fs.existsSync(metaPath)) return null;
   const meta = readJsonFile(metaPath, null);
   if (!meta || typeof meta.title !== "string" || !meta.title.trim()) return null;
+  if (meta.parentCompany !== undefined) {
+    delete meta.parentCompany;
+    writeJsonFile(metaPath, meta);
+  }
   return {
     title: meta.title.trim(),
     summary: typeof meta.summary === "string" ? meta.summary : "",
@@ -393,6 +398,20 @@ function removeChildFromRoleItem(metadataPath, roleFolder, parentId, childId) {
   return true;
 }
 
+function unlinkChildFromOtherParents(metadataPath, roleFolder, childId, keepParentId) {
+  const normalizedChildId = normalizeId(childId);
+  const normalizedKeepParentId = normalizeId(keepParentId);
+  if (normalizedChildId == null || normalizedKeepParentId == null) return;
+
+  const items = loadRoleItems(metadataPath, roleFolder);
+  for (const item of items) {
+    if (String(item.id) === String(normalizedKeepParentId)) continue;
+    const childs = Array.isArray(item.childs) ? item.childs : [];
+    if (!childs.some((id) => String(id) === String(normalizedChildId))) continue;
+    removeChildFromRoleItem(metadataPath, roleFolder, item.id, normalizedChildId);
+  }
+}
+
 function pruneOrphanRoleItems(metadataPath, roleFolder, items) {
   if (!items || !Array.isArray(items)) return;
   let removedSomething = true;
@@ -435,20 +454,17 @@ function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCach
 }
 
 /**
- * When parentCompany is set on the child profile, ensure the parent exists in the same role
- * and link the child under it (parent.childs).
+ * Ensure the parent exists in the same role and link the child under it (parent.childs).
+ * Parent reference comes from IGDB during import only; it is not stored on the child profile.
  */
-function syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, options = {}) {
-  if (!isCompanyRoleFolder(roleFolder) || !childEntry || childEntry.id == null) {
+function linkCompanyUnderParent(metadataPath, roleFolder, childId, parentRef, options = {}) {
+  if (!isCompanyRoleFolder(roleFolder) || childId == null || !parentRef || parentRef.id == null) {
     return false;
   }
 
-  const parentRef = pickCompanyProfileFields(childEntry).parentCompany;
-  if (!parentRef || parentRef.id == null) return false;
-
   const parentId = normalizeId(parentRef.id);
-  const childId = normalizeId(childEntry.id);
-  if (parentId == null || childId == null || String(parentId) === String(childId)) {
+  const normalizedChildId = normalizeId(childId);
+  if (parentId == null || normalizedChildId == null || String(parentId) === String(normalizedChildId)) {
     return false;
   }
 
@@ -472,11 +488,12 @@ function syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, option
     fillGapsOnly: Boolean(existingParent && parentProfilePatch),
   });
 
-  if (!roleLinkExists(metadataPath, roleFolder, childId)) {
+  if (!roleLinkExists(metadataPath, roleFolder, normalizedChildId)) {
     return false;
   }
 
-  return addChildToRoleItem(metadataPath, roleFolder, parentId, childId);
+  unlinkChildFromOtherParents(metadataPath, roleFolder, normalizedChildId, parentId);
+  return addChildToRoleItem(metadataPath, roleFolder, parentId, normalizedChildId);
 }
 
 module.exports = {
@@ -499,7 +516,8 @@ module.exports = {
   pruneOrphanRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
-  syncParentCompanyChildLink,
+  unlinkChildFromOtherParents,
+  linkCompanyUnderParent,
   migrateLegacyRoleMetadata,
   isLegacyRoleMetadata,
 };

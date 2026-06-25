@@ -7,7 +7,7 @@ const {
   saveRoleItem,
   deleteRoleItem,
   migrateLegacyRoleMetadata,
-  syncParentCompanyChildLink,
+  linkCompanyUnderParent,
 } = require("../../utils/companyStorage");
 
 describe("companyStorage", () => {
@@ -103,20 +103,18 @@ describe("companyStorage", () => {
     ).toBe("Legacy Co");
   });
 
-  test("syncParentCompanyChildLink links child under parentCompany", () => {
+  test("linkCompanyUnderParent links child under parent childs", () => {
     saveRoleItem(metadataPath, "publishers", {
       id: 10,
       title: "Child Publisher",
       summary: "",
       games: [1],
       childs: [],
-      parentCompany: { id: 20, name: "Parent Corp" },
     });
 
-    const linked = syncParentCompanyChildLink(metadataPath, "publishers", {
-      id: 10,
-      title: "Child Publisher",
-      parentCompany: { id: 20, name: "Parent Corp" },
+    const linked = linkCompanyUnderParent(metadataPath, "publishers", 10, {
+      id: 20,
+      name: "Parent Corp",
     });
 
     expect(linked).toBe(true);
@@ -125,22 +123,25 @@ describe("companyStorage", () => {
     expect(parent.title).toBe("Parent Corp");
     expect(parent.childs).toEqual([10]);
     expect(parent.games).toEqual([]);
+
+    const child = loadRoleItemById(metadataPath, "publishers", 10);
+    expect(child.parentCompany).toBeUndefined();
   });
 
-  test("syncParentCompanyChildLink applies IGDB profile patch when creating parent", () => {
+  test("linkCompanyUnderParent applies IGDB profile patch when creating parent", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 10,
       title: "Child Dev",
       summary: "",
       games: [1],
       childs: [],
-      parentCompany: { id: 20, name: "Parent Corp" },
     });
 
-    syncParentCompanyChildLink(
+    linkCompanyUnderParent(
       metadataPath,
       "developers",
-      { id: 10, parentCompany: { id: 20, name: "Parent Corp" } },
+      10,
+      { id: 20, name: "Parent Corp" },
       {
         parentProfilePatch: {
           title: "Mattel, Inc.",
@@ -161,25 +162,22 @@ describe("companyStorage", () => {
     expect(parent.childs).toEqual([10]);
   });
 
-  test("syncParentCompanyChildLink fills missing parent cover on later patch", () => {
+  test("linkCompanyUnderParent fills missing parent cover on later patch", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 10,
       title: "Child Dev",
       summary: "",
       games: [1],
       childs: [],
-      parentCompany: { id: 20, name: "Parent Corp" },
     });
 
-    syncParentCompanyChildLink(metadataPath, "developers", {
-      id: 10,
-      parentCompany: { id: 20, name: "Parent Corp" },
-    });
+    linkCompanyUnderParent(metadataPath, "developers", 10, { id: 20, name: "Parent Corp" });
 
-    syncParentCompanyChildLink(
+    linkCompanyUnderParent(
       metadataPath,
       "developers",
-      { id: 10, parentCompany: { id: 20, name: "Parent Corp" } },
+      10,
+      { id: 20, name: "Parent Corp" },
       {
         parentProfilePatch: {
           title: "Mattel, Inc.",
@@ -195,23 +193,21 @@ describe("companyStorage", () => {
     expect(parent.status).toBe("Active");
   });
 
-  test("syncParentCompanyChildLink is idempotent when link already exists", () => {
+  test("linkCompanyUnderParent is idempotent when link already exists", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 5,
       title: "Child Dev",
       summary: "",
       games: [2],
       childs: [],
-      parentCompany: { id: 20, name: "Parent Dev" },
     });
 
-    const childEntry = {
-      id: 5,
-      parentCompany: { id: 20, name: "Parent Dev" },
-    };
-
-    expect(syncParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(true);
-    expect(syncParentCompanyChildLink(metadataPath, "developers", childEntry)).toBe(false);
+    expect(
+      linkCompanyUnderParent(metadataPath, "developers", 5, { id: 20, name: "Parent Dev" }),
+    ).toBe(true);
+    expect(
+      linkCompanyUnderParent(metadataPath, "developers", 5, { id: 20, name: "Parent Dev" }),
+    ).toBe(false);
 
     const parent = loadRoleItemById(metadataPath, "developers", 20);
     expect(parent.childs).toEqual([5]);

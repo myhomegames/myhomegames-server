@@ -1,10 +1,12 @@
 const {
   mapCatalogCompanyToInfo,
   mapCatalogCompanyStoragePatch,
+  enrichStoragePatchWithParentHint,
   pickRenamedPredecessorCompany,
   mergeCompanyProfile,
   normalizeStoredCompanyProfile,
   buildCompanyMergePatchFromBody,
+  hasAnyCompanyMergeFieldInBody,
   pickCompanyByTitle,
 } = require("../../utils/catalogCompany");
 
@@ -207,6 +209,52 @@ describe("mapCatalogCompanyStoragePatch", () => {
       countryCode: 840,
     });
   });
+
+  test("strips parentCompany from storage patch", () => {
+    const patch = mapCatalogCompanyStoragePatch(
+      {
+        id: 10,
+        name: "Child Co",
+        description: "Child company.",
+      },
+      {
+        status: "Active",
+        parentCompany: { id: 99, name: "Mattel" },
+      },
+    );
+
+    expect(patch).toEqual({
+      title: "Child Co",
+      summary: "Child company.",
+      status: "Active",
+    });
+  });
+
+  test("enrichStoragePatchWithParentHint re-attaches parent for API consumers", () => {
+    const patch = mapCatalogCompanyStoragePatch(
+      {
+        id: 10,
+        name: "Child Co",
+        description: "Child company.",
+      },
+      {
+        status: "Active",
+        parentCompany: { id: 99, name: "Mattel" },
+      },
+    );
+
+    expect(
+      enrichStoragePatchWithParentHint(patch, {
+        status: "Active",
+        parentCompany: { id: 99, name: "Mattel" },
+      }),
+    ).toEqual({
+      title: "Child Co",
+      summary: "Child company.",
+      status: "Active",
+      parentCompany: { id: 99, name: "Mattel" },
+    });
+  });
 });
 
 describe("buildCompanyMergePatchFromBody", () => {
@@ -229,6 +277,21 @@ describe("buildCompanyMergePatchFromBody", () => {
   });
 });
 
+describe("hasAnyCompanyMergeFieldInBody", () => {
+  test("accepts parentCompany alone as a linking hint", () => {
+    expect(
+      hasAnyCompanyMergeFieldInBody({
+        parentCompany: { id: 99, name: "Mattel" },
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects empty body", () => {
+    expect(hasAnyCompanyMergeFieldInBody({})).toBe(false);
+    expect(hasAnyCompanyMergeFieldInBody(null)).toBe(false);
+  });
+});
+
 describe("mergeCompanyProfile", () => {
   test("fills only missing local fields from remote", () => {
     const local = {
@@ -244,7 +307,6 @@ describe("mergeCompanyProfile", () => {
       legalName: "Capcom U.S.A., Inc.",
       companySize: "51-200 employees",
       formerly: { id: 13, name: "Mattel Media" },
-      parentCompany: { id: 99, name: "Mattel" },
       updatedTo: { id: 99, name: "New Co" },
     };
 
@@ -260,7 +322,6 @@ describe("mergeCompanyProfile", () => {
       legalName: "Capcom U.S.A., Inc.",
       companySize: "51-200 employees",
       formerly: { id: 13, name: "Mattel Media" },
-      parentCompany: { id: 99, name: "Mattel" },
       updatedTo: { id: 99, name: "New Co" },
     });
   });
@@ -283,9 +344,9 @@ describe("mergeCompanyProfile", () => {
     });
   });
 
-  test("does not overwrite existing parentCompany fields", () => {
+  test("does not persist parentCompany from remote merge payloads", () => {
     const local = {
-      parentCompany: { id: 1, name: "Keep Parent" },
+      legalName: "Legal Co",
     };
     const remote = {
       parentCompany: { id: 2, name: "Replace Parent" },
@@ -294,9 +355,8 @@ describe("mergeCompanyProfile", () => {
 
     const { info, changed } = mergeCompanyProfile(local, remote);
 
-    expect(changed).toBe(true);
+    expect(changed).toBe(false);
     expect(info).toEqual({
-      parentCompany: { id: 1, name: "Keep Parent" },
       legalName: "Legal Co",
     });
   });
@@ -340,7 +400,6 @@ describe("normalizeStoredCompanyProfile", () => {
         legalName: "Capcom U.S.A., Inc.",
         companySizeId: 4,
         formerly: { id: "13", name: "Mattel Media" },
-        parentCompany: { name: "Mattel" },
         updatedTo: { id: 2, name: "3D Realms" },
       })
     ).toEqual({
@@ -353,7 +412,6 @@ describe("normalizeStoredCompanyProfile", () => {
       companySizeId: 4,
       companySize: "51-200 employees",
       formerly: { id: 13, name: "Mattel Media" },
-      parentCompany: { name: "Mattel" },
       updatedTo: { id: 2, name: "3D Realms" },
     });
   });

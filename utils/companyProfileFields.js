@@ -11,7 +11,7 @@ const COMPANY_PROFILE_SCALAR_KEYS = [
   "companySizeId",
 ];
 
-const COMPANY_PROFILE_REFERENCE_KEYS = ["formerly", "parentCompany", "updatedTo"];
+const COMPANY_PROFILE_REFERENCE_KEYS = ["formerly", "updatedTo"];
 
 const COMPANY_PROFILE_FIELD_KEYS = [
   ...COMPANY_PROFILE_SCALAR_KEYS,

@@ -2,7 +2,7 @@ const https = require("https");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
 const { pickCompanyProfileFields, COMPANY_PROFILE_FIELD_KEYS } = require("./companyProfileFields");
-const { syncParentCompanyChildLink } = require("./companyStorage");
+const { linkCompanyUnderParent } = require("./companyStorage");
 
 const LOG_PREFIX = "[catalog-company]";
 const CATALOG_COMPANY_API_FIELDS =
@@ -116,8 +116,7 @@ function needsCompanyTypeHistoryEnrichment(info) {
   return (
     isMissingLocalValue(info.knownAs) ||
     isMissingLocalValue(info.legalName) ||
-    isMissingLocalValue(info.formerly) ||
-    isMissingLocalValue(info.parentCompany)
+    isMissingLocalValue(info.formerly)
   );
 }
 
@@ -168,14 +167,27 @@ function mapCatalogCompanyStoragePatch(company, profileInfo) {
   const title = companyDisplayName(company);
   const summary = typeof company.description === "string" ? company.description.trim() : "";
   const externalCoverUrl = catalogCompanyLogoUrl(company);
+  const storedProfile =
+    profileInfo && typeof profileInfo === "object" ? { ...profileInfo } : null;
+  if (storedProfile) {
+    delete storedProfile.parentCompany;
+  }
   const patch = {
     ...(title ? { title } : {}),
     ...(summary ? { summary } : {}),
     ...(externalCoverUrl ? { externalCoverUrl } : {}),
-    ...(profileInfo && typeof profileInfo === "object" ? profileInfo : {}),
+    ...(storedProfile || {}),
   };
 
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+/** Re-attach parentCompany on API responses (linking hint only; never persisted on disk). */
+function enrichStoragePatchWithParentHint(patch, profileInfo) {
+  if (!patch || typeof patch !== "object") return patch;
+  const parentRef = extractParentCompanyRef(profileInfo);
+  if (!parentRef) return patch;
+  return { ...patch, parentCompany: parentRef };
 }
 
 async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessToken, clientId) {
@@ -196,28 +208,51 @@ async function fetchRemoteCompanyStoragePatch(companyId, fallbackName, accessTok
       if (patch && !patch.title && fallbackName) {
         patch.title = fallbackName;
       }
-      return patch;
+      return enrichStoragePatchWithParentHint(patch, profileInfo);
     },
   );
 }
 
-async function syncParentCompanyChildLinkFromCatalog(
+function extractParentCompanyRef(catalogInfo) {
+  if (!catalogInfo || typeof catalogInfo !== "object") return null;
+  return normalizeCompanyReference(catalogInfo.parentCompany);
+}
+
+function extractParentCompanyRefFromBody(body) {
+  if (!body || typeof body !== "object") return null;
+  return normalizeCompanyReference(body.parentCompany);
+}
+
+async function linkCompanyUnderParentFromCatalog(
   metadataPath,
   roleFolder,
-  childEntry,
+  childId,
   accessToken,
   clientId,
+  catalogInfo,
 ) {
-  if (!childEntry || childEntry.id == null) return false;
+  const normalizedChildId = Number(childId);
+  if (!Number.isFinite(normalizedChildId)) return false;
 
-  const parentRef = pickCompanyProfileFields(childEntry).parentCompany;
+  let parentRef = extractParentCompanyRef(catalogInfo);
+  if (!parentRef || parentRef.id == null) {
+    try {
+      const remoteInfo = await fetchRemoteCompanyProfile(normalizedChildId, accessToken, clientId);
+      parentRef = extractParentCompanyRef(remoteInfo);
+    } catch (err) {
+      logWarn(
+        `child profile lookup failed for id=${normalizedChildId}`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
   if (!parentRef || parentRef.id == null) return false;
 
   const parentId = Number(parentRef.id);
   const parentName =
     typeof parentRef.name === "string" && parentRef.name.trim()
       ? parentRef.name.trim()
-      : String(parentRef.id);
+      : String(parentId);
 
   let parentProfilePatch = null;
   try {
@@ -229,7 +264,7 @@ async function syncParentCompanyChildLinkFromCatalog(
     );
   }
 
-  return syncParentCompanyChildLink(metadataPath, roleFolder, childEntry, {
+  return linkCompanyUnderParent(metadataPath, roleFolder, normalizedChildId, parentRef, {
     parentProfilePatch: parentProfilePatch || { title: parentName },
   });
 }
@@ -550,28 +585,6 @@ function mergeCompanyProfile(local, remote) {
     }
   }
 
-  if (remote.parentCompany && typeof remote.parentCompany === "object") {
-    if (isMissingLocalValue(merged.parentCompany)) {
-      merged.parentCompany = { ...remote.parentCompany };
-      changed = true;
-    } else if (typeof merged.parentCompany === "object") {
-      const parentCompany = { ...merged.parentCompany };
-      let parentCompanyChanged = false;
-      if (isMissingLocalValue(parentCompany.id) && remote.parentCompany.id != null) {
-        parentCompany.id = remote.parentCompany.id;
-        parentCompanyChanged = true;
-      }
-      if (isMissingLocalValue(parentCompany.name) && !isMissingLocalValue(remote.parentCompany.name)) {
-        parentCompany.name = remote.parentCompany.name;
-        parentCompanyChanged = true;
-      }
-      if (parentCompanyChanged) {
-        merged.parentCompany = parentCompany;
-        changed = true;
-      }
-    }
-  }
-
   if (remote.updatedTo && typeof remote.updatedTo === "object") {
     if (isMissingLocalValue(merged.updatedTo)) {
       merged.updatedTo = { ...remote.updatedTo };
@@ -662,6 +675,7 @@ const COMPANY_MERGE_STORAGE_KEYS = ["title", "summary", "externalCoverUrl", "ext
 
 function hasAnyCompanyMergeFieldInBody(body) {
   if (!body || typeof body !== "object") return false;
+  if (extractParentCompanyRefFromBody(body)) return true;
   for (const key of COMPANY_PROFILE_FIELD_KEYS) {
     if (Object.prototype.hasOwnProperty.call(body, key)) return true;
   }
@@ -731,9 +745,6 @@ function normalizeStoredCompanyProfile(input) {
   const formerly = normalizeCompanyReference(input.formerly);
   if (formerly) info.formerly = formerly;
 
-  const parentCompany = normalizeCompanyReference(input.parentCompany);
-  if (parentCompany) info.parentCompany = parentCompany;
-
   const updatedTo = normalizeCompanyReference(input.updatedTo);
   if (updatedTo) info.updatedTo = updatedTo;
 
@@ -743,6 +754,7 @@ function normalizeStoredCompanyProfile(input) {
 module.exports = {
   mapCatalogCompanyToInfo,
   mapCatalogCompanyStoragePatch,
+  enrichStoragePatchWithParentHint,
   pickRenamedPredecessorCompany,
   fetchRemoteCompanyProfile,
   fetchRemoteCompanyStoragePatch,
@@ -754,5 +766,7 @@ module.exports = {
   buildCompanyMergePatchFromBody,
   hasAnyCompanyMergeFieldInBody,
   resolveCompanyProfileForEntry,
-  syncParentCompanyChildLinkFromCatalog,
+  extractParentCompanyRef,
+  extractParentCompanyRefFromBody,
+  linkCompanyUnderParentFromCatalog,
 };

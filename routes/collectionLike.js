@@ -28,7 +28,8 @@ const {
   buildCompanyMergePatchFromBody,
   hasAnyCompanyMergeFieldInBody,
   normalizeStoredCompanyProfile,
-  syncParentCompanyChildLinkFromCatalog,
+  extractParentCompanyRefFromBody,
+  linkCompanyUnderParentFromCatalog,
 } = require("../utils/catalogCompany");
 const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
 const { getIGDBAccessToken } = require("./igdb");
@@ -52,7 +53,7 @@ const {
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
-  syncParentCompanyChildLink,
+  linkCompanyUnderParent,
 } = require("../utils/companyStorage");
 
 function companyMergeSnapshot(entry) {
@@ -180,9 +181,6 @@ function createCollectionLikeRoutes(config) {
         entry.games.push(gameId);
         storageSaveItem(metadataPath, entry);
       }
-      if (useCompanyStorage && pickCompanyProfileFields(entry).parentCompany) {
-        syncParentCompanyChildLink(metadataPath, contentFolder, entry);
-      }
     }
   }
 
@@ -228,32 +226,36 @@ function createCollectionLikeRoutes(config) {
       cache = storageLoadItems(metadataPath);
     };
 
-    async function syncParentCompanyChildLinkFromRequest(req, childEntry) {
-      if (!useCompanyStorage || !pickCompanyProfileFields(childEntry).parentCompany) {
+    async function linkCompanyHierarchyFromRequest(req, childId, catalogInfo) {
+      if (!useCompanyStorage || childId == null) {
         return false;
       }
 
       const creds = resolveTwitchAppCredentialsForServerIgdb(req);
-      if (!creds.clientId || !creds.clientSecret) {
-        return syncParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+      if (creds.clientId && creds.clientSecret) {
+        try {
+          const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
+          return await linkCompanyUnderParentFromCatalog(
+            metadataPath,
+            contentFolder,
+            childId,
+            accessToken,
+            creds.clientId,
+            catalogInfo,
+          );
+        } catch (err) {
+          console.warn(
+            `Parent company IGDB link failed for ${contentFolder}/${childId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
 
-      try {
-        const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
-        return await syncParentCompanyChildLinkFromCatalog(
-          metadataPath,
-          contentFolder,
-          childEntry,
-          accessToken,
-          creds.clientId,
-        );
-      } catch (err) {
-        console.warn(
-          `Parent company IGDB sync failed for ${contentFolder}/${childEntry.id}:`,
-          err instanceof Error ? err.message : err,
-        );
-        return syncParentCompanyChildLink(metadataPath, contentFolder, childEntry);
+      const parentRef = extractParentCompanyRefFromBody(req.body);
+      if (!parentRef || parentRef.id == null) {
+        return false;
       }
+      return linkCompanyUnderParent(metadataPath, contentFolder, childId, parentRef);
     }
 
     function buildDetailPayload(entry) {
@@ -496,6 +498,8 @@ function createCollectionLikeRoutes(config) {
           }
 
           const remotePatch = buildCompanyMergePatchFromBody(req.body);
+          const parentRef = extractParentCompanyRefFromBody(req.body);
+          const catalogInfoForLink = parentRef ? { parentCompany: parentRef } : remotePatch;
           const merged = mergeParentCompanyProfiles(entry, remotePatch);
           const changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
           if (changed) {
@@ -507,10 +511,8 @@ function createCollectionLikeRoutes(config) {
             storageSaveItem(metadataPath, entry);
             upsertCacheEntry(entry);
           }
-          if (pickCompanyProfileFields(entry).parentCompany) {
-            await syncParentCompanyChildLinkFromRequest(req, entry);
-            updateCache();
-          }
+          await linkCompanyHierarchyFromRequest(req, id, catalogInfoForLink);
+          updateCache();
 
           res.json({
             status: changed ? "merged" : "unchanged",
@@ -667,10 +669,6 @@ function createCollectionLikeRoutes(config) {
         }
         storageSaveItem(metadataPath, entry);
         updateCache();
-        if (pickCompanyProfileFields(entry).parentCompany) {
-          await syncParentCompanyChildLinkFromRequest(req, entry);
-          updateCache();
-        }
       }
       const cover = getLocalMediaPath({
         metadataPath,
