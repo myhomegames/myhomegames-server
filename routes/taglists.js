@@ -617,12 +617,19 @@ function createTagRoutes(config) {
    * @param {Object} allGamesFromFile - map of game id -> game
    * @returns {boolean}
    */
+  function resolveTagIdFromList(tags, tagIdOrTitle) {
+    if (tagIdOrTitle == null) return null;
+    if (typeof tagIdOrTitle === "number" || /^\d+$/.test(String(tagIdOrTitle))) {
+      const id = Number(tagIdOrTitle);
+      return tags.find((t) => t.id === id) || null;
+    }
+    const normalized = String(tagIdOrTitle).toLowerCase();
+    return tags.find((t) => t.title.toLowerCase() === normalized) || null;
+  }
+
   function deleteTagIfUnused(metadataPath, metadataGamesDir, tagIdOrTitle, allGamesFromFile) {
     const tags = loadTags(metadataPath);
-    const tag =
-      typeof tagIdOrTitle === "number" || /^\d+$/.test(String(tagIdOrTitle))
-        ? tags.find((t) => t.id === Number(tagIdOrTitle))
-        : tags.find((t) => t.title.toLowerCase() === String(tagIdOrTitle).toLowerCase());
+    const tag = resolveTagIdFromList(tags, tagIdOrTitle);
     if (!tag) {
       return false;
     }
@@ -643,6 +650,31 @@ function createTagRoutes(config) {
     return true;
   }
 
+  /** Delete multiple unused tags with a single loadTags() pass. */
+  function deleteTagsIfUnusedBatch(metadataPath, metadataGamesDir, tagIdOrTitleList, allGamesFromFile) {
+    if (!tagIdOrTitleList || !Array.isArray(tagIdOrTitleList) || tagIdOrTitleList.length === 0) {
+      return 0;
+    }
+    const tags = loadTags(metadataPath);
+    const tagIds = new Set();
+    for (const candidate of tagIdOrTitleList) {
+      const tag = resolveTagIdFromList(tags, candidate);
+      if (tag) tagIds.add(tag.id);
+    }
+    let deleted = 0;
+    for (const tagId of tagIds) {
+      const tag = tags.find((t) => t.id === tagId);
+      if (!tag) continue;
+      const raw = loadTagMetadataRaw(metadataPath, tagId);
+      const gameIds = raw ? raw.gameIds : [];
+      const isUsed = gameIds.some((id) => !!allGamesFromFile[id]);
+      if (isUsed) continue;
+      deleteTag(metadataPath, tag.title);
+      deleted++;
+    }
+    return deleted;
+  }
+
   return {
     loadTags,
     loadTag,
@@ -653,6 +685,7 @@ function createTagRoutes(config) {
     ensureTagExists,
     ensureTagsExist,
     deleteTagIfUnused,
+    deleteTagsIfUnusedBatch,
     registerTagRoutes,
     getTagToGameIdsMap,
     addGameToTag,

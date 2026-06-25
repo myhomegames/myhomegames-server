@@ -13,12 +13,15 @@ const {
   findIndexById,
   normalizeId,
   removeGameFromAll,
+  removeGameFromItem,
+  pruneOrphanCollectionLikeItems,
   addGameToItem,
   addChildToItem,
   removeChildFromItem,
   getResourceToGameIdsMap,
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
+const { findResourceIdsContainingGame } = require("../utils/gameDeleteUtils");
 const { coerceToGameTypeId } = require("../utils/gameType");
 
 const CONTENT_FOLDER = "collections";
@@ -63,6 +66,21 @@ function addGameToCollection(metadataPath, collectionId, gameId) {
 /** Map(collectionId -> gameIds[]) for building game.collection from blocks. */
 function getCollectionToGameIdsMap(metadataPath) {
   return getResourceToGameIdsMap(metadataPath, CONTENT_FOLDER);
+}
+
+function findCollectionIdsContainingGame(metadataPath, gameId, collectionsCache = null) {
+  if (collectionsCache && Array.isArray(collectionsCache)) {
+    return findResourceIdsContainingGame(collectionsCache, gameId);
+  }
+  const ids = [];
+  for (const [collectionId, gameIds] of getCollectionToGameIdsMap(metadataPath)) {
+    if (gameIds.some((g) => Number(g) === Number(gameId))) ids.push(collectionId);
+  }
+  return ids;
+}
+
+function removeGameFromCollection(metadataPath, collectionId, gameId) {
+  return removeGameFromItem(metadataPath, CONTENT_FOLDER, collectionId, gameId);
 }
 
 // Helper function to remove a game from all collections
@@ -845,9 +863,12 @@ module.exports = {
   loadCollections,
   addGameToCollection,
   getCollectionToGameIdsMap,
+  findCollectionIdsContainingGame,
+  removeGameFromCollection,
   registerCollectionsRoutes,
   removeGameFromAllCollections,
   createCacheUpdater,
   deleteCollectionIfUnused,
+  pruneOrphanCollectionLikeItems,
 };
 

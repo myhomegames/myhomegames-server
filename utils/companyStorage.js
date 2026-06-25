@@ -393,22 +393,8 @@ function removeChildFromRoleItem(metadataPath, roleFolder, parentId, childId) {
   return true;
 }
 
-function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCacheCallback, cache) {
-  const items = cache && Array.isArray(cache) ? cache : loadRoleItems(metadataPath, roleFolder);
-  let count = 0;
-
-  for (const item of items) {
-    const games = item.games || [];
-    const idx = games.findIndex((g) => Number(g) === Number(gameId));
-    if (idx !== -1) {
-      games.splice(idx, 1);
-      item.games = games;
-      saveRoleItem(metadataPath, roleFolder, item);
-      count++;
-      if (updateCacheCallback) updateCacheCallback(item);
-    }
-  }
-
+function pruneOrphanRoleItems(metadataPath, roleFolder, items) {
+  if (!items || !Array.isArray(items)) return;
   let removedSomething = true;
   while (removedSomething) {
     pruneInvalidCompanyChildLinks(metadataPath, items);
@@ -425,6 +411,25 @@ function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCach
       removedSomething = true;
     }
   }
+}
+
+function removeGameFromAllRoleItems(metadataPath, roleFolder, gameId, updateCacheCallback, cache) {
+  const items = cache && Array.isArray(cache) ? cache : loadRoleItems(metadataPath, roleFolder);
+  let count = 0;
+
+  for (const item of items) {
+    const games = item.games || [];
+    const idx = games.findIndex((g) => Number(g) === Number(gameId));
+    if (idx !== -1) {
+      games.splice(idx, 1);
+      item.games = games;
+      saveRoleItem(metadataPath, roleFolder, item);
+      count++;
+      if (updateCacheCallback) updateCacheCallback(item);
+    }
+  }
+
+  pruneOrphanRoleItems(metadataPath, roleFolder, items);
 
   return count;
 }
@@ -491,6 +496,7 @@ module.exports = {
   hasLocalCompanyCover,
   mergeParentCompanyProfiles,
   removeGameFromAllRoleItems,
+  pruneOrphanRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
   syncParentCompanyChildLink,

@@ -187,8 +187,9 @@ function createCollectionLikeRoutes(config) {
   }
 
   function removeGameFrom(metadataPath, resourceId, gameId) {
-    const list = storageLoadItems(metadataPath);
-    const entry = list.find((d) => Number(d.id) === Number(resourceId));
+    const entry = useCompanyStorage
+      ? loadRoleItemById(metadataPath, contentFolder, resourceId)
+      : loadItemById(metadataPath, contentFolder, resourceId);
     if (!entry || !entry.games) return;
     const idx = entry.games.findIndex((g) => Number(g) === Number(gameId));
     if (idx !== -1) {
