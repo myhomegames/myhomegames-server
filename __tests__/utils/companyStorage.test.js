@@ -103,6 +103,71 @@ describe("companyStorage", () => {
     ).toBe("Legacy Co");
   });
 
+  test("loadRoleItems keeps child linked in other role when pruning developers list", () => {
+    saveRoleItem(metadataPath, "publishers", {
+      id: 100,
+      title: "Parent Publisher",
+      summary: "",
+      games: [],
+      childs: [101],
+    });
+    saveRoleItem(metadataPath, "publishers", {
+      id: 101,
+      title: "Child Publisher",
+      summary: "",
+      games: [],
+      childs: [],
+    });
+    saveRoleItem(metadataPath, "developers", {
+      id: 100,
+      title: "Parent Publisher",
+      summary: "",
+      games: [500],
+      childs: [],
+    });
+
+    loadRoleItems(metadataPath, "developers");
+
+    const companyMeta = JSON.parse(
+      fs.readFileSync(path.join(metadataPath, "content", "companies", "100", "metadata.json"), "utf8"),
+    );
+    expect(companyMeta.childs).toEqual([101]);
+
+    const publishers = loadRoleItems(metadataPath, "publishers");
+    const parent = publishers.find((item) => item.id === 100);
+    expect(parent?.childs).toEqual([101]);
+  });
+
+  test("adding developer role for existing publisher does not clear shared childs", () => {
+    saveRoleItem(metadataPath, "publishers", {
+      id: 200,
+      title: "Parent Corp",
+      summary: "",
+      games: [],
+      childs: [201],
+    });
+    saveRoleItem(metadataPath, "publishers", {
+      id: 201,
+      title: "Child Corp",
+      summary: "",
+      games: [],
+      childs: [],
+    });
+
+    saveRoleItem(metadataPath, "developers", {
+      id: 200,
+      title: "Parent Corp",
+      summary: "",
+      games: [42],
+      childs: [],
+    });
+
+    const companyMeta = JSON.parse(
+      fs.readFileSync(path.join(metadataPath, "content", "companies", "200", "metadata.json"), "utf8"),
+    );
+    expect(companyMeta.childs).toEqual([201]);
+  });
+
   test("linkCompanyUnderParent links child under parent childs", () => {
     saveRoleItem(metadataPath, "publishers", {
       id: 10,

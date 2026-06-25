@@ -168,7 +168,6 @@ function createCollectionLikeRoutes(config) {
           id: numId,
           title: name.trim(),
           games: [],
-          childs: [],
           summary: description || "",
           externalCoverUrl: logo || null,
           ...companyProfileFields,

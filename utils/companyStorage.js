@@ -106,12 +106,24 @@ function mergeParentCompanyProfiles(existing, incoming) {
   return merged;
 }
 
+function companyHasRoleLink(metadataPath, companyId) {
+  return (
+    roleLinkExists(metadataPath, "developers", companyId) ||
+    roleLinkExists(metadataPath, "publishers", companyId)
+  );
+}
+
 function mergeCompanyProfiles(existing, incoming) {
   const merged = { ...existing };
   for (const [key, value] of Object.entries(incoming)) {
     if (value === undefined) continue;
     if (key === "childs") {
-      merged.childs = normalizeChildIds(value);
+      const normalized = normalizeChildIds(value);
+      const existingChilds = normalizeChildIds(existing.childs);
+      if (normalized.length === 0 && existingChilds.length > 0) {
+        continue;
+      }
+      merged.childs = normalized;
       continue;
     }
     if (value === null) {
@@ -238,11 +250,12 @@ function buildMergedEntry(metadataPath, roleFolder, companyId) {
 }
 
 function pruneInvalidCompanyChildLinks(metadataPath, entries) {
-  const validIds = new Set(entries.map((entry) => String(entry.id)));
   let changed = false;
   for (const entry of entries) {
     const before = Array.isArray(entry.childs) ? entry.childs : [];
-    const pruned = normalizeChildIds(before, entry.id).filter((id) => validIds.has(String(id)));
+    const pruned = normalizeChildIds(before, entry.id).filter((id) =>
+      companyHasRoleLink(metadataPath, id),
+    );
     if (before.length !== pruned.length || before.some((id, idx) => String(id) !== String(pruned[idx]))) {
       entry.childs = pruned;
       saveCompanyProfile(metadataPath, entry.id, entry);
