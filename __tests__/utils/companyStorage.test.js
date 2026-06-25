@@ -8,6 +8,8 @@ const {
   deleteRoleItem,
   migrateLegacyRoleMetadata,
   linkCompanyUnderParent,
+  removeGameFromAllRoleItems,
+  pruneOrphanRoleItems,
 } = require("../../utils/companyStorage");
 
 describe("companyStorage", () => {
@@ -276,6 +278,63 @@ describe("companyStorage", () => {
 
     const parent = loadRoleItemById(metadataPath, "developers", 20);
     expect(parent.childs).toEqual([5]);
+  });
+
+  test("pruneOrphanRoleItems removes developer hierarchy when child still exists as publisher", () => {
+    saveRoleItem(metadataPath, "publishers", {
+      id: 1000,
+      title: "Company A",
+      summary: "",
+      games: [100],
+      childs: [1001],
+    });
+    saveRoleItem(metadataPath, "publishers", {
+      id: 1001,
+      title: "Company B",
+      summary: "",
+      games: [100],
+      childs: [],
+    });
+    saveRoleItem(metadataPath, "developers", {
+      id: 1001,
+      title: "Company B",
+      summary: "",
+      games: [200],
+      childs: [],
+    });
+    linkCompanyUnderParent(metadataPath, "developers", 1001, { id: 1000, name: "Company A" });
+
+    expect(loadRoleItems(metadataPath, "developers")).toHaveLength(2);
+
+    removeGameFromAllRoleItems(metadataPath, "developers", 200);
+
+    expect(loadRoleItems(metadataPath, "developers")).toHaveLength(0);
+    expect(loadRoleItems(metadataPath, "publishers")).toHaveLength(2);
+    expect(loadRoleItemById(metadataPath, "publishers", 1000)?.childs).toEqual([1001]);
+  });
+
+  test("pruneOrphanRoleItems keeps parent when child still exists in same role", () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 3000,
+      title: "Parent Dev",
+      summary: "",
+      games: [400],
+      childs: [3001],
+    });
+    saveRoleItem(metadataPath, "developers", {
+      id: 3001,
+      title: "Child Dev",
+      summary: "",
+      games: [401],
+      childs: [],
+    });
+
+    removeGameFromAllRoleItems(metadataPath, "developers", 400);
+
+    const developers = loadRoleItems(metadataPath, "developers");
+    expect(developers).toHaveLength(2);
+    const parent = developers.find((item) => item.id === 3000);
+    expect(parent?.childs).toEqual([3001]);
   });
 
   test("deleteRoleItem removes developer link but keeps company for publisher", () => {

@@ -341,7 +341,6 @@ function deleteCompanyIfOrphaned(metadataPath, companyId) {
 function deleteRoleItem(metadataPath, roleFolder, companyId) {
   const roleDir = getRoleDir(metadataPath, roleFolder, companyId);
   const metaPath = getRoleMetadataPath(metadataPath, roleFolder, companyId);
-  removeChildLinksFromCompanies(metadataPath, companyId);
   if (fs.existsSync(metaPath)) {
     fs.unlinkSync(metaPath);
   }
@@ -351,7 +350,9 @@ function deleteRoleItem(metadataPath, roleFolder, companyId) {
       fs.rmSync(roleDir, { recursive: true, force: true });
     }
   }
-  deleteCompanyIfOrphaned(metadataPath, companyId);
+  if (deleteCompanyIfOrphaned(metadataPath, companyId)) {
+    removeChildLinksFromCompanies(metadataPath, companyId);
+  }
 }
 
 function ensureCompanyRoleEntry(metadataPath, roleFolder, companyId, profilePatch = {}, options = {}) {
@@ -425,6 +426,25 @@ function unlinkChildFromOtherParents(metadataPath, roleFolder, childId, keepPare
   }
 }
 
+/** Child ids that still have a role link in the same folder (orphan prune is per-role). */
+function childIdsLinkedInRole(metadataPath, roleFolder, childIds, parentId) {
+  return normalizeChildIds(childIds, parentId).filter((id) =>
+    roleLinkExists(metadataPath, roleFolder, id),
+  );
+}
+
+function removeChildIdFromInMemoryItems(items, removedId) {
+  if (!items || !Array.isArray(items)) return;
+  const removedKey = String(normalizeId(removedId));
+  for (const item of items) {
+    if (!Array.isArray(item.childs)) continue;
+    const next = item.childs.filter((id) => String(id) !== removedKey);
+    if (next.length !== item.childs.length) {
+      item.childs = next;
+    }
+  }
+}
+
 function pruneOrphanRoleItems(metadataPath, roleFolder, items) {
   if (!items || !Array.isArray(items)) return;
   let removedSomething = true;
@@ -435,11 +455,13 @@ function pruneOrphanRoleItems(metadataPath, roleFolder, items) {
       const item = items[i];
       const games = Array.isArray(item.games) ? item.games : [];
       if (games.length > 0) continue;
-      const childs = Array.isArray(item.childs) ? item.childs : [];
-      if (childs.length > 0) continue;
+      const childsInRole = childIdsLinkedInRole(metadataPath, roleFolder, item.childs, item.id);
+      if (childsInRole.length > 0) continue;
       if (hasLocalCompanyCover(metadataPath, item.id)) continue;
-      deleteRoleItem(metadataPath, roleFolder, item.id);
+      const removedId = item.id;
+      deleteRoleItem(metadataPath, roleFolder, removedId);
       items.splice(i, 1);
+      removeChildIdFromInMemoryItems(items, removedId);
       removedSomething = true;
     }
   }
