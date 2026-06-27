@@ -5,7 +5,7 @@ const {
   pickCompanyProfileFields,
   COMPANY_PROFILE_FIELD_KEYS,
 } = require("./companyProfileFields");
-const { linkCompanyUnderParent } = require("./companyStorage");
+const { linkCompanyUnderParent, ensureCompanyRoleEntry, loadRoleItemById } = require("./companyStorage");
 
 const LOG_PREFIX = "[catalog-company]";
 const UPDATED_TO_STATUSES = new Set(["Renamed", "Merge", "Defunct"]);
@@ -275,6 +275,113 @@ async function linkCompanyUnderParentFromCatalog(
   return linkCompanyUnderParent(metadataPath, roleFolder, normalizedChildId, parentRef, {
     parentProfilePatch: parentProfilePatch || { title: parentName },
   });
+}
+
+function resolveParentRefForHierarchyLink(mergeBody) {
+  if (!mergeBody || typeof mergeBody !== "object") return null;
+  const fromParentField = normalizeCompanyReference(mergeBody.parentCompany);
+  if (fromParentField) return fromParentField;
+  return normalizeCompanyReference(mergeBody.updatedTo);
+}
+
+async function linkFormerlyAsChildFromCatalog(
+  metadataPath,
+  roleFolder,
+  parentId,
+  childRef,
+  accessToken,
+  clientId,
+) {
+  const normalizedParentId = Number(parentId);
+  const childId = Number(childRef && childRef.id);
+  if (!Number.isFinite(normalizedParentId) || !Number.isFinite(childId) || childId === normalizedParentId) {
+    return false;
+  }
+
+  const childName =
+    typeof childRef.name === "string" && childRef.name.trim() ? childRef.name.trim() : String(childId);
+
+  let childProfilePatch = { title: childName };
+  if (accessToken && clientId) {
+    try {
+      const remotePatch = await fetchRemoteCompanyStoragePatch(childId, childName, accessToken, clientId);
+      if (remotePatch && typeof remotePatch === "object") {
+        childProfilePatch = remotePatch;
+      }
+    } catch (err) {
+      logWarn(
+        `formerly child storage-patch failed for id=${childId}`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  const existingChild = loadRoleItemById(metadataPath, roleFolder, childId);
+  ensureCompanyRoleEntry(metadataPath, roleFolder, childId, childProfilePatch, {
+    fillGapsOnly: Boolean(existingChild),
+  });
+
+  const parentEntry = loadRoleItemById(metadataPath, roleFolder, normalizedParentId);
+  const parentName =
+    parentEntry && typeof parentEntry.title === "string" && parentEntry.title.trim()
+      ? parentEntry.title.trim()
+      : String(normalizedParentId);
+
+  return linkCompanyUnderParent(metadataPath, roleFolder, childId, {
+    id: normalizedParentId,
+    name: parentName,
+  });
+}
+
+/**
+ * Link hierarchy from merge-company-profile body:
+ * - parentCompany or updatedTo → current company becomes child of that parent
+ * - formerly → that company becomes child of the current company
+ */
+async function linkCompanyRelationsFromMergeBody(
+  metadataPath,
+  roleFolder,
+  companyId,
+  accessToken,
+  clientId,
+  mergeBody,
+) {
+  const normalizedCompanyId = Number(companyId);
+  if (!Number.isFinite(normalizedCompanyId)) return false;
+
+  let linked = false;
+  const parentRef = resolveParentRefForHierarchyLink(mergeBody);
+  if (parentRef && parentRef.id != null) {
+    if (accessToken && clientId) {
+      linked =
+        (await linkCompanyUnderParentFromCatalog(
+          metadataPath,
+          roleFolder,
+          normalizedCompanyId,
+          accessToken,
+          clientId,
+          { parentCompany: parentRef },
+        )) || linked;
+    } else {
+      linked =
+        linkCompanyUnderParent(metadataPath, roleFolder, normalizedCompanyId, parentRef) || linked;
+    }
+  }
+
+  const formerlyRef = normalizeCompanyReference(mergeBody && mergeBody.formerly);
+  if (formerlyRef && formerlyRef.id != null) {
+    linked =
+      (await linkFormerlyAsChildFromCatalog(
+        metadataPath,
+        roleFolder,
+        normalizedCompanyId,
+        formerlyRef,
+        accessToken,
+        clientId,
+      )) || linked;
+  }
+
+  return linked;
 }
 
 function mapCatalogCompanyToInfo(company) {
@@ -804,4 +911,6 @@ module.exports = {
   extractParentCompanyRef,
   extractParentCompanyRefFromBody,
   linkCompanyUnderParentFromCatalog,
+  linkCompanyRelationsFromMergeBody,
+  resolveParentRefForHierarchyLink,
 };

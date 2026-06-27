@@ -139,10 +139,12 @@ const {
   saveStoredTwitchAppCredentials,
 } = require("./utils/twitchAppCredentialsStore");
 const { resolveDefaultSkinUrl } = require("./utils/defaultSkinUrl");
+const { bulkMetadataReloadLogMiddleware } = require("./utils/bulkMetadataReloadLog");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(bulkMetadataReloadLogMiddleware);
 
 const API_TOKEN = process.env.API_TOKEN;
 const PORT = process.env.PORT || 4000; // PORT can have a default

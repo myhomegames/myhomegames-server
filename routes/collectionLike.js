@@ -28,8 +28,7 @@ const {
   buildCompanyMergePatchFromBody,
   hasAnyCompanyMergeFieldInBody,
   normalizeStoredCompanyProfile,
-  extractParentCompanyRefFromBody,
-  linkCompanyUnderParentFromCatalog,
+  linkCompanyRelationsFromMergeBody,
 } = require("../utils/catalogCompany");
 const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
 const { getIGDBAccessToken } = require("./igdb");
@@ -53,7 +52,6 @@ const {
   removeGameFromAllRoleItems,
   addChildToRoleItem,
   removeChildFromRoleItem,
-  linkCompanyUnderParent,
 } = require("../utils/companyStorage");
 
 function companyMergeSnapshot(entry) {
@@ -225,8 +223,8 @@ function createCollectionLikeRoutes(config) {
       cache = storageLoadItems(metadataPath);
     };
 
-    async function linkCompanyHierarchyFromRequest(req, childId, catalogInfo) {
-      if (!useCompanyStorage || childId == null) {
+    async function linkCompanyRelationsFromRequest(req, companyId, mergeBody) {
+      if (!useCompanyStorage || companyId == null) {
         return false;
       }
 
@@ -234,27 +232,30 @@ function createCollectionLikeRoutes(config) {
       if (creds.clientId && creds.clientSecret) {
         try {
           const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
-          return await linkCompanyUnderParentFromCatalog(
+          return await linkCompanyRelationsFromMergeBody(
             metadataPath,
             contentFolder,
-            childId,
+            companyId,
             accessToken,
             creds.clientId,
-            catalogInfo,
+            mergeBody,
           );
         } catch (err) {
           console.warn(
-            `Parent company IGDB link failed for ${contentFolder}/${childId}:`,
+            `Company relation IGDB link failed for ${contentFolder}/${companyId}:`,
             err instanceof Error ? err.message : err,
           );
         }
       }
 
-      const parentRef = extractParentCompanyRefFromBody(req.body);
-      if (!parentRef || parentRef.id == null) {
-        return false;
-      }
-      return linkCompanyUnderParent(metadataPath, contentFolder, childId, parentRef);
+      return linkCompanyRelationsFromMergeBody(
+        metadataPath,
+        contentFolder,
+        companyId,
+        null,
+        null,
+        mergeBody,
+      );
     }
 
     function buildDetailPayload(entry) {
@@ -497,8 +498,6 @@ function createCollectionLikeRoutes(config) {
           }
 
           const remotePatch = buildCompanyMergePatchFromBody(req.body);
-          const parentRef = extractParentCompanyRefFromBody(req.body);
-          const catalogInfoForLink = parentRef ? { parentCompany: parentRef } : remotePatch;
           const merged = mergeParentCompanyProfiles(entry, remotePatch);
           const changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
           if (changed) {
@@ -510,7 +509,7 @@ function createCollectionLikeRoutes(config) {
             storageSaveItem(metadataPath, entry);
             upsertCacheEntry(entry);
           }
-          await linkCompanyHierarchyFromRequest(req, id, catalogInfoForLink);
+          await linkCompanyRelationsFromRequest(req, id, req.body);
           updateCache();
 
           res.json({

@@ -1,3 +1,6 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const {
   mapCatalogCompanyToInfo,
   mapCatalogCompanyStoragePatch,
@@ -8,7 +11,10 @@ const {
   buildCompanyMergePatchFromBody,
   hasAnyCompanyMergeFieldInBody,
   pickCompanyByTitle,
+  resolveParentRefForHierarchyLink,
+  linkCompanyRelationsFromMergeBody,
 } = require("../../utils/catalogCompany");
+const { loadRoleItemById, saveRoleItem } = require("../../utils/companyStorage");
 
 describe("mapCatalogCompanyToInfo", () => {
   test("maps catalog company fields to stored info", () => {
@@ -463,5 +469,76 @@ describe("pickCompanyByTitle", () => {
     ];
     expect(pickCompanyByTitle(companies, " Ubisoft Entertainment ")).toEqual(companies[1]);
     expect(pickCompanyByTitle(companies, "Sony")).toBeNull();
+  });
+});
+
+describe("resolveParentRefForHierarchyLink", () => {
+  test("prefers parentCompany over updatedTo", () => {
+    expect(
+      resolveParentRefForHierarchyLink({
+        parentCompany: { id: 1, name: "Parent Co" },
+        updatedTo: { id: 2, name: "Successor Co" },
+      }),
+    ).toEqual({ id: 1, name: "Parent Co" });
+  });
+
+  test("uses updatedTo when parentCompany is absent", () => {
+    expect(
+      resolveParentRefForHierarchyLink({
+        updatedTo: { id: 2, name: "Successor Co" },
+      }),
+    ).toEqual({ id: 2, name: "Successor Co" });
+  });
+});
+
+describe("linkCompanyRelationsFromMergeBody", () => {
+  let metadataPath;
+
+  beforeEach(() => {
+    metadataPath = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-catalog-link-"));
+    fs.mkdirSync(path.join(metadataPath, "content", "developers"), { recursive: true });
+    fs.mkdirSync(path.join(metadataPath, "content", "companies"), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(metadataPath, { recursive: true, force: true });
+  });
+
+  test("links updatedTo company as parent of current company", async () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 10,
+      title: "Child Dev",
+      summary: "",
+      games: [],
+      status: "Renamed",
+      updatedTo: { id: 20, name: "Parent Dev" },
+    });
+
+    await linkCompanyRelationsFromMergeBody(metadataPath, "developers", 10, null, null, {
+      status: "Renamed",
+      updatedTo: { id: 20, name: "Parent Dev" },
+    });
+
+    const parent = loadRoleItemById(metadataPath, "developers", 20);
+    expect(parent?.title).toBe("Parent Dev");
+    expect(parent?.childs).toEqual(expect.arrayContaining([10]));
+  });
+
+  test("links formerly company as child of current company", async () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 10,
+      title: "Current Dev",
+      summary: "",
+      games: [],
+      formerly: { id: 11, name: "Former Dev" },
+    });
+
+    await linkCompanyRelationsFromMergeBody(metadataPath, "developers", 10, null, null, {
+      formerly: { id: 11, name: "Former Dev" },
+    });
+
+    const parent = loadRoleItemById(metadataPath, "developers", 10);
+    expect(parent?.childs).toEqual(expect.arrayContaining([11]));
+    expect(loadRoleItemById(metadataPath, "developers", 11)?.title).toBe("Former Dev");
   });
 });
