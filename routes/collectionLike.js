@@ -30,6 +30,7 @@ const {
   normalizeStoredCompanyProfile,
   linkCompanyRelationsFromMergeBody,
 } = require("../utils/catalogCompany");
+const { readBulkMetadataProgress } = require("../utils/bulkMetadataReloadLog");
 const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
 const { getIGDBAccessToken } = require("./igdb");
 const {
@@ -487,37 +488,75 @@ function createCollectionLikeRoutes(config) {
     if (contentFolder === "developers" || contentFolder === "publishers") {
       const handleMergeCompanyProfile = async (req, res) => {
         const id = normalizeId(req.params.id);
+        const bulkProgress = readBulkMetadataProgress(req);
+        const bulkTag = bulkProgress
+          ? `[bulk-metadata-reload ${bulkProgress.phase} ${bulkProgress.step}/${bulkProgress.total}] `
+          : "";
+
+        const logMergeFailure = (message, details = {}) => {
+          console.warn(`${bulkTag}[company-profile-merge] ${message}`, {
+            resource: contentFolder,
+            id,
+            ...details,
+          });
+        };
+
         if (!hasAnyCompanyMergeFieldInBody(req.body)) {
+          logMergeFailure("missing profile fields in request body");
           return res.status(400).json({ error: "Missing company profile fields in request body" });
         }
 
         try {
-          const entry = storageLoadItemById(metadataPath, id);
+          const remotePatch = buildCompanyMergePatchFromBody(req.body);
+
+          let entry = storageLoadItemById(metadataPath, id);
+          let created = false;
+          let changed = false;
+
           if (!entry) {
-            return res.status(404).json({ error: `${humanName} not found` });
+            const createPatch = {
+              ...remotePatch,
+              title:
+                typeof remotePatch.title === "string" && remotePatch.title.trim()
+                  ? remotePatch.title.trim()
+                  : String(id),
+            };
+            entry = ensureCompanyRoleEntry(metadataPath, contentFolder, id, createPatch);
+            if (!entry) {
+              logMergeFailure("cannot create entry without title");
+              return res.status(400).json({ error: `Cannot create ${humanName} without title` });
+            }
+            created = true;
+            upsertCacheEntry(entry);
+          } else {
+            const merged = mergeParentCompanyProfiles(entry, remotePatch);
+            changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
+            if (changed) {
+              entry.title = merged.title;
+              entry.summary = merged.summary;
+              entry.externalCoverUrl = merged.externalCoverUrl;
+              entry.externalBackgroundUrl = merged.externalBackgroundUrl;
+              applyNormalizedCompanyProfileFields(entry, pickCompanyProfileFields(merged));
+              storageSaveItem(metadataPath, entry);
+              upsertCacheEntry(entry);
+            }
           }
 
-          const remotePatch = buildCompanyMergePatchFromBody(req.body);
-          const merged = mergeParentCompanyProfiles(entry, remotePatch);
-          const changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
-          if (changed) {
-            entry.title = merged.title;
-            entry.summary = merged.summary;
-            entry.externalCoverUrl = merged.externalCoverUrl;
-            entry.externalBackgroundUrl = merged.externalBackgroundUrl;
-            applyNormalizedCompanyProfileFields(entry, pickCompanyProfileFields(merged));
-            storageSaveItem(metadataPath, entry);
-            upsertCacheEntry(entry);
-          }
           await linkCompanyRelationsFromRequest(req, id, req.body);
           updateCache();
 
+          entry = storageLoadItemById(metadataPath, id) || entry;
+
+          const status = created ? "created" : changed ? "merged" : "unchanged";
           res.json({
-            status: changed ? "merged" : "unchanged",
+            status,
             [singleResponseKey]: buildDetailPayload(entry),
           });
         } catch (e) {
-          console.error(`Failed to merge company profile for ${contentFolder}/${id}:`, e.message);
+          console.error(
+            `${bulkTag}Failed to merge company profile for ${contentFolder}/${id}:`,
+            e.message,
+          );
           res.status(500).json({ error: "Failed to merge company profile" });
         }
       };

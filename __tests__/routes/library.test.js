@@ -2398,6 +2398,60 @@ describe('POST /catalog/import-game', () => {
     await request(app).delete(`/games/${gameId}`).set('X-Auth-Token', 'test-token').expect(200);
   });
 
+  test('merge-company-profile creates missing developer when syncing related company', async () => {
+    const relatedDeveloperId = 58892;
+    const relatedPath = path.join(
+      testMetadataPath,
+      'content',
+      'companies',
+      String(relatedDeveloperId),
+      'metadata.json',
+    );
+    const rolePath = path.join(
+      testMetadataPath,
+      'content',
+      'developers',
+      String(relatedDeveloperId),
+      'metadata.json',
+    );
+
+    expect(fs.existsSync(relatedPath)).toBe(false);
+    expect(fs.existsSync(rolePath)).toBe(false);
+
+    const mergeRes = await request(app)
+      .post(`/developers/${relatedDeveloperId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        title: 'Former Studio Name',
+        summary: 'Merged from IGDB relation sync',
+        status: 'Closed',
+      })
+      .expect(200);
+
+    expect(mergeRes.body).toHaveProperty('status', 'created');
+    expect(mergeRes.body.developer).toMatchObject({
+      id: relatedDeveloperId,
+      title: 'Former Studio Name',
+    });
+    expect(fs.existsSync(relatedPath)).toBe(true);
+    expect(fs.existsSync(rolePath)).toBe(true);
+
+    const companyMeta = JSON.parse(fs.readFileSync(relatedPath, 'utf8'));
+    expect(companyMeta.title).toBe('Former Studio Name');
+    expect(companyMeta.summary).toBe('Merged from IGDB relation sync');
+
+    const secondMerge = await request(app)
+      .post(`/developers/${relatedDeveloperId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        title: 'Former Studio Name',
+        summary: 'Merged from IGDB relation sync',
+      })
+      .expect(200);
+
+    expect(secondMerge.body.status).toBe('unchanged');
+  });
+
   test('should preserve genre case', async () => {
     // Add a game with uppercase genres
     const response = await request(app)

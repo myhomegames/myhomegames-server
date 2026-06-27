@@ -62,6 +62,22 @@ function bulkMetadataReloadLogMiddleware(req, res, next) {
     return;
   }
 
+  if (typeof res.on === "function") {
+    res.on("finish", () => {
+      if (res.statusCode >= 400) {
+        console.warn("[bulk-metadata-reload] request failed", {
+          status: res.statusCode,
+          method: req.method,
+          url: req.originalUrl || req.url,
+          phase: progress.phase,
+          step: progress.step,
+          total: progress.total,
+          percent: progress.percent,
+        });
+      }
+    });
+  }
+
   const key = `${progress.step}/${progress.total}/${progress.phase}`;
   if (key !== lastLoggedKey) {
     if (!bulkRunActive && progress.step === 0) {
