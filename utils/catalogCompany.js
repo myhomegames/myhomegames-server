@@ -1,14 +1,22 @@
 const https = require("https");
 const { formatIGDBDateWithFormat } = require("./dateUtils");
 const { resolveTwitchAppCredentials } = require("./twitchAppCredentials");
-const { pickCompanyProfileFields, COMPANY_PROFILE_FIELD_KEYS } = require("./companyProfileFields");
+const {
+  pickCompanyProfileFields,
+  COMPANY_PROFILE_FIELD_KEYS,
+} = require("./companyProfileFields");
 const { linkCompanyUnderParent } = require("./companyStorage");
 
 const LOG_PREFIX = "[catalog-company]";
+const UPDATED_TO_STATUSES = new Set(["Renamed", "Merge", "Defunct"]);
 const CATALOG_COMPANY_API_FIELDS =
   "id,name,description,logo.image_id,status.name,changed_company_id.id,changed_company_id.name,country,change_date,change_date_format,start_date,start_date_format,parent.id,parent.name,company_size.id,company_size.name,company_type_histories.company_type.name,company_type_histories.company.id,company_type_histories.company.name,company_type_histories.parent_company.id,company_type_histories.parent_company.name";
 
 const FORMERLY_PREDECESSOR_STATUSES = new Set(["renamed", "merged", "defunct"]);
+
+function shouldExposeUpdatedTo(status) {
+  return typeof status === "string" && UPDATED_TO_STATUSES.has(status);
+}
 
 function logWarn(message, extra) {
   if (extra !== undefined) {
@@ -277,7 +285,12 @@ function mapCatalogCompanyToInfo(company) {
     const status = normalizeCompanyStatus(company.status.name);
     if (status) info.status = status;
   }
-  if (company.changed_company_id && company.changed_company_id.id && company.changed_company_id.name) {
+  if (
+    shouldExposeUpdatedTo(info.status) &&
+    company.changed_company_id &&
+    company.changed_company_id.id &&
+    company.changed_company_id.name
+  ) {
     info.updatedTo = {
       id: company.changed_company_id.id,
       name: company.changed_company_id.name,
@@ -320,7 +333,11 @@ function mapCatalogCompanyToInfo(company) {
   return Object.keys(info).length > 0 ? info : null;
 }
 
-function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runIgdbApiQueryOnce(path, postData, accessToken, clientId, context) {
   const options = {
     hostname: "api.igdb.com",
     path,
@@ -365,6 +382,24 @@ function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
     igdbReq.write(postData);
     igdbReq.end();
   });
+}
+
+async function runIgdbApiQuery(path, postData, accessToken, clientId, context) {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await runIgdbApiQueryOnce(path, postData, accessToken, clientId, context);
+    } catch (err) {
+      const is429 = err instanceof Error && err.message.includes("429");
+      if (!is429 || attempt >= maxAttempts - 1) {
+        throw err;
+      }
+      const waitMs = 1000 * (attempt + 1);
+      logWarn(`IGDB rate limit (${context}), retry in ${waitMs}ms`);
+      await sleep(waitMs);
+    }
+  }
+  return [];
 }
 
 function runCatalogCompaniesQuery(postData, accessToken, clientId, context) {

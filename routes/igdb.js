@@ -1465,14 +1465,26 @@ function registerIGDBRoutes(app, requireToken) {
         });
         igdbRes.on("end", async () => {
           try {
+            if (igdbRes.statusCode && igdbRes.statusCode !== 200) {
+              res.setHeader("Content-Type", "application/json");
+              return res
+                .status(igdbRes.statusCode)
+                .json({ error: `IGDB API error ${igdbRes.statusCode}`, detail: data });
+            }
+
             const games = JSON.parse(data);
-            
-            if (games.length === 0) {
+
+            if (!Array.isArray(games) || games.length === 0) {
               res.setHeader('Content-Type', 'application/json');
               return res.status(404).json({ error: "IGDB game not found" });
             }
 
             const game = games[0];
+            if (!game || typeof game !== "object") {
+              res.setHeader("Content-Type", "application/json");
+              return res.status(404).json({ error: "IGDB game not found" });
+            }
+
             const { formatIGDBReleaseDate } = require("../utils/dateUtils");
             const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
             

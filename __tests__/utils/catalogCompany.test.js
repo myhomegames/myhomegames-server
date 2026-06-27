@@ -32,6 +32,22 @@ describe("mapCatalogCompanyToInfo", () => {
     });
   });
 
+  test("ignores changed_company_id for active companies (stale IGDB data)", () => {
+    const info = mapCatalogCompanyToInfo({
+      id: 1,
+      status: { name: "Active" },
+      changed_company_id: { id: 5, name: "Interplay Entertainment" },
+      start_date: 315532800,
+      start_date_format: 2,
+    });
+
+    expect(info).toEqual({
+      status: "Active",
+      started: "1980",
+    });
+    expect(info.updatedTo).toBeUndefined();
+  });
+
   test("maps company type histories and parent company", () => {
     const info = mapCatalogCompanyToInfo({
       id: 10,
@@ -322,6 +338,23 @@ describe("mergeCompanyProfile", () => {
       legalName: "Capcom U.S.A., Inc.",
       companySize: "51-200 employees",
       formerly: { id: 13, name: "Mattel Media" },
+      updatedTo: { id: 99, name: "New Co" },
+    });
+  });
+
+  test("fills updatedTo from remote when status allows successor link", () => {
+    const local = {
+      status: "Renamed",
+    };
+    const remote = {
+      updatedTo: { id: 99, name: "New Co" },
+    };
+
+    const { info, changed } = mergeCompanyProfile(local, remote);
+
+    expect(changed).toBe(true);
+    expect(info).toEqual({
+      status: "Renamed",
       updatedTo: { id: 99, name: "New Co" },
     });
   });
