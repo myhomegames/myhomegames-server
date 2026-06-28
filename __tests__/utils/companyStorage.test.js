@@ -6,6 +6,7 @@ const {
   loadRoleItemById,
   saveRoleItem,
   deleteRoleItem,
+  getRoleToGameIdsMap,
   migrateLegacyRoleMetadata,
   linkCompanyUnderParent,
   removeGameFromAllRoleItems,
@@ -74,6 +75,29 @@ describe("companyStorage", () => {
     expect(publishers[0].games).toEqual([9]);
     expect(developers[0].title).toBe("LucasArts");
     expect(publishers[0].title).toBe("LucasArts");
+  });
+
+  test("getRoleToGameIdsMap returns company id to game ids from role blocks", () => {
+    saveRoleItem(metadataPath, "developers", {
+      id: 37,
+      title: "LucasArts",
+      summary: "",
+      games: [5, 6],
+      childs: [],
+    });
+    saveRoleItem(metadataPath, "publishers", {
+      id: 88,
+      title: "Sega",
+      summary: "",
+      games: [9],
+      childs: [],
+    });
+
+    const devMap = getRoleToGameIdsMap(metadataPath, "developers");
+    const pubMap = getRoleToGameIdsMap(metadataPath, "publishers");
+
+    expect(devMap.get(37)).toEqual([5, 6]);
+    expect(pubMap.get(88)).toEqual([9]);
   });
 
   test("migrates legacy developer metadata on read", () => {

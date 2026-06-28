@@ -282,6 +282,19 @@ function loadRoleItems(metadataPath, roleFolder) {
   );
 }
 
+/** Map(companyId -> gameIds[]) for building game.developers / game.publishers reverse index. */
+function getRoleToGameIdsMap(metadataPath, roleFolder) {
+  const items = loadRoleItems(metadataPath, roleFolder);
+  const map = new Map();
+  for (const item of items) {
+    const gameIds = Array.isArray(item.games) ? item.games : [];
+    if (gameIds.length > 0) {
+      map.set(item.id, gameIds);
+    }
+  }
+  return map;
+}
+
 function loadRoleItemById(metadataPath, roleFolder, companyId) {
   return buildMergedEntry(metadataPath, roleFolder, companyId);
 }
@@ -541,6 +554,7 @@ module.exports = {
   getRoleMetadataPath,
   getCompanyContentDir,
   loadRoleItems,
+  getRoleToGameIdsMap,
   loadRoleItemById,
   saveRoleItem,
   deleteRoleItem,

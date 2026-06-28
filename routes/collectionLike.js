@@ -421,6 +421,7 @@ function createCollectionLikeRoutes(config) {
             id: d.id,
             title: d.title,
             gameCount: actualCount,
+            gameIds: gameIds.filter((g) => allGames[g]).map((id) => String(id)),
             showTitle: d.showTitle !== false,
             childs: Array.isArray(d.childs) ? d.childs : [],
           };
