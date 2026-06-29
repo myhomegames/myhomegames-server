@@ -140,6 +140,7 @@ const {
 } = require("./utils/twitchAppCredentialsStore");
 const { resolveDefaultSkinUrl } = require("./utils/defaultSkinUrl");
 const { bulkMetadataReloadLogMiddleware } = require("./utils/bulkMetadataReloadLog");
+const { googleTranslateText, normalizeLangCode } = require("./utils/googleTranslate");
 
 const app = express();
 app.use(express.json());
@@ -963,6 +964,25 @@ app.get("/version", (req, res) => {
   const info = getServerVersionInfo();
   if (info) res.json(info);
   else res.status(500).json({ error: "Version not available" });
+});
+
+// Machine translation proxy (summary auto-translate in web UI)
+app.post("/translate", optionalToken, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const targetLang = normalizeLangCode(body.targetLang);
+    const sourceLang = normalizeLangCode(body.sourceLang) || "en";
+    if (!text) return res.status(400).json({ error: "text is required" });
+    if (!targetLang) return res.status(400).json({ error: "targetLang is required" });
+    if (targetLang === sourceLang) return res.json({ translated: text });
+    const translated = await googleTranslateText(text, targetLang, sourceLang);
+    if (!translated) return res.status(502).json({ error: "translation failed" });
+    res.json({ translated });
+  } catch (err) {
+    console.error("POST /translate failed:", err?.message || err);
+    res.status(500).json({ error: "translation failed" });
+  }
 });
 
 // Endpoint: update settings
