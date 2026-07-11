@@ -54,6 +54,11 @@ const {
   addChildToRoleItem,
   removeChildFromRoleItem,
 } = require("../utils/companyStorage");
+const {
+  resolveRequestLocale,
+  resolveSummary,
+  applySummaryEdit,
+} = require("../utils/metadataLocale");
 
 function companyMergeSnapshot(entry) {
   return JSON.stringify({
@@ -259,11 +264,11 @@ function createCollectionLikeRoutes(config) {
       );
     }
 
-    function buildDetailPayload(entry) {
+    function buildDetailPayload(entry, locale) {
       const data = {
         id: entry.id,
         title: entry.title,
-        summary: entry.summary || "",
+        summary: resolveSummary(entry.summary, locale),
         showTitle: entry.showTitle !== false,
         gameCount: (entry.games || []).filter((g) => allGames[g]).length,
         childs: Array.isArray(entry.childs) ? entry.childs : [],
@@ -392,7 +397,7 @@ function createCollectionLikeRoutes(config) {
       const data = {
         id: newItem.id,
         title: newItem.title,
-        summary: newItem.summary || "",
+        summary: resolveSummary(newItem.summary, resolveRequestLocale(req, metadataPath)),
         showTitle: newItem.showTitle,
         gameCount: 0,
         cover: cover || null,
@@ -412,6 +417,7 @@ function createCollectionLikeRoutes(config) {
 
     app.get(normalizedRouteBase, requireToken, (req, res) => {
       updateCache();
+      const locale = resolveRequestLocale(req, metadataPath);
       const list = cache.length ? cache : storageLoadItems(metadataPath);
       res.json({
         [listResponseKey]: list.map((d) => {
@@ -442,7 +448,7 @@ function createCollectionLikeRoutes(config) {
           });
           data.background = background || storedExternalBackgroundUrl(d) || null;
           data.externalBackgroundUrl = storedExternalBackgroundUrl(d);
-          if (d.summary) data.summary = d.summary;
+          if (d.summary) data.summary = resolveSummary(d.summary, locale);
           return data;
         }),
       });
@@ -466,7 +472,8 @@ function createCollectionLikeRoutes(config) {
         }
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
-      res.json(buildDetailPayload(entry));
+      const locale = resolveRequestLocale(req, metadataPath);
+      res.json(buildDetailPayload(entry, locale));
     });
 
     app.post(`${normalizedRouteBase}/:id/reload`, requireToken, (req, res) => {
@@ -479,7 +486,8 @@ function createCollectionLikeRoutes(config) {
           return res.status(404).json({ error: `${humanName} not found` });
         }
         upsertCacheEntry(entry);
-        res.json({ status: "reloaded", [singleResponseKey]: buildDetailPayload(entry) });
+        const locale = resolveRequestLocale(req, metadataPath);
+        res.json({ status: "reloaded", [singleResponseKey]: buildDetailPayload(entry, locale) });
       } catch (e) {
         console.error(`Failed to reload ${humanName.toLowerCase()} ${id}:`, e.message);
         res.status(500).json({ error: `Failed to reload ${humanName.toLowerCase()} metadata` });
@@ -549,9 +557,10 @@ function createCollectionLikeRoutes(config) {
           entry = storageLoadItemById(metadataPath, id) || entry;
 
           const status = created ? "created" : changed ? "merged" : "unchanged";
+          const locale = resolveRequestLocale(req, metadataPath);
           res.json({
             status,
-            [singleResponseKey]: buildDetailPayload(entry),
+            [singleResponseKey]: buildDetailPayload(entry, locale),
           });
         } catch (e) {
           console.error(
@@ -575,6 +584,7 @@ function createCollectionLikeRoutes(config) {
         entry = findById(list, id);
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const locale = resolveRequestLocale(req, metadataPath);
       const games = (entry.games || [])
         .map((gId) => {
           const key = normalizeId(gId);
@@ -593,7 +603,7 @@ function createCollectionLikeRoutes(config) {
           return {
             id: g.id,
             title: g.title,
-            summary: g.summary || "",
+            summary: resolveSummary(g.summary, locale),
             cover: getCoverUrl(g, metadataPath),
             day: g.day,
             month: g.month,
@@ -635,6 +645,7 @@ function createCollectionLikeRoutes(config) {
       const id = normalizeId(req.params.id);
       const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const locale = resolveRequestLocale(req, metadataPath);
       const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
@@ -642,7 +653,9 @@ function createCollectionLikeRoutes(config) {
         updateCache();
       }
       if (summary !== undefined) {
-        entry.summary = typeof summary === "string" ? summary.trim() : "";
+        entry.summary = typeof summary === "string"
+          ? applySummaryEdit(entry.summary, locale, summary)
+          : applySummaryEdit(entry.summary, locale, "");
         storageSaveItem(metadataPath, entry);
         updateCache();
       }
@@ -718,7 +731,7 @@ function createCollectionLikeRoutes(config) {
       const responsePayload = {
         id: entry.id,
         title: entry.title,
-        summary: entry.summary || "",
+        summary: resolveSummary(entry.summary, locale),
         showTitle: entry.showTitle !== false,
         childs: Array.isArray(entry.childs) ? entry.childs : [],
         cover: cover || storedExternalCoverUrl(entry) || null,

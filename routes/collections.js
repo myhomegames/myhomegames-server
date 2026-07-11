@@ -23,6 +23,11 @@ const {
 } = require("../utils/collectionsShared");
 const { findResourceIdsContainingGame } = require("../utils/gameDeleteUtils");
 const { coerceToGameTypeId } = require("../utils/gameType");
+const {
+  resolveRequestLocale,
+  resolveSummary,
+  applySummaryEdit,
+} = require("../utils/metadataLocale");
 
 const CONTENT_FOLDER = "collections";
 
@@ -119,6 +124,10 @@ function createCacheUpdater(collectionsCache) {
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
 
+  function localizedSummary(req, summary) {
+    return resolveSummary(summary, resolveRequestLocale(req, metadataPath));
+  }
+
   // Configure multer for file uploads (memory storage, we'll save manually)
   const upload = multer({ storage: multer.memoryStorage() });
 
@@ -134,7 +143,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         const collectionData = {
           id: c.id,
           title: c.title,
-          summary: c.summary || "",
+          summary: localizedSummary(req, c.summary),
           showTitle: c.showTitle,
           gameCount: actualGameCount,
           gameIds: gameIds.filter((gameId) => allGames[gameId]).map((id) => String(id)),
@@ -224,7 +233,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: newCollection.id,
         title: newCollection.title,
-        summary: newCollection.summary || "",
+        summary: localizedSummary(req, newCollection.summary),
         showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
@@ -258,7 +267,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionData = {
       id: collection.id,
       title: collection.title,
-      summary: collection.summary || "",
+      summary: localizedSummary(req, collection.summary),
       showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
       childs: Array.isArray(collection.childs) ? collection.childs : [],
@@ -314,7 +323,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         const row = {
           id: game.id,
           title: game.title,
-          summary: game.summary || "",
+          summary: localizedSummary(req, game.summary),
           cover: getCoverUrl(game, metadataPath),
           day: game.day || null,
           month: game.month || null,
@@ -465,6 +474,14 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       }
       filteredUpdates.childs = normalizedChilds;
     }
+    if ("summary" in filteredUpdates) {
+      const v = filteredUpdates.summary;
+      if (v != null && typeof v !== "string") {
+        return res.status(400).json({ error: "summary must be a string or null" });
+      }
+      const locale = resolveRequestLocale(req, metadataPath);
+      filteredUpdates.summary = applySummaryEdit(collection.summary, locale, v == null ? "" : v);
+    }
     Object.assign(collection, filteredUpdates);
     
     // Save updated collection
@@ -473,7 +490,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
         childs: Array.isArray(collection.childs) ? collection.childs : [],
@@ -579,7 +596,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
@@ -637,7 +654,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
@@ -685,7 +702,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
@@ -739,7 +756,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
@@ -793,7 +810,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: entry.id,
         title: entry.title,
-        summary: entry.summary || "",
+        summary: localizedSummary(req, entry.summary),
         showTitle: entry.showTitle,
         cover: `/collection-covers/${encodeURIComponent(String(entry.id))}`,
         gameCount: (entry.games || []).length,

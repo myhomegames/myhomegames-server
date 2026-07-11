@@ -100,6 +100,13 @@ const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmp
 const { getTitleForSort } = require("../utils/sortUtils");
 const { coerceToGameTypeId } = require("../utils/gameType");
 const {
+  resolveSummary,
+  resolveKeywords,
+  resolveKeyword,
+  resolveRequestLocale,
+  applySummaryEdit,
+} = require("../utils/metadataLocale");
+const {
   mergeCatalogGameMetadata,
   idsToAdd,
   devPubItemsToAdd,
@@ -347,7 +354,7 @@ function resolveSimilarGamesForResponse(similarGamesField, allGames) {
 }
 
 /** Build game response: tag fields are id arrays; developers/publishers/similarGames enriched when lists/allGames passed. */
-function buildGameResponse(metadataPath, game, developersList = null, publishersList = null, allGames = null) {
+function buildGameResponse(metadataPath, game, developersList = null, publishersList = null, allGames = null, locale = "en") {
   const executables = getExecutablesWithOrder(metadataPath, game.id);
   const executableFileNames = executables.length > 0
     ? getExecutableFileBasenamesInOrder(metadataPath, game.id)
@@ -356,10 +363,13 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
   const pubIds = game.publishers && Array.isArray(game.publishers) ? game.publishers : [];
   const developersResolved = resolveDeveloperPublisherNames(devIds, developersList);
   const publishersResolved = resolveDeveloperPublisherNames(pubIds, publishersList);
+  const localizedKeywords = game.keywords && Array.isArray(game.keywords)
+    ? resolveKeywords(game.keywords, locale, metadataPath)
+    : null;
   const gameData = {
     id: game.id,
     title: game.title,
-    summary: game.summary || "",
+    summary: resolveSummary(game.summary, locale),
     cover: getCoverUrl(game, metadataPath),
     day: game.day || null,
     month: game.month || null,
@@ -384,7 +394,7 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     screenshots: game.screenshots || null,
     videos: game.videos || null,
     gameEngines: game.gameEngines && game.gameEngines.length ? game.gameEngines : null,
-    keywords: game.keywords || null,
+    keywords: localizedKeywords,
     alternativeNames: game.alternativeNames || null,
     similarGames: resolveSimilarGamesForResponse(game.similarGames, allGames),
     showTitle: game.showTitle,
@@ -629,10 +639,22 @@ function scheduleRecommendedSectionsUpdate(updateRecommendedSections, metadataPa
 }
 
 function registerLibraryRoutes(app, requireToken, metadataPath, allGames, updateCollectionsCache = null, updateRecommendedSections = null, getCollectionsCache = null, getDevelopersCache = null, getPublishersCache = null) {
-  // Response cache for GET /libraries/library/games (keyed by sort); invalidated on any game add/update/delete
+  // Response cache for GET /libraries/library/games (keyed by sort + locale); invalidated on any game add/update/delete
   let libraryGamesResponseCache = Object.create(null);
   function invalidateLibraryGamesResponseCache() {
     libraryGamesResponseCache = Object.create(null);
+  }
+
+  function localizedGameResponse(req, game, developersList, publishersList) {
+    const locale = resolveRequestLocale(req, metadataPath);
+    return buildGameResponse(
+      metadataPath,
+      game,
+      developersList,
+      publishersList,
+      allGames,
+      locale,
+    );
   }
 
   // Endpoint: get existing game IDs (lightweight, for importer to exclude from catalog search)
@@ -655,15 +677,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
   // Endpoint: get unique keywords from all games (for tag suggestions)
   app.get("/keywords", requireToken, (req, res) => {
-    const set = new Set();
+    const locale = resolveRequestLocale(req, metadataPath);
+    const seen = new Set();
+    const keywords = [];
     for (const game of Object.values(allGames)) {
       const kw = game.keywords;
       if (!kw || !Array.isArray(kw)) continue;
       for (const k of kw) {
-        if (k != null && typeof k === "string" && k.trim()) set.add(k.trim());
+        if (k == null || typeof k !== "string" || !k.trim()) continue;
+        const canonical = k.trim();
+        const dedupeKey = canonical.toLowerCase();
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        keywords.push(resolveKeyword(canonical, locale, metadataPath));
       }
     }
-    const keywords = Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    keywords.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     res.json({ keywords });
   });
 
@@ -675,7 +704,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         : loadLibraryGames(metadataPath, allGames);
 
       const sortBy = (req.query.sort && String(req.query.sort).toLowerCase()) || "title";
-      const cacheKey = sortBy;
+      const locale = resolveRequestLocale(req, metadataPath);
+      const cacheKey = `${sortBy}:${locale}`;
 
       if (fromCache && libraryGamesResponseCache[cacheKey]) {
         return res.json(libraryGamesResponseCache[cacheKey]);
@@ -715,7 +745,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
       const responsePayload = {
-        games: sorted.map((g) => buildGameResponse(metadataPath, g, devs, pubs, allGames)),
+        games: sorted.map((g) => localizedGameResponse(req, g, devs, pubs)),
       };
 
       if (fromCache) {
@@ -753,7 +783,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
     const devs = getDevelopersCache ? getDevelopersCache() : null;
     const pubs = getPublishersCache ? getPublishersCache() : null;
-    res.json(buildGameResponse(metadataPath, game, devs, pubs, allGames));
+    res.json(localizedGameResponse(req, game, devs, pubs));
   });
 
   // Endpoint: update game fields
@@ -1114,6 +1144,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         filteredUpdates.type = id;
       }
     }
+    if ("summary" in filteredUpdates) {
+      const v = filteredUpdates.summary;
+      if (v != null && typeof v !== "string") {
+        return res.status(400).json({ error: "summary must be a string or null" });
+      }
+      const locale = resolveRequestLocale(req, metadataPath);
+      filteredUpdates.summary = applySummaryEdit(game.summary, locale, v == null ? "" : v);
+    }
 
     // Compute which tag ids were removed (for cleanup). Input: only number[].
     const toTagIdArray = (val) => {
@@ -1417,7 +1455,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const updatedGame = currentGame;
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames) });
+      res.json({ status: "success", game: localizedGameResponse(req, updatedGame, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to save ${fileName}:`, e.message);
       res.status(500).json({ error: "Failed to save game updates" });
@@ -1511,7 +1549,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const pubs = getPublishersCache ? getPublishersCache() : null;
       res.json({
         status: metaChanged || tagsChanged ? "merged" : "unchanged",
-        game: buildGameResponse(metadataPath, updatedGame, devs, pubs, allGames),
+        game: localizedGameResponse(req, updatedGame, devs, pubs, allGames),
       });
     } catch (e) {
       console.error(`Failed to merge catalog metadata for game ${gameId}:`, e.message);
@@ -1534,7 +1572,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "reloaded", game: buildGameResponse(metadataPath, game, devs, pubs, allGames) });
+      res.json({ status: "reloaded", game: localizedGameResponse(req, game, devs, pubs, allGames) });
     } catch (e) {
       console.error(`Failed to reload game ${gameId}:`, e.message);
       res.status(500).json({ error: "Failed to reload game metadata" });
@@ -1574,7 +1612,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const coverPath = path.join(gameContentDir, "cover.webp");
       fs.writeFileSync(coverPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save cover image" });
@@ -1611,7 +1649,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const backgroundPath = path.join(gameContentDir, "background.webp");
       fs.writeFileSync(backgroundPath, file.buffer);
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to save background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to save background image" });
@@ -1692,7 +1730,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'cover'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete cover for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete cover image" });
@@ -1742,7 +1780,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         mediaType: 'background'
       });
       
-      res.json({ status: "success", game: buildGameResponse(metadataPath, game, null, null, allGames) });
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
     } catch (error) {
       console.error(`Failed to delete background for game ${gameId}:`, error);
       res.status(500).json({ error: "Failed to delete background image" });
@@ -1839,7 +1877,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       res.json({
         status: "success",
-        game: buildGameResponse(metadataPath, allGames[gameId], null, null, allGames),
+        game: localizedGameResponse(req, allGames[gameId], null, null, allGames),
       });
     } catch (error) {
       console.error(`Failed to save executable for game ${gameId}:`, error);
@@ -2095,7 +2133,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
+      res.json({ status: "success", game: localizedGameResponse(req, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
       console.error(`Failed to add game from catalog:`, error);
       res.status(500).json({ error: "Failed to add game to library", detail: error.message });
@@ -2158,7 +2196,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       const devs = getDevelopersCache ? getDevelopersCache() : null;
       const pubs = getPublishersCache ? getPublishersCache() : null;
-      res.json({ status: "success", game: buildGameResponse(metadataPath, newGame, devs, pubs, allGames), gameId: newGame.id });
+      res.json({ status: "success", game: localizedGameResponse(req, newGame, devs, pubs, allGames), gameId: newGame.id });
     } catch (error) {
       console.error("Failed to create game:", error);
       res.status(500).json({ error: "Failed to create game", detail: error.message });
