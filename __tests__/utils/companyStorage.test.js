@@ -50,6 +50,29 @@ describe("companyStorage", () => {
     expect(developerMeta).toEqual({ games: [101, 102] });
   });
 
+  test("loadRoleItemById preserves multilingual summary locale map", () => {
+    const summary = {
+      en: "American game studio.",
+      it: "Studio di videogiochi americano.",
+      pt: "",
+      es: "",
+      fr: "",
+      de: "",
+      zh: "",
+      ja: "",
+    };
+    saveRoleItem(metadataPath, "developers", {
+      id: 42,
+      title: "LucasArts",
+      summary,
+      games: [1],
+      childs: [],
+    });
+
+    const loaded = loadRoleItemById(metadataPath, "developers", 42);
+    expect(loaded?.summary).toEqual(summary);
+  });
+
   test("loadRoleItems merges company profile with role games", () => {
     saveRoleItem(metadataPath, "developers", {
       id: 37,

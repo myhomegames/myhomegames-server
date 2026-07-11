@@ -5,6 +5,7 @@ const path = require("path");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("./fileUtils");
 const { normalizeId, normalizeChildIds, findById } = require("./collectionsShared");
 const { getTitleForSort } = require("./sortUtils");
+const { isSummaryLocaleMap } = require("./metadataLocale");
 const {
   pickFromFlat,
   pickCompanyProfileFields,
@@ -60,10 +61,16 @@ function isLegacyRoleMetadata(meta) {
   );
 }
 
+function normalizeStoredSummary(summary) {
+  if (typeof summary === "string") return summary.trim();
+  if (isSummaryLocaleMap(summary)) return summary;
+  return "";
+}
+
 function extractCompanyProfile(meta, companyId) {
   return {
     title: typeof meta.title === "string" ? meta.title.trim() : "",
-    summary: typeof meta.summary === "string" ? meta.summary.trim() : "",
+    summary: normalizeStoredSummary(meta.summary),
     showTitle: meta.showTitle !== false,
     childs: normalizeChildIds(meta.childs, companyId),
     externalCoverUrl: storedExternalCoverUrl(meta),
@@ -75,6 +82,9 @@ function extractCompanyProfile(meta, companyId) {
 function isEmptyCompanyProfileValue(value) {
   if (value === undefined || value === null) return true;
   if (typeof value === "string") return value.trim() === "";
+  if (isSummaryLocaleMap(value)) {
+    return !Object.values(value).some((entry) => typeof entry === "string" && entry.trim());
+  }
   if (typeof value === "object") {
     if (value.id != null && typeof value.name === "string" && value.name.trim() !== "") {
       return false;
@@ -161,7 +171,7 @@ function loadCompanyProfile(metadataPath, companyId) {
   }
   return {
     title: meta.title.trim(),
-    summary: typeof meta.summary === "string" ? meta.summary : "",
+    summary: normalizeStoredSummary(meta.summary),
     showTitle: meta.showTitle !== false,
     childs: normalizeChildIds(meta.childs, companyId),
     externalCoverUrl: storedExternalCoverUrl(meta),
