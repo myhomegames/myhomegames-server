@@ -69,6 +69,16 @@ async function autoTranslateKeywordsForImport(metadataPath, keywords) {
   }
 }
 
+async function autoTranslateNewCompanySummary(summary, locale = CANONICAL_LANG) {
+  if (isSummaryLocaleMap(summary)) return summary;
+  const english = typeof summary === "string" ? summary.trim() : "";
+  if (!english) return "";
+  return buildImportSummaryLocaleMap({
+    summaryEn: english,
+    locale,
+  });
+}
+
 async function autoTranslateSummaryForImport(summary, options = {}) {
   if (isSummaryLocaleMap(summary)) return summary;
   return buildImportSummaryLocaleMap({
@@ -98,6 +108,7 @@ async function autoTranslateImportedGameFields(fields, metadataPath, locale = CA
 module.exports = {
   autoTranslateImportedGameFields,
   autoTranslateSummaryForImport,
+  autoTranslateNewCompanySummary,
   autoTranslateKeywordsForImport,
   buildImportSummaryLocaleMap,
   upsertKeywordTranslation,

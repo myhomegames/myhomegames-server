@@ -58,7 +58,10 @@ const {
   resolveRequestLocale,
   resolveSummary,
   applySummaryEdit,
+  readSettingsLanguage,
+  isSummaryLocaleMap,
 } = require("../utils/metadataLocale");
+const { autoTranslateNewCompanySummary } = require("../utils/autoTranslateGameMetadata");
 
 function companyMergeSnapshot(entry) {
   return JSON.stringify({
@@ -149,8 +152,9 @@ function createCollectionLikeRoutes(config) {
     return Math.abs(hash);
   }
 
-  function ensureBatch(metadataPath, items, gameId) {
+  async function ensureBatch(metadataPath, items, gameId, locale) {
     if (!items || !Array.isArray(items) || items.length === 0) return;
+    const targetLocale = locale || readSettingsLanguage(metadataPath);
     const list = storageLoadItems(metadataPath);
     const byId = new Map(list.map((d) => [d.id, d]));
 
@@ -168,11 +172,22 @@ function createCollectionLikeRoutes(config) {
 
       let entry = byId.get(numId);
       if (!entry) {
+        let summary = description || "";
+        if (useCompanyStorage && typeof summary === "string" && summary.trim() && !isSummaryLocaleMap(summary)) {
+          try {
+            summary = await autoTranslateNewCompanySummary(summary, targetLocale);
+          } catch (translateErr) {
+            console.warn(
+              `Auto-translate for new ${humanName.toLowerCase()} ${numId} failed:`,
+              translateErr?.message || translateErr,
+            );
+          }
+        }
         entry = {
           id: numId,
           title: name.trim(),
           games: [],
-          summary: description || "",
+          summary,
           externalCoverUrl: logo || null,
           ...companyProfileFields,
         };
@@ -536,6 +551,22 @@ function createCollectionLikeRoutes(config) {
               return res.status(400).json({ error: `Cannot create ${humanName} without title` });
             }
             created = true;
+            const requestLocale = resolveRequestLocale(req, metadataPath);
+            if (
+              typeof entry.summary === "string"
+              && entry.summary.trim()
+              && !isSummaryLocaleMap(entry.summary)
+            ) {
+              try {
+                entry.summary = await autoTranslateNewCompanySummary(entry.summary, requestLocale);
+                storageSaveItem(metadataPath, entry);
+              } catch (translateErr) {
+                console.warn(
+                  `Auto-translate for new ${humanName.toLowerCase()} ${id} failed:`,
+                  translateErr?.message || translateErr,
+                );
+              }
+            }
             upsertCacheEntry(entry);
           } else {
             const merged = mergeParentCompanyProfiles(entry, remotePatch);

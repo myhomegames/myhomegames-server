@@ -72,4 +72,14 @@ describe("autoTranslateGameMetadata", () => {
     expect(resolveSummary(summary, "it")).toBe("Ciao");
     expect(resolveKeyword("Thief", "it", tempDir)).toBe("[it] Thief");
   });
+
+  it("auto-translates new company summary into locale map", async () => {
+    const { autoTranslateNewCompanySummary } = require("../../utils/autoTranslateGameMetadata");
+    const summaryMap = await autoTranslateNewCompanySummary(
+      "Nintendo is a Japanese video game company.",
+      "it",
+    );
+    expect(summaryMap.en).toBe("Nintendo is a Japanese video game company.");
+    expect(summaryMap.it).toBe("[it] Nintendo is a Japanese video game company.");
+  });
 });

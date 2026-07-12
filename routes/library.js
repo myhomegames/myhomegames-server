@@ -1069,7 +1069,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (!newIds.has(oldId)) removeGameFromDeveloper(metadataPath, oldId, gameId);
       }
       if (newDevItems.length > 0) {
-        ensureDevelopersExistBatch(metadataPath, newDevItems, gameId);
+        await ensureDevelopersExistBatch(
+          metadataPath,
+          newDevItems,
+          gameId,
+          resolveRequestLocale(req, metadataPath),
+        );
       }
       filteredUpdates.developers = newDevIds.length > 0 ? newDevIds : null;
     }
@@ -1085,7 +1090,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (!newIds.has(oldId)) removeGameFromPublisher(metadataPath, oldId, gameId);
       }
       if (newPubItems.length > 0) {
-        ensurePublishersExistBatch(metadataPath, newPubItems, gameId);
+        await ensurePublishersExistBatch(
+          metadataPath,
+          newPubItems,
+          gameId,
+          resolveRequestLocale(req, metadataPath),
+        );
       }
       filteredUpdates.publishers = newPubIds.length > 0 ? newPubIds : null;
     }
@@ -1517,15 +1527,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       );
       resolveAndAddTags("gameEngines", normalizeGameEngineFieldToIds, parsed.gameEngines, addGameToGameEngine);
 
+      const mergeLocale = resolveRequestLocale(req, metadataPath);
       const newDevelopers = devPubItemsToAdd(localTags.developers, parsed.rawDevelopers);
       if (newDevelopers.length > 0) {
-        ensureDevelopersExistBatch(metadataPath, newDevelopers, gameId);
+        await ensureDevelopersExistBatch(metadataPath, newDevelopers, gameId, mergeLocale);
         tagsChanged = true;
       }
 
       const newPublishers = devPubItemsToAdd(localTags.publishers, parsed.rawPublishers);
       if (newPublishers.length > 0) {
-        ensurePublishersExistBatch(metadataPath, newPublishers, gameId);
+        await ensurePublishersExistBatch(metadataPath, newPublishers, gameId, mergeLocale);
         tagsChanged = true;
       }
 
@@ -2174,10 +2185,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       };
 
       if (rawDevelopers && rawDevelopers.length > 0) {
-        ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId);
+        await ensureDevelopersExistBatch(metadataPath, rawDevelopers, gameId, locale);
       }
       if (rawPublishers && rawPublishers.length > 0) {
-        ensurePublishersExistBatch(metadataPath, rawPublishers, gameId);
+        await ensurePublishersExistBatch(metadataPath, rawPublishers, gameId, locale);
       }
       if (franchiseForEnsure && franchiseForEnsure.length > 0) ensureFranchiseExistBatch(metadataPath, franchiseForEnsure, gameId);
       if (collectionForEnsure && collectionForEnsure.length > 0) ensureSeriesExistBatch(metadataPath, collectionForEnsure, gameId);

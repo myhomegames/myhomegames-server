@@ -1,6 +1,7 @@
 const request = require('supertest');
 const fs = require('fs');
 const path = require('path');
+const { resolveSummary, isSummaryLocaleMap } = require('../../utils/metadataLocale');
 
 // Import setup first to set environment variables
 const { testMetadataPath } = require('../setup');
@@ -2438,7 +2439,8 @@ describe('POST /catalog/import-game', () => {
 
     const companyMeta = JSON.parse(fs.readFileSync(relatedPath, 'utf8'));
     expect(companyMeta.title).toBe('Former Studio Name');
-    expect(companyMeta.summary).toBe('Merged from IGDB relation sync');
+    expect(isSummaryLocaleMap(companyMeta.summary)).toBe(true);
+    expect(resolveSummary(companyMeta.summary, 'en')).toBe('Merged from IGDB relation sync');
 
     const secondMerge = await request(app)
       .post(`/developers/${relatedDeveloperId}/merge-company-profile`)
