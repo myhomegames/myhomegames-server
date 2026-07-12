@@ -5,6 +5,11 @@ const https = require("https");
 const { coerceToGameTypeId } = require("../utils/gameType");
 const { fetchRemoteCompanyStoragePatch } = require("../utils/catalogCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+const { resolveRequestLocale } = require("../utils/metadataLocale");
+const {
+  applyTranslatedSummariesToGames,
+  translateIgdbSummary,
+} = require("../utils/translateIgdbSummaries");
 
 // IGDB Access Token cache (per clientId)
 const igdbTokenCache = new Map();
@@ -296,7 +301,7 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
  * @param {express.App} app - Express app instance
  * @param {Function} requireToken - Authentication middleware
  */
-function registerIGDBRoutes(app, requireToken) {
+function registerIGDBRoutes(app, requireToken, metadataPath) {
   // Endpoint: search games on IGDB
   const handleSearch = async (req, res) => {
     const rawQuery = (req.method === "POST" && req.body && typeof req.body.query === "string")
@@ -403,8 +408,16 @@ function registerIGDBRoutes(app, requireToken) {
         };
       });
 
+      let localizedGames = formattedGames;
+      try {
+        const locale = resolveRequestLocale(req, metadataPath);
+        localizedGames = await applyTranslatedSummariesToGames(formattedGames, locale);
+      } catch (translateErr) {
+        console.warn("IGDB search summary translation failed:", translateErr?.message || translateErr);
+      }
+
       if (releaseDateTimestamp !== null) {
-        formattedGames.sort((a, b) => {
+        localizedGames.sort((a, b) => {
           const aTs = a.releaseDateFull?.timestamp;
           const bTs = b.releaseDateFull?.timestamp;
           const aDist = aTs != null ? Math.abs(aTs - releaseDateTimestamp) : Infinity;
@@ -414,7 +427,7 @@ function registerIGDBRoutes(app, requireToken) {
           return (aTs != null ? 0 : 1) - (bTs != null ? 0 : 1);
         });
       } else {
-        formattedGames.sort((a, b) => {
+        localizedGames.sort((a, b) => {
           const aHasDate = a.releaseDateFull && a.releaseDateFull.timestamp != null;
           const bHasDate = b.releaseDateFull && b.releaseDateFull.timestamp != null;
           if (aHasDate && bHasDate) return a.releaseDateFull.timestamp - b.releaseDateFull.timestamp;
@@ -425,7 +438,7 @@ function registerIGDBRoutes(app, requireToken) {
       }
 
       res.setHeader('Content-Type', 'application/json');
-      res.json({ games: formattedGames });
+      res.json({ games: localizedGames });
     } catch (err) {
       console.error("IGDB search error:", err);
       res.setHeader('Content-Type', 'application/json');
@@ -1632,6 +1645,13 @@ function registerIGDBRoutes(app, requireToken) {
               ...(gameTypeId != null ? { type: gameTypeId } : {}),
             };
             
+            try {
+              const locale = resolveRequestLocale(req, metadataPath);
+              gameData.summary = await translateIgdbSummary(gameData.summary, locale);
+            } catch (translateErr) {
+              console.warn("IGDB game summary translation failed:", translateErr?.message || translateErr);
+            }
+
             res.setHeader('Content-Type', 'application/json');
             res.json(gameData);
           } catch (e) {

@@ -536,7 +536,7 @@ registerTunnelRoutes(app, {
 });
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
-igdbRoutes.registerIGDBRoutes(app, optionalToken);
+igdbRoutes.registerIGDBRoutes(app, optionalToken, METADATA_PATH);
 const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   app,
   optionalToken,
