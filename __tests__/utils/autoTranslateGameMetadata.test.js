@@ -12,12 +12,15 @@ const {
   autoTranslateKeywordsForImport,
   autoTranslateImportedGameFields,
   buildImportSummaryLocaleMap,
+  retranslateAllSummaryLocales,
+  refreshKeywordTranslation,
 } = require("../../utils/autoTranslateGameMetadata");
 const {
   resolveSummary,
   resolveKeyword,
   loadKeywordTranslationsStore,
 } = require("../../utils/metadataLocale");
+const { writeJsonFile } = require("../../utils/fileUtils");
 
 describe("autoTranslateGameMetadata", () => {
   let tempDir;
@@ -81,5 +84,35 @@ describe("autoTranslateGameMetadata", () => {
     );
     expect(summaryMap.en).toBe("Nintendo is a Japanese video game company.");
     expect(summaryMap.it).toBe("[it] Nintendo is a Japanese video game company.");
+  });
+
+  it("retranslates every summary locale from edited popup text", async () => {
+    const summaryMap = await retranslateAllSummaryLocales("Testo modificato", "it");
+
+    expect(summaryMap.it).toBe("Testo modificato");
+    expect(summaryMap.en).toBe("[en] Testo modificato");
+    expect(summaryMap.fr).toBe("[fr] Testo modificato");
+    expect(googleTranslateText).toHaveBeenCalledTimes(7);
+  });
+
+  it("refreshes every keyword locale when edited in the popup", async () => {
+    writeJsonFile(path.join(tempDir, "keyword-translations.json"), {
+      version: 1,
+      entries: {
+        stealth: {
+          translations: {
+            en: "Stealth",
+            it: "Furtività vecchia",
+          },
+        },
+      },
+    });
+
+    await refreshKeywordTranslation(tempDir, "Furtività", "it");
+
+    const store = loadKeywordTranslationsStore(tempDir);
+    expect(store.entries.furtività.translations.it).toBe("Furtività");
+    expect(store.entries.furtività.translations.en).toBe("[en] Furtività");
+    expect(store.entries.furtività.translations.fr).toBe("[fr] Furtività");
   });
 });

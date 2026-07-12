@@ -61,7 +61,10 @@ const {
   readSettingsLanguage,
   isSummaryLocaleMap,
 } = require("../utils/metadataLocale");
-const { autoTranslateNewCompanySummary } = require("../utils/autoTranslateGameMetadata");
+const {
+  autoTranslateNewCompanySummary,
+  retranslateAllSummaryLocales,
+} = require("../utils/autoTranslateGameMetadata");
 
 function companyMergeSnapshot(entry) {
   return JSON.stringify({
@@ -684,9 +687,17 @@ function createCollectionLikeRoutes(config) {
         updateCache();
       }
       if (summary !== undefined) {
-        entry.summary = typeof summary === "string"
-          ? applySummaryEdit(entry.summary, locale, summary)
-          : applySummaryEdit(entry.summary, locale, "");
+        const trimmed = typeof summary === "string" ? summary.trim() : "";
+        if (!trimmed) {
+          entry.summary = applySummaryEdit(entry.summary, locale, "");
+        } else {
+          try {
+            entry.summary = await retranslateAllSummaryLocales(trimmed, locale);
+          } catch (translateErr) {
+            console.warn(`Summary retranslate on ${humanName.toLowerCase()} edit failed:`, translateErr?.message || translateErr);
+            entry.summary = applySummaryEdit(entry.summary, locale, trimmed);
+          }
+        }
         storageSaveItem(metadataPath, entry);
         updateCache();
       }

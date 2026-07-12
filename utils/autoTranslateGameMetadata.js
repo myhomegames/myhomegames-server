@@ -61,6 +61,49 @@ async function upsertKeywordTranslation(metadataPath, keyword, sourceLang = CANO
   saveKeywordTranslationsStore(metadataPath, store);
 }
 
+/** Rebuild every locale from edited text (used when saving summary from the edit popup). */
+async function retranslateAllSummaryLocales(sourceText, sourceLang = CANONICAL_LANG) {
+  const source = String(sourceText || "").trim();
+  const lang = normalizeLocale(sourceLang);
+  if (!source) return "";
+
+  /** @type {Record<string, string>} */
+  const localeMap = { [lang]: source };
+
+  await Promise.all(
+    SUPPORTED_LANGUAGES.filter((l) => l !== lang).map(async (l) => {
+      const translated = await googleTranslateText(source, l, lang);
+      localeMap[l] = translated ? String(translated).trim() : "";
+    }),
+  );
+  return localeMap;
+}
+
+/** Rebuild every locale for a keyword edited in the popup. */
+async function refreshKeywordTranslation(metadataPath, keyword, sourceLang = CANONICAL_LANG) {
+  const source = String(keyword || "").trim();
+  if (!source) return;
+
+  const lang = normalizeLocale(sourceLang);
+  const store = loadKeywordTranslationsStore(metadataPath);
+  if (!store.entries || typeof store.entries !== "object") {
+    store.entries = {};
+  }
+
+  /** @type {Record<string, string>} */
+  const translations = { [lang]: source };
+
+  await Promise.all(
+    SUPPORTED_LANGUAGES.filter((l) => l !== lang).map(async (l) => {
+      const translated = await googleTranslateText(source, l, lang);
+      if (translated) translations[l] = String(translated).trim();
+    }),
+  );
+
+  store.entries[buildKeywordKey(source)] = { translations };
+  saveKeywordTranslationsStore(metadataPath, store);
+}
+
 async function autoTranslateKeywordsForImport(metadataPath, keywords) {
   if (!Array.isArray(keywords) || keywords.length === 0) return;
   const unique = [...new Set(keywords.map((item) => String(item || "").trim()).filter(Boolean))];
@@ -111,5 +154,7 @@ module.exports = {
   autoTranslateNewCompanySummary,
   autoTranslateKeywordsForImport,
   buildImportSummaryLocaleMap,
+  retranslateAllSummaryLocales,
+  refreshKeywordTranslation,
   upsertKeywordTranslation,
 };

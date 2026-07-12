@@ -113,7 +113,7 @@ const {
   devPubItemsToAdd,
   franchiseCollectionItemsToAdd,
 } = require("../utils/catalogGameMerge");
-const { autoTranslateImportedGameFields } = require("../utils/autoTranslateGameMetadata");
+const { autoTranslateImportedGameFields, retranslateAllSummaryLocales, refreshKeywordTranslation } = require("../utils/autoTranslateGameMetadata");
 const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
 const {
   getIGDBAccessToken,
@@ -1167,7 +1167,27 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         return res.status(400).json({ error: "summary must be a string or null" });
       }
       const locale = resolveRequestLocale(req, metadataPath);
-      filteredUpdates.summary = applySummaryEdit(game.summary, locale, v == null ? "" : v);
+      const trimmed = v == null ? "" : String(v).trim();
+      if (!trimmed) {
+        filteredUpdates.summary = "";
+      } else {
+        try {
+          filteredUpdates.summary = await retranslateAllSummaryLocales(trimmed, locale);
+        } catch (translateErr) {
+          console.warn("Summary retranslate on edit failed:", translateErr?.message || translateErr);
+          filteredUpdates.summary = applySummaryEdit(game.summary, locale, trimmed);
+        }
+      }
+    }
+    if ("keywords" in filteredUpdates && Array.isArray(filteredUpdates.keywords)) {
+      const locale = resolveRequestLocale(req, metadataPath);
+      try {
+        for (const keyword of filteredUpdates.keywords) {
+          await refreshKeywordTranslation(metadataPath, keyword, locale);
+        }
+      } catch (translateErr) {
+        console.warn("Keyword retranslate on edit failed:", translateErr?.message || translateErr);
+      }
     }
 
     // Compute which tag ids were removed (for cleanup). Input: only number[].

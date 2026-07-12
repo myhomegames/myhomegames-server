@@ -28,6 +28,7 @@ const {
   resolveSummary,
   applySummaryEdit,
 } = require("../utils/metadataLocale");
+const { retranslateAllSummaryLocales } = require("../utils/autoTranslateGameMetadata");
 
 const CONTENT_FOLDER = "collections";
 
@@ -408,7 +409,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   });
 
   // Endpoint: update collection fields
-  app.put("/collections/:id", requireToken, (req, res) => {
+  app.put("/collections/:id", requireToken, async (req, res) => {
     const collectionId = req.params.id;
     const updates = req.body;
     
@@ -480,7 +481,17 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         return res.status(400).json({ error: "summary must be a string or null" });
       }
       const locale = resolveRequestLocale(req, metadataPath);
-      filteredUpdates.summary = applySummaryEdit(collection.summary, locale, v == null ? "" : v);
+      const trimmed = v == null ? "" : String(v).trim();
+      if (!trimmed) {
+        filteredUpdates.summary = "";
+      } else {
+        try {
+          filteredUpdates.summary = await retranslateAllSummaryLocales(trimmed, locale);
+        } catch (translateErr) {
+          console.warn("Summary retranslate on edit failed:", translateErr?.message || translateErr);
+          filteredUpdates.summary = applySummaryEdit(collection.summary, locale, trimmed);
+        }
+      }
     }
     Object.assign(collection, filteredUpdates);
     
