@@ -105,6 +105,7 @@ const {
   resolveKeyword,
   resolveRequestLocale,
   applySummaryEdit,
+  isSummaryLocaleMap,
 } = require("../utils/metadataLocale");
 const {
   mergeCatalogGameMetadata,
@@ -112,6 +113,12 @@ const {
   devPubItemsToAdd,
   franchiseCollectionItemsToAdd,
 } = require("../utils/catalogGameMerge");
+const { autoTranslateImportedGameFields } = require("../utils/autoTranslateGameMetadata");
+const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
+const {
+  getIGDBAccessToken,
+  fetchIGDBGameSummaryAndKeywords,
+} = require("./igdb");
 
 
 /**
@@ -1463,7 +1470,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   });
 
   // Endpoint: merge remote catalog game metadata into local game (missing fields only)
-  const handleMergeCatalogMetadata = (req, res) => {
+  const handleMergeCatalogMetadata = async (req, res) => {
     const gameId = Number(req.params.gameId);
     const catalogPayload = req.body;
 
@@ -1535,7 +1542,35 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
 
       if (metaChanged) {
-        saveGame(metadataPath, { ...mergedMeta, id: gameId });
+        let gameToSave = { ...mergedMeta, id: gameId };
+        const shouldTranslateSummary = !isSummaryLocaleMap(gameToSave.summary)
+          && typeof gameToSave.summary === "string"
+          && gameToSave.summary.trim();
+        const shouldTranslateKeywords = Array.isArray(gameToSave.keywords) && gameToSave.keywords.length > 0;
+        if (shouldTranslateSummary || shouldTranslateKeywords) {
+          try {
+            const locale = resolveRequestLocale(req, metadataPath);
+            const translatedFields = await autoTranslateImportedGameFields(
+              {
+                summaryEn: typeof catalogPayload.summaryEn === "string"
+                  ? catalogPayload.summaryEn
+                  : gameToSave.summary,
+                summaryLocalized: typeof catalogPayload.summary === "string"
+                  ? catalogPayload.summary
+                  : undefined,
+                keywords: gameToSave.keywords,
+              },
+              metadataPath,
+              locale,
+            );
+            if (shouldTranslateSummary) {
+              gameToSave.summary = translatedFields.summary;
+            }
+          } catch (translateErr) {
+            console.warn("Auto-translate on catalog merge failed:", translateErr?.message || translateErr);
+          }
+        }
+        saveGame(metadataPath, gameToSave);
       }
 
       if (metaChanged || tagsChanged) {
@@ -1885,11 +1920,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
-  const handleImportCatalogGame = (req, res) => {
+  const handleImportCatalogGame = async (req, res) => {
     const {
       gameId: catalogGameId,
       name,
       summary,
+      summaryEn,
       cover,
       background,
       releaseDate,
@@ -2059,6 +2095,38 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const collectionForEnsure = normalizeFranchiseOrCollectionToArray(collection ?? series);
 
       const storedGameTypeId = coerceToGameTypeId(gameTypeFromClient);
+      const locale = resolveRequestLocale(req, metadataPath);
+      const summaryLocalized = typeof summary === "string" ? summary.trim() : "";
+
+      let englishSummary = typeof summaryEn === "string" ? summaryEn.trim() : "";
+      let canonicalKeywords = validKeywords;
+      try {
+        const creds = resolveTwitchAppCredentialsForServerIgdb(req);
+        if (creds.clientId && creds.clientSecret) {
+          const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
+          const canonical = await fetchIGDBGameSummaryAndKeywords(gameId, accessToken, creds.clientId);
+          if (canonical.summary) englishSummary = canonical.summary;
+          if (canonical.keywords?.length) canonicalKeywords = canonical.keywords;
+        }
+      } catch (canonicalErr) {
+        console.warn("IGDB canonical metadata fetch for import failed:", canonicalErr?.message || canonicalErr);
+      }
+
+      let translatedSummary = englishSummary;
+      try {
+        const translatedFields = await autoTranslateImportedGameFields(
+          {
+            summaryEn: englishSummary,
+            summaryLocalized,
+            keywords: canonicalKeywords,
+          },
+          metadataPath,
+          locale,
+        );
+        translatedSummary = translatedFields.summary;
+      } catch (translateErr) {
+        console.warn("Auto-translate on catalog import failed:", translateErr?.message || translateErr);
+      }
 
       // Resolve tag titles to ids (creates missing tags)
       const genreIds = normalizeCategoryFieldToIds(metadataPath, validGenres);
@@ -2071,7 +2139,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       const newGame = {
         id: gameId,
         title: name,
-        summary: summary || "",
+        summary: translatedSummary || "",
         year: year,
         month: month || null,
         day: day || null,
@@ -2094,7 +2162,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         screenshots: validScreenshots,
         videos: validVideos,
         gameEngines: gameEngineIds,
-        keywords: validKeywords,
+        keywords: canonicalKeywords,
         alternativeNames: validAlternativeNames,
         similarGames: (validSimilarGames && validSimilarGames.length)
           ? [...new Set(validSimilarGames.map((s) => Number(s.id)).filter((id) => !Number.isNaN(id)))]

@@ -18,7 +18,7 @@ describe("translateIgdbSummaries", () => {
   it("returns games unchanged for English locale", async () => {
     const games = [{ id: 1, summary: "English summary" }];
     const result = await applyTranslatedSummariesToGames(games, "en");
-    expect(result).toEqual(games);
+    expect(result).toEqual([{ id: 1, summary: "English summary", summaryEn: "English summary" }]);
     expect(googleTranslateText).not.toHaveBeenCalled();
   });
 
@@ -34,7 +34,9 @@ describe("translateIgdbSummaries", () => {
     ];
     const result = await applyTranslatedSummariesToGames(games, "it");
     expect(googleTranslateText).toHaveBeenCalledTimes(1);
+    expect(result[0].summaryEn).toBe("First summary");
     expect(result[0].summary).toBe("[it] First summary");
+    expect(result[1].summaryEn).toBe("Second summary");
     expect(result[1].summary).toBe("[it] Second summary");
   });
 

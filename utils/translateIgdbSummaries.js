@@ -39,18 +39,23 @@ async function translateUniqueTexts(uniqueTexts, targetLang) {
 async function applyTranslatedSummariesToGames(games, locale) {
   if (!Array.isArray(games) || games.length === 0) return games;
 
+  const withEnglish = games.map((game) => {
+    const summaryEn = String(game.summaryEn || game.summary || "").trim();
+    return summaryEn ? { ...game, summaryEn } : game;
+  });
+
   const targetLang = normalizeLocale(locale);
-  if (targetLang === "en") return games;
+  if (targetLang === "en") return withEnglish;
 
   const textToIds = new Map();
-  for (const game of games) {
-    const summary = String(game.summary || "").trim();
+  for (const game of withEnglish) {
+    const summary = String(game.summaryEn || "").trim();
     if (!summary) continue;
     if (!textToIds.has(summary)) textToIds.set(summary, []);
     textToIds.get(summary).push(game.id);
   }
 
-  if (textToIds.size === 0) return games;
+  if (textToIds.size === 0) return withEnglish;
 
   const uniqueTexts = [...textToIds.keys()];
   const translatedTexts = await translateUniqueTexts(uniqueTexts, targetLang);
@@ -63,10 +68,11 @@ async function applyTranslatedSummariesToGames(games, locale) {
     }
   });
 
-  return games.map((game) => {
+  return withEnglish.map((game) => {
+    const summaryEn = String(game.summaryEn || "").trim();
     const translated = translatedById.get(game.id);
-    if (!translated) return game;
-    return { ...game, summary: translated };
+    if (!translated) return { ...game, summaryEn };
+    return { ...game, summaryEn, summary: translated };
   });
 }
 

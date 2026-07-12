@@ -174,6 +174,63 @@ function runIGDBGameById(id, accessToken, clientId) {
 }
 
 /**
+ * Fetch canonical English summary and keywords from IGDB for library import.
+ * @returns {Promise<{ summary: string, keywords: string[] }>}
+ */
+async function fetchIGDBGameSummaryAndKeywords(id, accessToken, clientId) {
+  const numericId = Number(id);
+  if (Number.isNaN(numericId)) {
+    return { summary: "", keywords: [] };
+  }
+
+  const postData = `fields summary,keywords.name; where id = ${numericId}; limit 1;`;
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  const games = await new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve(Array.isArray(parsed) ? parsed : []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+
+  const game = games[0];
+  if (!game) return { summary: "", keywords: [] };
+  const keywords = Array.isArray(game.keywords)
+    ? game.keywords.map((item) => String(item?.name || item || "").trim()).filter(Boolean)
+    : [];
+  return {
+    summary: game.summary ? String(game.summary).trim() : "",
+    keywords,
+  };
+}
+
+/**
  * Fetch game names from IGDB by id list.
  * @param {number[]} ids - IGDB game IDs
  * @param {string} accessToken - IGDB access token
@@ -1647,7 +1704,8 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
             
             try {
               const locale = resolveRequestLocale(req, metadataPath);
-              gameData.summary = await translateIgdbSummary(gameData.summary, locale);
+              gameData.summaryEn = gameData.summary || "";
+              gameData.summary = await translateIgdbSummary(gameData.summaryEn, locale);
             } catch (translateErr) {
               console.warn("IGDB game summary translation failed:", translateErr?.message || translateErr);
             }
@@ -1682,5 +1740,6 @@ module.exports = {
   registerIGDBRoutes,
   getIGDBAccessToken,
   fetchIGDBGameNamesByIds,
+  fetchIGDBGameSummaryAndKeywords,
 };
 

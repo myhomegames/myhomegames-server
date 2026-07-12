@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const { SUPPORTED_LANGUAGES } = require("./supportedLanguages");
-const { readJsonFile } = require("./fileUtils");
+const { readJsonFile, writeJsonFile } = require("./fileUtils");
 
 const KEYWORD_TRANSLATIONS_FILENAME = "keyword-translations.json";
 const CANONICAL_LANG = "en";
@@ -123,6 +123,22 @@ function applySummaryEdit(existingSummary, locale, newText) {
   return next;
 }
 
+function saveKeywordTranslationsStore(metadataPath, store) {
+  const filePath = path.join(metadataPath, KEYWORD_TRANSLATIONS_FILENAME);
+  const payload = {
+    version: 1,
+    entries: store?.entries && typeof store.entries === "object" ? store.entries : {},
+  };
+  writeJsonFile(filePath, payload);
+  keywordStoreCache.filePath = filePath;
+  try {
+    keywordStoreCache.mtimeMs = fs.statSync(filePath).mtimeMs;
+  } catch {
+    keywordStoreCache.mtimeMs = 0;
+  }
+  keywordStoreCache.store = payload;
+}
+
 function resolveKeywords(keywords, locale, metadataPath) {
   if (!Array.isArray(keywords)) return keywords;
   return keywords.map((keyword) => resolveKeyword(keyword, locale, metadataPath));
@@ -140,4 +156,6 @@ module.exports = {
   resolveKeyword,
   resolveKeywords,
   loadKeywordTranslationsStore,
+  saveKeywordTranslationsStore,
+  buildKeywordKey,
 };
