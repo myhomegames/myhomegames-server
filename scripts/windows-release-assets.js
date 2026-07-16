@@ -139,7 +139,11 @@ function buildWindowsUnifiedExe() {
   const zipName = `MyHomeGames-${version}-win-x64.zip`;
   const zipPath = path.join(BUILD_DIR, zipName);
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-  execSync(`cd "${BUILD_DIR}" && zip -q "${zipPath}" "${exeBasename}"`, { stdio: "inherit" });
+  // Use adm-zip (not CLI `zip`) so this works on Windows GitHub Actions runners.
+  const AdmZip = require("adm-zip");
+  const zip = new AdmZip();
+  zip.addLocalFile(outExe, "", exeBasename);
+  zip.writeZip(zipPath);
   console.log(`✅ Windows: ${zipName}`);
   return outExe;
 }
