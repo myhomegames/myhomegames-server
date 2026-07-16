@@ -836,8 +836,27 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
       }
 
       // .rpm via rpm-builder (npm); requires rpmbuild on the system (Linux or brew install rpm on macOS)
+      // Paths must be relative to cwd: absolute src paths make globby return [] → empty RPM.
       try {
         const buildRpm = require('rpm-builder');
+        const optDirRel = path.relative(process.cwd(), optDir) || '.';
+        const usrBinDirRel = path.relative(process.cwd(), usrBinDir) || '.';
+        const rpmFiles = [
+          { cwd: optDirRel, src: 'myhomegames-server', dest: '/opt/myhomegames-server/' },
+          { cwd: optDirRel, src: '.env', dest: '/opt/myhomegames-server/' },
+          { cwd: optDirRel, src: SERVER_INFO_FILENAME, dest: '/opt/myhomegames-server/' },
+          { cwd: usrBinDirRel, src: 'myhomegames-server', dest: '/usr/bin/' },
+        ];
+        const optBinDir = path.join(optDir, 'bin');
+        if (fs.existsSync(optBinDir) && fs.readdirSync(optBinDir).length > 0) {
+          rpmFiles.push({
+            cwd: path.relative(process.cwd(), optBinDir) || '.',
+            src: '*',
+            dest: '/opt/myhomegames-server/bin/',
+          });
+        }
+        const rpmOutName = `myhomegames-server-${version}-1.x86_64.rpm`;
+        const rpmOutPath = path.join(BUILD_DIR, rpmOutName);
         await new Promise((resolve, reject) => {
           buildRpm(
             {
@@ -851,20 +870,22 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
               rpmDest: BUILD_DIR,
               tempDir: path.join(BUILD_DIR, 'rpm-work'),
               verbose: false,
-              files: [
-                { src: path.join(optDir, 'myhomegames-server'), dest: '/opt/myhomegames-server/' },
-                { src: path.join(optDir, '.env'), dest: '/opt/myhomegames-server/' },
-                { src: path.join(optDir, SERVER_INFO_FILENAME), dest: '/opt/myhomegames-server/' },
-                { src: path.join(usrBinDir, 'myhomegames-server'), dest: '/usr/bin/' },
-              ],
+              files: rpmFiles,
             },
             (err, rpmPath) => {
               if (err) return reject(err);
-              if (rpmPath) console.log(`✅ Linux: myhomegames-server-${version}-1.x86_64.rpm`);
-              resolve();
+              if (rpmPath) console.log(`✅ Linux: ${rpmOutName}`);
+              resolve(rpmPath);
             }
           );
         });
+        // Fail loudly if rpmbuild produced an empty package (common with bad file paths)
+        if (!fs.existsSync(rpmOutPath) || fs.statSync(rpmOutPath).size < 1024 * 1024) {
+          const size = fs.existsSync(rpmOutPath) ? fs.statSync(rpmOutPath).size : 0;
+          throw new Error(
+            `RPM looks empty (${size} bytes). Check rpm-builder file paths / rpmbuild output.`,
+          );
+        }
       } catch (e) {
         console.log('⚠️  .rpm skipped (rpmbuild required, e.g. on Linux or: brew install rpm):', e.message);
       }
