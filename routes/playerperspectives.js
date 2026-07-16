@@ -16,6 +16,7 @@ module.exports = {
   ensurePlayerPerspectiveExists: routes.ensureTagExists,
   ensurePlayerPerspectivesExistBatch: routes.ensureTagsExist,
   deletePlayerPerspectiveIfUnused: routes.deleteTagIfUnused,
+  deletePlayerPerspectivesIfUnusedBatch: routes.deleteTagsIfUnusedBatch,
   registerPlayerPerspectivesRoutes: routes.registerTagRoutes,
   resolvePlayerPerspectiveIdsToObjects: routes.resolveTagIdsToObjects,
   normalizePlayerPerspectiveFieldToIds: routes.normalizeTagFieldToIds,

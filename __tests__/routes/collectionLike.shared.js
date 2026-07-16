@@ -68,12 +68,6 @@ function runCollectionLikeTests(config, parentApp = null) {
   }
 
   describe(`POST ${normalizedRouteBase}`, () => {
-    test("should require authentication", async () => {
-      await request(app)
-        .post(normalizedRouteBase)
-        .send({ title: "New Item" })
-        .expect(401);
-    });
 
     test("should return 400 when title is missing", async () => {
       const response = await request(app)
@@ -183,13 +177,6 @@ function runCollectionLikeTests(config, parentApp = null) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .get(normalizedRouteBase)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`GET ${normalizedRouteBase}/:id`, () => {

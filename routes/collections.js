@@ -6,19 +6,29 @@ const { ensureDirectoryExists } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
 const {
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   findById,
   findIndexById,
   normalizeId,
   removeGameFromAll,
+  removeGameFromItem,
+  pruneOrphanCollectionLikeItems,
   addGameToItem,
   addChildToItem,
   removeChildFromItem,
   getResourceToGameIdsMap,
   computeFinalGameIdsForOrder,
 } = require("../utils/collectionsShared");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { findResourceIdsContainingGame } = require("../utils/gameDeleteUtils");
+const { coerceToGameTypeId } = require("../utils/gameType");
+const {
+  resolveRequestLocale,
+  resolveSummary,
+  applySummaryEdit,
+} = require("../utils/metadataLocale");
+const { retranslateAllSummaryLocales } = require("../utils/autoTranslateGameMetadata");
 
 const CONTENT_FOLDER = "collections";
 
@@ -64,6 +74,21 @@ function getCollectionToGameIdsMap(metadataPath) {
   return getResourceToGameIdsMap(metadataPath, CONTENT_FOLDER);
 }
 
+function findCollectionIdsContainingGame(metadataPath, gameId, collectionsCache = null) {
+  if (collectionsCache && Array.isArray(collectionsCache)) {
+    return findResourceIdsContainingGame(collectionsCache, gameId);
+  }
+  const ids = [];
+  for (const [collectionId, gameIds] of getCollectionToGameIdsMap(metadataPath)) {
+    if (gameIds.some((g) => Number(g) === Number(gameId))) ids.push(collectionId);
+  }
+  return ids;
+}
+
+function removeGameFromCollection(metadataPath, collectionId, gameId) {
+  return removeGameFromItem(metadataPath, CONTENT_FOLDER, collectionId, gameId);
+}
+
 // Helper function to remove a game from all collections
 // collectionsCache: optional in-memory array; when provided, use it instead of loading from disk
 function removeGameFromAllCollections(metadataPath, gameId, updateCacheCallback = null, collectionsCache = null) {
@@ -100,6 +125,10 @@ function createCacheUpdater(collectionsCache) {
 function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames) {
   let collectionsCache = loadCollections(metadataPath);
 
+  function localizedSummary(req, summary) {
+    return resolveSummary(summary, resolveRequestLocale(req, metadataPath));
+  }
+
   // Configure multer for file uploads (memory storage, we'll save manually)
   const upload = multer({ storage: multer.memoryStorage() });
 
@@ -115,9 +144,10 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         const collectionData = {
           id: c.id,
           title: c.title,
-          summary: c.summary || "",
+          summary: localizedSummary(req, c.summary),
           showTitle: c.showTitle,
           gameCount: actualGameCount,
+          gameIds: gameIds.filter((gameId) => allGames[gameId]).map((id) => String(id)),
           childs: Array.isArray(c.childs) ? c.childs : [],
         };
         // Check if cover exists locally
@@ -204,7 +234,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: newCollection.id,
         title: newCollection.title,
-        summary: newCollection.summary || "",
+        summary: localizedSummary(req, newCollection.summary),
         showTitle: newCollection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(newCollection.id)}`,
         gameCount: 0,
@@ -238,7 +268,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionData = {
       id: collection.id,
       title: collection.title,
-      summary: collection.summary || "",
+      summary: localizedSummary(req, collection.summary),
       showTitle: collection.showTitle,
       gameCount: (collection.games || []).length,
       childs: Array.isArray(collection.childs) ? collection.childs : [],
@@ -294,7 +324,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
         const row = {
           id: game.id,
           title: game.title,
-          summary: game.summary || "",
+          summary: localizedSummary(req, game.summary),
           cover: getCoverUrl(game, metadataPath),
           day: game.day || null,
           month: game.month || null,
@@ -379,7 +409,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
   });
 
   // Endpoint: update collection fields
-  app.put("/collections/:id", requireToken, (req, res) => {
+  app.put("/collections/:id", requireToken, async (req, res) => {
     const collectionId = req.params.id;
     const updates = req.body;
     
@@ -445,6 +475,24 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       }
       filteredUpdates.childs = normalizedChilds;
     }
+    if ("summary" in filteredUpdates) {
+      const v = filteredUpdates.summary;
+      if (v != null && typeof v !== "string") {
+        return res.status(400).json({ error: "summary must be a string or null" });
+      }
+      const locale = resolveRequestLocale(req, metadataPath);
+      const trimmed = v == null ? "" : String(v).trim();
+      if (!trimmed) {
+        filteredUpdates.summary = "";
+      } else {
+        try {
+          filteredUpdates.summary = await retranslateAllSummaryLocales(trimmed, locale);
+        } catch (translateErr) {
+          console.warn("Summary retranslate on edit failed:", translateErr?.message || translateErr);
+          filteredUpdates.summary = applySummaryEdit(collection.summary, locale, trimmed);
+        }
+      }
+    }
     Object.assign(collection, filteredUpdates);
     
     // Save updated collection
@@ -453,7 +501,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         gameCount: (collection.games || []).length,
         childs: Array.isArray(collection.childs) ? collection.childs : [],
@@ -559,7 +607,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
@@ -617,7 +665,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: `/collection-covers/${encodeURIComponent(collection.id)}`,
         gameCount: (collection.games || []).length,
@@ -665,7 +713,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
@@ -719,7 +767,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       const collectionData = {
         id: collection.id,
         title: collection.title,
-        summary: collection.summary || "",
+        summary: localizedSummary(req, collection.summary),
         showTitle: collection.showTitle,
         cover: getLocalMediaPath({
           metadataPath,
@@ -756,28 +804,32 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
     const collectionId = req.params.id;
     
     try {
-      // Reload collections to refresh metadata
-      collectionsCache = loadCollections(metadataPath);
-      
-      const collection = findById(collectionsCache, collectionId);
-      if (!collection) {
+      const entry = loadItemById(metadataPath, CONTENT_FOLDER, collectionId);
+      if (!entry) {
+        const idx = findIndexById(collectionsCache, collectionId);
+        if (idx !== -1) collectionsCache.splice(idx, 1);
         return res.status(404).json({ error: "Collection not found" });
       }
+
+      const cacheIndex = findIndexById(collectionsCache, entry.id);
+      if (cacheIndex !== -1) {
+        collectionsCache[cacheIndex] = entry;
+      } else {
+        collectionsCache.push(entry);
+      }
       
-      // Format collection data like other endpoints
       const collectionData = {
-        id: collection.id,
-        title: collection.title,
-        summary: collection.summary || "",
-        showTitle: collection.showTitle,
-        cover: `/collection-covers/${encodeURIComponent(String(collection.id))}`,
-        gameCount: (collection.games || []).length,
-        childs: Array.isArray(collection.childs) ? collection.childs : [],
+        id: entry.id,
+        title: entry.title,
+        summary: localizedSummary(req, entry.summary),
+        showTitle: entry.showTitle,
+        cover: `/collection-covers/${encodeURIComponent(String(entry.id))}`,
+        gameCount: (entry.games || []).length,
+        childs: Array.isArray(entry.childs) ? entry.childs : [],
       };
-      // Check if cover exists locally
       const localCover = getLocalMediaPath({
         metadataPath,
-        resourceId: collection.id,
+        resourceId: entry.id,
         resourceType: 'collections',
         mediaType: 'cover',
         urlPrefix: '/collection-covers'
@@ -787,16 +839,15 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
       }
       const background = getLocalMediaPath({
         metadataPath,
-        resourceId: collection.id,
+        resourceId: entry.id,
         resourceType: 'collections',
         mediaType: 'background',
         urlPrefix: '/collection-backgrounds'
       });
-      const extBg = externalBackgroundUrlFromCollectionEntry(collection);
+      const extBg = externalBackgroundUrlFromCollectionEntry(entry);
       collectionData.background = background || extBg || undefined;
       collectionData.externalBackgroundUrl = extBg;
       
-      // Return updated collection data
       res.json({ status: "reloaded", collection: collectionData });
     } catch (e) {
       console.error(`Failed to reload collection ${collectionId}:`, e.message);
@@ -840,9 +891,12 @@ module.exports = {
   loadCollections,
   addGameToCollection,
   getCollectionToGameIdsMap,
+  findCollectionIdsContainingGame,
+  removeGameFromCollection,
   registerCollectionsRoutes,
   removeGameFromAllCollections,
   createCacheUpdater,
   deleteCollectionIfUnused,
+  pruneOrphanCollectionLikeItems,
 };
 

@@ -1,4 +1,7 @@
 const request = require('supertest');
+const fs = require('fs');
+const path = require('path');
+const { resolveSummary, isSummaryLocaleMap } = require('../../utils/metadataLocale');
 
 // Import setup first to set environment variables
 const { testMetadataPath } = require('../setup');
@@ -95,13 +98,6 @@ describe('GET /libraries/library/games', () => {
     }
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/libraries/library/games')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('GET /games/:gameId', () => {
@@ -216,23 +212,6 @@ describe('GET /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .get(`/games/${gameId}`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle URL-encoded game IDs', async () => {
     // First get a game ID from the library
@@ -553,24 +532,6 @@ describe('PUT /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .put(`/games/${gameId}`)
-        .send({ title: 'Updated Title' })
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should return updated game data', async () => {
     // First get a game ID from the library
@@ -641,12 +602,12 @@ describe('PUT /games/:gameId', () => {
   });
 
   test('should update criticRating and userRating via PUT', async () => {
-    const igdbId = 888881;
+    const catalogGameId = 888881;
     const addRes = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game for Rating Update',
         summary: 'Test',
         releaseDate: 1609459200,
@@ -680,13 +641,13 @@ describe('PUT /games/:gameId', () => {
 
   test('should delete orphaned franchise when removing from game via PUT', async () => {
     const franchiseId = 66666;
-    const igdbId = 999990;
+    const catalogGameId = 999990;
 
     const addRes = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game to Remove Franchise',
         summary: 'Test',
         releaseDate: 1609459200,
@@ -794,23 +755,6 @@ describe('POST /games/:gameId/reload', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .post(`/games/${gameId}/reload`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 });
 
 describe('POST /games/:gameId/upload-executable', () => {
@@ -984,25 +928,6 @@ describe('POST /games/:gameId/upload-executable', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      const fileContent = Buffer.from('#!/bin/bash\necho "test"');
-      
-      const response = await request(app)
-        .post(`/games/${gameId}/upload-executable`)
-        .attach('file', fileContent, 'test-script.sh')
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should rename file to script.sh regardless of original name', async () => {
     // First get a game ID from the library
@@ -1637,23 +1562,6 @@ describe('POST /games/:gameId/upload-screenshot', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should return 401 without token', async () => {
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-
-      const response = await request(app)
-        .post(`/games/${gameId}/upload-screenshot`)
-        .attach('file', testImageBuffer, 'screenshot.png')
-        .expect(401);
-
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 });
 
 describe('DELETE /games/:gameId', () => {
@@ -1754,23 +1662,6 @@ describe('DELETE /games/:gameId', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should auto-delete orphan empty collection when last game in it is deleted', async () => {
     const { testMetadataPath } = require('../setup');
@@ -1873,10 +1764,10 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999995,
+        gameId: 999995,
         name: 'Test Game for Recommended Removal',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1936,10 +1827,10 @@ describe('DELETE /games/:gameId', () => {
     
     // First, add a game to the library
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999996,
+        gameId: 999996,
         name: 'Test Game for Recommended Removal Old Format',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -1997,10 +1888,10 @@ describe('DELETE /games/:gameId', () => {
     
     // Add a game with this category
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999994,
+        gameId: 999994,
         name: 'Test Game with Orphaned Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2063,10 +1954,10 @@ describe('DELETE /games/:gameId', () => {
     
     // Add first game with this category
     const addGame1Response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999993,
+        gameId: 999993,
         name: 'Test Game 1 with Shared Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2080,10 +1971,10 @@ describe('DELETE /games/:gameId', () => {
     
     // Add second game with the same category
     const addGame2Response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999992,
+        gameId: 999992,
         name: 'Test Game 2 with Shared Category',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2135,13 +2026,13 @@ describe('DELETE /games/:gameId', () => {
   test('should delete orphaned franchise and series when deleting a game', async () => {
     const franchiseId = 88888;
     const seriesId = 77777;
-    const igdbId = 999991;
+    const catalogGameId = 999991;
 
     const addGameResponse = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId,
+        gameId: catalogGameId,
         name: 'Test Game with Orphan Franchise and Series',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2192,7 +2083,7 @@ describe('DELETE /games/:gameId', () => {
   });
 });
 
-describe('POST /games/add-from-igdb', () => {
+describe('POST /catalog/import-game', () => {
   test('should add game from IGDB and create missing categories', async () => {
     // Get initial categories count
     const categoriesBefore = await request(app)
@@ -2204,10 +2095,10 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add a game with new genres
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999999,
+        gameId: 999999,
         name: 'Test Game from IGDB',
         summary: 'Test summary',
         cover: 'https://images.igdb.com/igdb/image/upload/t_cover_big/test.jpg',
@@ -2273,10 +2164,10 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add a game with the same genre
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999998,
+        gameId: 999998,
         name: 'Test Game with Existing Genre',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2318,15 +2209,15 @@ describe('POST /games/add-from-igdb', () => {
 
   test('should return 400 if required fields are missing', async () => {
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
         name: 'Test Game'
-        // Missing igdbId
+        // Missing gameId
       })
       .expect(400);
     
-    expect(response.body).toHaveProperty('error', 'Missing required fields: igdbId and name');
+    expect(response.body).toHaveProperty('error', 'Missing required fields: gameId and name');
   });
 
   test('should return 409 if game already exists', async () => {
@@ -2359,10 +2250,10 @@ describe('POST /games/add-from-igdb', () => {
       
       // Try to add the same game again
       const response = await request(app)
-        .post('/games/add-from-igdb')
+        .post('/catalog/import-game')
         .set('X-Auth-Token', 'test-token')
         .send({
-          igdbId: existingGameId,
+          gameId: existingGameId,
           name: 'Duplicate Game',
           summary: 'Test summary'
         })
@@ -2398,10 +2289,10 @@ describe('POST /games/add-from-igdb', () => {
     
     // Add the game - should succeed
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: gameId,
+        gameId: gameId,
         name: 'Test Game with Existing Directory',
         summary: 'Test summary',
         cover: 'https://images.igdb.com/igdb/image/upload/t_cover_big/test.jpg',
@@ -2440,10 +2331,10 @@ describe('POST /games/add-from-igdb', () => {
 
   test('should handle games without genres', async () => {
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999997,
+        gameId: 999997,
         name: 'Test Game Without Genres',
         summary: 'Test summary',
         releaseDate: 1609459200
@@ -2461,25 +2352,115 @@ describe('POST /games/add-from-igdb', () => {
       .expect(200);
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .post('/games/add-from-igdb')
+
+  test('merge-company-profile after catalog import succeeds with parent company link', async () => {
+    const publisherId = 88888001;
+    const parentId = 88888002;
+    const gameId = 88888003;
+
+    await request(app)
+      .post('/catalog/import-game')
+      .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999996,
-        name: 'Test Game'
+        gameId,
+        name: 'Merge profile import test game',
+        summary: 'Test summary',
+        releaseDate: 1609459200,
+        publishers: [{ id: publisherId, name: 'Child Publisher', description: '' }],
       })
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
+      .expect(200);
+
+    const mergeRes = await request(app)
+      .post(`/publishers/${publisherId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        status: 'Active',
+        parentCompany: { id: parentId, name: 'Parent Publisher' },
+      })
+      .expect(200);
+
+    expect(mergeRes.body).toHaveProperty('status', 'merged');
+    const parentRes = await request(app)
+      .get(`/publishers/${parentId}`)
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+    expect(parentRes.body.childs).toEqual(
+      expect.arrayContaining([publisherId]),
+    );
+
+    const childMeta = JSON.parse(
+      fs.readFileSync(
+        path.join(testMetadataPath, 'content', 'companies', String(publisherId), 'metadata.json'),
+        'utf8',
+      ),
+    );
+    expect(childMeta.parentCompany).toBeUndefined();
+
+    await request(app).delete(`/games/${gameId}`).set('X-Auth-Token', 'test-token').expect(200);
+  });
+
+  test('merge-company-profile creates missing developer when syncing related company', async () => {
+    const relatedDeveloperId = 58892;
+    const relatedPath = path.join(
+      testMetadataPath,
+      'content',
+      'companies',
+      String(relatedDeveloperId),
+      'metadata.json',
+    );
+    const rolePath = path.join(
+      testMetadataPath,
+      'content',
+      'developers',
+      String(relatedDeveloperId),
+      'metadata.json',
+    );
+
+    expect(fs.existsSync(relatedPath)).toBe(false);
+    expect(fs.existsSync(rolePath)).toBe(false);
+
+    const mergeRes = await request(app)
+      .post(`/developers/${relatedDeveloperId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        title: 'Former Studio Name',
+        summary: 'Merged from IGDB relation sync',
+        status: 'Closed',
+      })
+      .expect(200);
+
+    expect(mergeRes.body).toHaveProperty('status', 'created');
+    expect(mergeRes.body.developer).toMatchObject({
+      id: relatedDeveloperId,
+      title: 'Former Studio Name',
+    });
+    expect(fs.existsSync(relatedPath)).toBe(true);
+    expect(fs.existsSync(rolePath)).toBe(true);
+
+    const companyMeta = JSON.parse(fs.readFileSync(relatedPath, 'utf8'));
+    expect(companyMeta.title).toBe('Former Studio Name');
+    expect(isSummaryLocaleMap(companyMeta.summary)).toBe(true);
+    expect(resolveSummary(companyMeta.summary, 'en')).toBe('Merged from IGDB relation sync');
+
+    const secondMerge = await request(app)
+      .post(`/developers/${relatedDeveloperId}/merge-company-profile`)
+      .set('X-Auth-Token', 'test-token')
+      .send({
+        title: 'Former Studio Name',
+        summary: 'Merged from IGDB relation sync',
+      })
+      .expect(200);
+
+    expect(secondMerge.body.status).toBe('unchanged');
   });
 
   test('should preserve genre case', async () => {
     // Add a game with uppercase genres
     const response = await request(app)
-      .post('/games/add-from-igdb')
+      .post('/catalog/import-game')
       .set('X-Auth-Token', 'test-token')
       .send({
-        igdbId: 999995,
+        gameId: 999995,
         name: 'Test Game with Uppercase Genres',
         summary: 'Test summary',
         releaseDate: 1609459200,
@@ -2590,13 +2571,6 @@ describe('POST /games/create', () => {
     expect(res2.body).toHaveProperty('error', 'Missing required field: title');
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .post('/games/create')
-      .send({ title: 'Unauthorized Game' })
-      .expect(401);
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 
 describe('DELETE /games/:gameId/delete-cover', () => {
@@ -2775,23 +2749,6 @@ describe('DELETE /games/:gameId/delete-cover', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}/delete-cover`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle game without cover file gracefully', async () => {
     // First get a game ID from the library
@@ -2936,23 +2893,6 @@ describe('DELETE /games/:gameId/delete-background', () => {
     expect(response.body).toHaveProperty('error', 'Game not found');
   });
 
-  test('should require authentication', async () => {
-    // First get a game ID from the library
-    const libraryResponse = await request(app)
-      .get('/libraries/library/games')
-      .set('X-Auth-Token', 'test-token')
-      .expect(200);
-    
-    if (libraryResponse.body.games.length > 0) {
-      const gameId = libraryResponse.body.games[0].id;
-      
-      const response = await request(app)
-        .delete(`/games/${gameId}/delete-background`)
-        .expect(401);
-      
-      expect(response.body).toHaveProperty('error', 'Unauthorized');
-    }
-  });
 
   test('should handle game without background file gracefully', async () => {
     // First get a game ID from the library

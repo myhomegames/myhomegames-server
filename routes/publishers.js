@@ -4,7 +4,8 @@
  */
 
 const { createCollectionLikeRoutes } = require("./collectionLike");
-const { addGameToItem, getResourceToGameIdsMap } = require("../utils/collectionsShared");
+const { addGameToItem } = require("../utils/collectionsShared");
+const { getRoleToGameIdsMap } = require("../utils/companyStorage");
 
 const routes = createCollectionLikeRoutes({
   contentFolder: "publishers",
@@ -23,7 +24,7 @@ function addGameToPublisher(metadataPath, publisherId, gameId) {
 
 /** Map(publisherId -> gameIds[]) for building game.publishers from blocks. */
 function getPublisherToGameIdsMap(metadataPath) {
-  return getResourceToGameIdsMap(metadataPath, "publishers");
+  return getRoleToGameIdsMap(metadataPath, "publishers");
 }
 
 /** Update in-memory allGames only; publisher links are stored in publisher blocks, not in game metadata. */

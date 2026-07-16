@@ -94,6 +94,28 @@ function loadItems(metadataPath, contentFolder) {
   );
 }
 
+/** Load one item from disk by id (reads a single metadata.json). */
+function loadItemById(metadataPath, contentFolder, id) {
+  const normalized = normalizeId(id);
+  if (normalized == null) return null;
+  const metaPath = getMetadataPath(metadataPath, contentFolder, normalized);
+  if (!fs.existsSync(metaPath)) return null;
+  const meta = readJsonFile(metaPath, null);
+  if (!meta || !meta.title) return null;
+  const ec = meta.externalCoverUrl;
+  const externalCoverUrl = typeof ec === "string" && ec.trim() ? ec.trim() : null;
+  return {
+    id: normalized,
+    title: meta.title,
+    summary: meta.summary || "",
+    games: meta.games || [],
+    childs: normalizeChildIds(meta.childs, normalized),
+    showTitle: meta.showTitle !== false,
+    ...meta,
+    externalCoverUrl,
+  };
+}
+
 /**
  * Save a single item (removes id from stored data - it's in folder name)
  */
@@ -164,26 +186,23 @@ function findIndexById(items, id) {
 }
 
 /**
- * Remove game from all items of a given type
+ * Remove game from a single item's games array (one metadata read/write).
  */
-function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallback, cache) {
-  const items = cache && Array.isArray(cache) ? cache : loadItems(metadataPath, contentFolder);
-  let count = 0;
+function removeGameFromItem(metadataPath, contentFolder, itemId, gameId) {
+  const entry = loadItemById(metadataPath, contentFolder, itemId);
+  if (!entry || !Array.isArray(entry.games)) return false;
+  const idx = entry.games.findIndex((g) => Number(g) === Number(gameId));
+  if (idx === -1) return false;
+  entry.games.splice(idx, 1);
+  saveItem(metadataPath, contentFolder, entry);
+  return true;
+}
 
-  for (const item of items) {
-    const games = item.games || [];
-    const idx = games.findIndex((g) => Number(g) === Number(gameId));
-    if (idx !== -1) {
-      games.splice(idx, 1);
-      item.games = games;
-      saveItem(metadataPath, contentFolder, item);
-      count++;
-      if (updateCacheCallback) updateCacheCallback(item);
-    }
-  }
-
-  // Cleanup orphan "collection-like" entries after game deletion:
-  // remove only structured leaves (no childs) with no games.
+/**
+ * Prune orphan leaf collection-like items (no games, no childs).
+ */
+function pruneOrphanCollectionLikeItems(metadataPath, contentFolder, items, updateCacheCallback) {
+  if (!items || !Array.isArray(items)) return;
   let removedSomething = true;
   while (removedSomething) {
     pruneInvalidChildLinks(items);
@@ -208,6 +227,28 @@ function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallb
       removedSomething = true;
     }
   }
+}
+
+/**
+ * Remove game from all items of a given type
+ */
+function removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallback, cache) {
+  const items = cache && Array.isArray(cache) ? cache : loadItems(metadataPath, contentFolder);
+  let count = 0;
+
+  for (const item of items) {
+    const games = item.games || [];
+    const idx = games.findIndex((g) => Number(g) === Number(gameId));
+    if (idx !== -1) {
+      games.splice(idx, 1);
+      item.games = games;
+      saveItem(metadataPath, contentFolder, item);
+      count++;
+      if (updateCacheCallback) updateCacheCallback(item);
+    }
+  }
+
+  pruneOrphanCollectionLikeItems(metadataPath, contentFolder, items, updateCacheCallback);
 
   return count;
 }
@@ -365,12 +406,16 @@ function computeFinalGameIdsForOrder(currentGameIds, requestedGameIds, allGames)
 module.exports = {
   getMetadataPath,
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   normalizeId,
+  normalizeChildIds,
   findById,
   findIndexById,
   removeGameFromAll,
+  removeGameFromItem,
+  pruneOrphanCollectionLikeItems,
   addGameToItem,
   addChildToItem,
   removeChildFromItem,

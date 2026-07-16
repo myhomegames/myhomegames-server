@@ -2,8 +2,14 @@
 // IGDB API routes for game search and details
 
 const https = require("https");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { coerceToGameTypeId } = require("../utils/gameType");
+const { fetchRemoteCompanyStoragePatch } = require("../utils/catalogCompany");
 const { requireTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+const { resolveRequestLocale } = require("../utils/metadataLocale");
+const {
+  applyTranslatedSummariesToGames,
+  translateIgdbSummary,
+} = require("../utils/translateIgdbSummaries");
 
 // IGDB Access Token cache (per clientId)
 const igdbTokenCache = new Map();
@@ -168,6 +174,63 @@ function runIGDBGameById(id, accessToken, clientId) {
 }
 
 /**
+ * Fetch canonical English summary and keywords from IGDB for library import.
+ * @returns {Promise<{ summary: string, keywords: string[] }>}
+ */
+async function fetchIGDBGameSummaryAndKeywords(id, accessToken, clientId) {
+  const numericId = Number(id);
+  if (Number.isNaN(numericId)) {
+    return { summary: "", keywords: [] };
+  }
+
+  const postData = `fields summary,keywords.name; where id = ${numericId}; limit 1;`;
+  const options = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  const games = await new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      if (res.statusCode !== 200) {
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => reject(new Error(`IGDB API error ${res.statusCode}: ${data}`)));
+        return;
+      }
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve(Array.isArray(parsed) ? parsed : []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(postData);
+    req.end();
+  });
+
+  const game = games[0];
+  if (!game) return { summary: "", keywords: [] };
+  const keywords = Array.isArray(game.keywords)
+    ? game.keywords.map((item) => String(item?.name || item || "").trim()).filter(Boolean)
+    : [];
+  return {
+    summary: game.summary ? String(game.summary).trim() : "",
+    keywords,
+  };
+}
+
+/**
  * Fetch game names from IGDB by id list.
  * @param {number[]} ids - IGDB game IDs
  * @param {string} accessToken - IGDB access token
@@ -295,7 +358,7 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
  * @param {express.App} app - Express app instance
  * @param {Function} requireToken - Authentication middleware
  */
-function registerIGDBRoutes(app, requireToken) {
+function registerIGDBRoutes(app, requireToken, metadataPath) {
   // Endpoint: search games on IGDB
   const handleSearch = async (req, res) => {
     const rawQuery = (req.method === "POST" && req.body && typeof req.body.query === "string")
@@ -402,8 +465,16 @@ function registerIGDBRoutes(app, requireToken) {
         };
       });
 
+      let localizedGames = formattedGames;
+      try {
+        const locale = resolveRequestLocale(req, metadataPath);
+        localizedGames = await applyTranslatedSummariesToGames(formattedGames, locale);
+      } catch (translateErr) {
+        console.warn("IGDB search summary translation failed:", translateErr?.message || translateErr);
+      }
+
       if (releaseDateTimestamp !== null) {
-        formattedGames.sort((a, b) => {
+        localizedGames.sort((a, b) => {
           const aTs = a.releaseDateFull?.timestamp;
           const bTs = b.releaseDateFull?.timestamp;
           const aDist = aTs != null ? Math.abs(aTs - releaseDateTimestamp) : Infinity;
@@ -413,7 +484,7 @@ function registerIGDBRoutes(app, requireToken) {
           return (aTs != null ? 0 : 1) - (bTs != null ? 0 : 1);
         });
       } else {
-        formattedGames.sort((a, b) => {
+        localizedGames.sort((a, b) => {
           const aHasDate = a.releaseDateFull && a.releaseDateFull.timestamp != null;
           const bHasDate = b.releaseDateFull && b.releaseDateFull.timestamp != null;
           if (aHasDate && bHasDate) return a.releaseDateFull.timestamp - b.releaseDateFull.timestamp;
@@ -424,7 +495,7 @@ function registerIGDBRoutes(app, requireToken) {
       }
 
       res.setHeader('Content-Type', 'application/json');
-      res.json({ games: formattedGames });
+      res.json({ games: localizedGames });
     } catch (err) {
       console.error("IGDB search error:", err);
       res.setHeader('Content-Type', 'application/json');
@@ -1066,6 +1137,41 @@ function registerIGDBRoutes(app, requireToken) {
     }
   };
 
+  async function handleCompanyInfo(req, res) {
+    const companyId = parseInt(req.params.companyId, 10);
+    const name = typeof req.query.name === "string" ? req.query.name.trim() : "";
+
+    if (Number.isNaN(companyId) || companyId < 1) {
+      res.setHeader("Content-Type", "application/json");
+      return res.status(400).json({ error: "Invalid company ID" });
+    }
+
+    const twitchCreds = requireTwitchAppCredentials(req, res);
+    if (!twitchCreds) return;
+    const { clientId, clientSecret } = twitchCreds;
+
+    try {
+      const accessToken = await getIGDBAccessToken(clientId, clientSecret);
+      const remoteProfile = await fetchRemoteCompanyStoragePatch(
+        companyId,
+        name,
+        accessToken,
+        clientId,
+      );
+      res.setHeader("Content-Type", "application/json");
+      if (!remoteProfile || typeof remoteProfile !== "object") {
+        return res.json(null);
+      }
+      res.json(remoteProfile);
+    } catch (err) {
+      console.error("IGDB company info error:", err);
+      res.setHeader("Content-Type", "application/json");
+      res.status(500).json({ error: "Failed to fetch company from IGDB", detail: err.message });
+    }
+  }
+
+  app.get("/igdb/company/:companyId", requireToken, handleCompanyInfo);
+
   app.get("/igdb/games-by-developer/:companyId", requireToken, handleGamesByDeveloper);
   app.post("/igdb/games-by-developer/:companyId", requireToken, handleGamesByDeveloper);
   app.get("/igdb/games-by-publisher/:companyId", requireToken, handleGamesByPublisher);
@@ -1201,7 +1307,7 @@ function registerIGDBRoutes(app, requireToken) {
     }
   });
 
-  // Endpoint: get IGDB games by keyword name (for recommended sections when Twitch login enabled)
+  // Endpoint: get IGDB games by keyword name (for recommended sections)
   const handleGamesByKeyword = async (req, res) => {
     const keyword = req.body && typeof req.body.keyword === "string" ? req.body.keyword.trim() : null;
     const excludeIds = parseExcludeIds(req);
@@ -1429,14 +1535,26 @@ function registerIGDBRoutes(app, requireToken) {
         });
         igdbRes.on("end", async () => {
           try {
+            if (igdbRes.statusCode && igdbRes.statusCode !== 200) {
+              res.setHeader("Content-Type", "application/json");
+              return res
+                .status(igdbRes.statusCode)
+                .json({ error: `IGDB API error ${igdbRes.statusCode}`, detail: data });
+            }
+
             const games = JSON.parse(data);
-            
-            if (games.length === 0) {
+
+            if (!Array.isArray(games) || games.length === 0) {
               res.setHeader('Content-Type', 'application/json');
               return res.status(404).json({ error: "IGDB game not found" });
             }
 
             const game = games[0];
+            if (!game || typeof game !== "object") {
+              res.setHeader("Content-Type", "application/json");
+              return res.status(404).json({ error: "IGDB game not found" });
+            }
+
             const { formatIGDBReleaseDate } = require("../utils/dateUtils");
             const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
             
@@ -1512,7 +1630,7 @@ function registerIGDBRoutes(app, requireToken) {
               }
             }
 
-            // Process involved companies — return { id, name, logo?, description? } so add-from-igdb can create/update developer/publisher blocks
+            // Process involved companies — return { id, name, logo?, description? } for import-game
             const developers = game.involved_companies
               ? game.involved_companies
                   .filter((ic) => ic.developer && ic.company)
@@ -1584,6 +1702,14 @@ function registerIGDBRoutes(app, requireToken) {
               ...(gameTypeId != null ? { type: gameTypeId } : {}),
             };
             
+            try {
+              const locale = resolveRequestLocale(req, metadataPath);
+              gameData.summaryEn = gameData.summary || "";
+              gameData.summary = await translateIgdbSummary(gameData.summaryEn, locale);
+            } catch (translateErr) {
+              console.warn("IGDB game summary translation failed:", translateErr?.message || translateErr);
+            }
+
             res.setHeader('Content-Type', 'application/json');
             res.json(gameData);
           } catch (e) {
@@ -1614,5 +1740,6 @@ module.exports = {
   registerIGDBRoutes,
   getIGDBAccessToken,
   fetchIGDBGameNamesByIds,
+  fetchIGDBGameSummaryAndKeywords,
 };
 

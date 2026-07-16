@@ -65,28 +65,31 @@ cp .env.production.example .env
 
 Then edit `.env` and configure required variables (e.g. `API_BASE`, `METADATA_PATH`).
 
-MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset.
+MyHomeGames uses the IGDB API (via Twitch Developer Services) solely to enrich the user’s personal library experience. Data is cached locally for personal use and not redistributed as a public API or dataset. See [docs/IGDB.md](docs/IGDB.md) for automatic (proxy) vs manual Twitch Developer Console setup.
 
-**Important**: Do not use `API_TOKEN` in production. Use Twitch OAuth instead.
+**Important**: Do not use `API_TOKEN` in production.
 
 ### Environment Variables
 
 - `PORT` (default: `4000`) - Port on which the server will listen
-- `API_TOKEN` - Authentication token for API requests (development only, optional)
+- `API_TOKEN` - Optional dev token for `GET /auth/me` (development only)
 - `FRONTEND_URL` - Frontend application URL (optional, rarely needed)
-  - **When is it needed?** Only when the `Origin` header is not available in OAuth callback requests
+  - **When is it needed?** Only when the `Origin` header is not available in requests
   - **Normal case:** The browser always sends the `Origin` header, so this is not needed
   - **When to use:** 
-    - Testing OAuth with `curl` or Postman (which don't send `Origin`)
+    - Testing with `curl` or Postman (which don't send `Origin`)
     - If a proxy/CDN filters or modifies the `Origin` header
-    - In production, only if you have a specific infrastructure setup that requires it
   - **Fallback behavior:** If not set and `Origin` is missing, the server will attempt to derive the frontend URL from `API_BASE` (replacing port 4000 with 5173 for development)
 - `COVER_TAG_URL` - Base URL used for tag cover failover redirects (optional)
   - Used by tag cover endpoint (`/:tagId/cover.webp`) when no local `cover.webp` exists
   - Example: `https://myhomegames.vige.it` (without `/app`)
-- `API_BASE` - Base URL of the API server (used for OAuth redirects, required if using Twitch OAuth)
+- `API_BASE` - Base URL of the API server (public hostname when using Cloudflare Tunnel)
+- `CLOUDFLARE_TUNNEL_ENABLED` - Enable automatic `cloudflared` tunnel (see [DEVELOPMENT.md](DEVELOPMENT.md#cloudflare-tunnel-public-https-without-local-certificates))
+- `CLOUDFLARED_VERSION` - Pin Cloudflare CLI release (e.g. `2026.6.1`); unset = auto-update to latest on tunnel start
+- `CLOUDFLARED_SKIP_UPDATE` - Set to `true` to download the binary only when missing (skip version checks)
+- `CLOUDFLARED_BIN` - Optional path to an external `cloudflared` executable (advanced; default is `METADATA_PATH/bin/cloudflared`)
 - `METADATA_PATH` - Path where game metadata (covers, descriptions, etc.) are stored
-- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive on first startup when no skins are present (default: `plex.mhg-skin.zip` from the **latest** [myhomegames-skins](https://github.com/myhomegames/myhomegames-skins/releases) GitHub release)
+- `DEFAULT_SKIN_URL` (optional) - URL of the default skin archive on first startup when no skins are present (default: `plex-<version>.mhg-skin.zip` from the **latest** [myhomegames-skins](https://github.com/myhomegames/myhomegames-skins/releases) GitHub release)
 - `MHG_SKINS_GITHUB_REPO` (optional) - `owner/repo` for that lookup (default: `myhomegames/myhomegames-skins`)
 
 ### Metadata Path
@@ -113,6 +116,10 @@ The server expects the following directory structure under `METADATA_PATH`:
 ```
 ${METADATA_PATH}/
 ├── settings.json                    # Application settings (language, etc.)
+├── bin/
+│   └── cloudflared                  # Cloudflare tunnel CLI (downloaded/updated automatically)
+├── tokens/
+│   └── cloudflare-tunnel-run.json   # Per-user tunnel run token (when using Cloudflare Tunnel)
 ├── skins/                           # Web UI themes (zip-installed or manual)
 │   └── ${uuid}/                     # id folder name is the skin id
 │       ├── skin.json                # { "name", "web": { persistentLibraryShell, collectionsShortcutList, libraryPagesVerticalList, headerTitleFilter, disableAlphabetNavigator } }
@@ -134,6 +141,17 @@ ${METADATA_PATH}/
     │   └── ${categoryId}/          # Per-category content directories (numeric ID)
     │       ├── metadata.json       # Category metadata with title field
     │       └── cover.webp          # Category cover image (optional)
+    ├── companies/
+    │   └── ${companyId}/           # Shared IGDB company profile (developers & publishers)
+    │       ├── metadata.json       # title, summary, childs, company profile fields, external URLs, …
+    │       ├── cover.webp          # Company cover image (optional)
+    │       └── background.webp     # Company background image (optional)
+    ├── developers/
+    │   └── ${companyId}/           # Developer role link for a company
+    │       └── metadata.json       # { "games": [ … ] } only
+    ├── publishers/
+    │   └── ${companyId}/           # Publisher role link for a company
+    │       └── metadata.json       # { "games": [ … ] } only
     └── recommended/
         └── ${sectionId}/           # Per-section content directories
             └── metadata.json       # Section metadata with games array (without id field)
@@ -147,6 +165,7 @@ All JSON files and settings are stored outside the codebase in the metadata path
 - **`content/games/${gameId}/metadata.json`**: Game metadata files. Each game has its own folder with a metadata.json file containing game properties like `title`, `summary`, `year`, `stars`, etc. (the `id` field is derived from the folder name). Optional fallback image URLs when no local `cover.webp` / `background.webp` exist: `externalCoverUrl`, `externalBackgroundUrl`. Executable scripts are stored in **`content/games/${gameId}/scripts/`** as `.sh` or `.bat` files. Script order is defined by a numeric prefix in the filename: `01-label.sh`, `02-another-1.sh` (the number followed by a hyphen; the optional `-1` is the platform id).
 - **`content/collections/${collectionId}/metadata.json`**: Collection metadata files. Each collection has its own folder with a metadata.json file containing collection properties like `title`, `summary`, `games` array, etc. (the `id` field is derived from the folder name).
 - **`content/categories/${categoryId}/metadata.json`**: Category metadata files. Each category has its own folder (named with a numeric ID derived from the title) with a metadata.json file containing a `title` field.
+- **`content/companies/${companyId}/metadata.json`**: Shared company profile (title, summary, IGDB metadata, hierarchy). Developer and publisher lists store only `{ "games": [...] }` under `content/developers/` and `content/publishers/` with the same numeric IGDB company id.
 - **`content/recommended/${sectionId}/metadata.json`**: Recommended section metadata files. Each section has its own folder with a metadata.json file containing a `games` array (the `id` field is derived from the folder name).
 - **`skins/${uuid}/`**: Optional web UI skins. Installed via the web app (Settings) as a zip, or placed manually. Uploading a zip whose resolved display name matches an existing skin’s `skin.json` **name** replaces that folder in place (same UUID, so the active theme stays valid). See **`SKINS.md`** in the **myhomegames-skins** repository for archive format and API.
 
@@ -209,47 +228,21 @@ Tests are organized in the `__tests__` directory. See [DEVELOPMENT.md](DEVELOPME
 
 ## API Endpoints
 
-- `GET /auth/twitch` - Initiate Twitch OAuth flow
-- `GET /auth/twitch/callback` - Twitch OAuth callback
-- `GET /auth/me` - Get current user information (requires authentication)
-- `POST /auth/logout` - Logout (requires authentication)
-- `GET /libraries` - Get list of game libraries (requires authentication)
-- `GET /games/:library` - Get games for a specific library (requires authentication)
-- `POST /launch/:gameId` - Launch a game (requires authentication)
-- `GET /search` - Search games via IGDB API (requires authentication)
-- `GET /covers/:gameId` - Get game cover image (public, no authentication required)
+- `GET /auth/me` - Dev user profile when `API_TOKEN` matches (optional)
+- `POST /auth/logout` - No-op logout (client clears local state)
+- `GET /libraries` - Get list of game libraries
+- `GET /games/:library` - Get games for a specific library
+- `GET /launcher` - Launch a game
+- `GET /igdb/*` - IGDB catalog search (requires Twitch app credentials for IGDB API)
+- `GET /covers/:gameId` - Get game cover image (public)
 
-All authenticated endpoints require the `X-Auth-Token` header with a valid token.
+API routes are open by default. Set `API_TOKEN` in development only if you need `GET /auth/me` to return a dev user.
 
 ## Authentication
 
-The server supports two authentication methods:
+The server does not require authentication for normal use. For development, optional `API_TOKEN` enables `GET /auth/me` — see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-For development authentication setup, see [DEVELOPMENT.md](DEVELOPMENT.md).
-
-### Production Mode (Twitch OAuth)
-
-For production, users authenticate via Twitch OAuth. To enable this:
-
-1. Create a Twitch application at https://dev.twitch.tv/console/apps
-2. Set the OAuth redirect URL to: `http://your-api-domain:4000/auth/twitch/callback`
-3. Set environment variables:
-   - `API_BASE` - Your API base URL (e.g., `https://api.example.com`)
-
-Twitch application credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings.
-
-Users will authenticate via Twitch, and their access tokens will be stored in `${METADATA_PATH}/tokens/twitch-oauth-sessions.json`.
-
-### Authentication Endpoints
-
-- `GET /auth/twitch` - Initiate Twitch OAuth flow (returns `authUrl`)
-- `GET /auth/twitch/callback` - Twitch OAuth callback (handles redirect)
-- `GET /auth/me` - Get current user information (requires valid token)
-- `POST /auth/logout` - Logout (clears token on client side)
-
-All authenticated endpoints require the `X-Auth-Token` header with either:
-- The development token (value from `API_TOKEN` environment variable, if set)
-- A valid Twitch OAuth access token
+IGDB API access uses Twitch **application** credentials (`X-Twitch-Client-Id`, `X-Twitch-Client-Secret`) for catalog search. With Cloudflare Tunnel, credentials are injected by the API gateway (e.g. Cloudflare Worker), not stored in `.env` or settings. Without the proxy, register your own app in the Twitch Developer Console — see [docs/IGDB.md](docs/IGDB.md).
 
 ## Troubleshooting
 
@@ -271,7 +264,7 @@ If the server logs `"openssl" is not recognized` on Windows: current builds gene
 
 ### Authentication Issues
 
-- Verify that Twitch OAuth credentials are correctly configured (if using Twitch authentication)
+- Verify that IGDB credentials (Twitch Client ID/Secret) are configured in Settings or via the API gateway
 - Check that `API_BASE` is set correctly in the environment variables
 - Review server logs for authentication errors
 

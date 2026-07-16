@@ -15,6 +15,7 @@ module.exports = {
   ensurePlatformExists: routes.ensureTagExists,
   ensurePlatformsExistBatch: routes.ensureTagsExist,
   deletePlatformIfUnused: routes.deleteTagIfUnused,
+  deletePlatformsIfUnusedBatch: routes.deleteTagsIfUnusedBatch,
   registerPlatformsRoutes: routes.registerTagRoutes,
   resolvePlatformIdsToObjects: routes.resolveTagIdsToObjects,
   normalizePlatformFieldToIds: routes.normalizeTagFieldToIds,

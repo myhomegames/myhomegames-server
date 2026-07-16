@@ -2,6 +2,30 @@ const fs = require("fs");
 const path = require("path");
 const { removeDirectoryIfEmpty } = require("./fileUtils");
 
+function resolveCompanyRoleMediaFile(metadataPath, resourceType, resourceId, mediaType) {
+  if (!["developers", "publishers"].includes(resourceType)) {
+    return null;
+  }
+  const companyFile = path.join(
+    metadataPath,
+    "content",
+    "companies",
+    String(resourceId),
+    `${mediaType}.webp`,
+  );
+  if (fs.existsSync(companyFile)) {
+    return companyFile;
+  }
+  const legacyFile = path.join(
+    metadataPath,
+    "content",
+    resourceType,
+    String(resourceId),
+    `${mediaType}.webp`,
+  );
+  return fs.existsSync(legacyFile) ? legacyFile : null;
+}
+
 /**
  * Get local media path if it exists (generic function)
  * @param {Object} options - Configuration object
@@ -28,18 +52,20 @@ function getLocalMediaPath({ metadataPath, resourceId, resourceType, mediaType, 
   if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
+  } else if (resourceType === "companies") {
+    normalizedId = String(resourceId);
+    contentDir = path.join(metadataPath, "content", "companies", normalizedId);
   } else if (["collections", "developers", "publishers"].includes(resourceType)) {
     normalizedId = String(resourceId);
+    const companyMedia = resolveCompanyRoleMediaFile(metadataPath, resourceType, resourceId, mediaType);
+    if (companyMedia) {
+      return `${urlPrefix}/${encodeURIComponent(resourceId)}`;
+    }
     contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else if (tagResourceTypes.has(resourceType)) {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else {
-    return null;
-  }
-
-  // developers/publishers only have cover (no background)
-  if ((resourceType === "developers" || resourceType === "publishers") && mediaType === "background") {
     return null;
   }
 
@@ -186,7 +212,16 @@ function deleteMediaFile({ metadataPath, resourceId, resourceType, mediaType }) 
   if (resourceType === "games") {
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", "games", normalizedId);
+  } else if (resourceType === "companies") {
+    normalizedId = String(resourceId);
+    contentDir = path.join(metadataPath, "content", "companies", normalizedId);
   } else if (["collections", "developers", "publishers"].includes(resourceType)) {
+    const companyMedia = resolveCompanyRoleMediaFile(metadataPath, resourceType, resourceId, mediaType);
+    if (companyMedia) {
+      fs.unlinkSync(companyMedia);
+      removeDirectoryIfEmpty(path.dirname(companyMedia));
+      return true;
+    }
     normalizedId = String(resourceId);
     contentDir = path.join(metadataPath, "content", resourceType, normalizedId);
   } else if (tagResourceTypes.has(resourceType)) {

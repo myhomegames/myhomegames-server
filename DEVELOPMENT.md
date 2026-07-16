@@ -51,7 +51,16 @@ openssl req -new -x509 -key "${METADATA_PATH}/certs/key.pem" -out "${METADATA_PA
 
 ## Cloudflare Tunnel (public HTTPS without local certificates)
 
-The server can start **cloudflared** automatically (npm package `cloudflared`) and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+The server can start **cloudflared** automatically and expose the local HTTP API on your Cloudflare hostname (e.g. `https://myhomegames-server.vige.it`). TLS terminates at Cloudflare; locally you only need HTTP on `127.0.0.1` — no self-signed certs and no browser warnings for remote access.
+
+**Two different “versions”**
+
+| What | Example | Where |
+|------|---------|--------|
+| **npm wrapper** (`cloudflared` dependency in `package.json`) | `0.7.1` | Node API (`Tunnel`, `install`, …) |
+| **Cloudflare CLI binary** (downloaded at runtime) | `2026.6.1` | `METADATA_PATH/bin/cloudflared` |
+
+The npm package version is **not** the tunnel release. The executable is fetched from [Cloudflare releases](https://github.com/cloudflare/cloudflared/releases).
 
 **Prerequisites**
 
@@ -69,9 +78,42 @@ HTTP_PORT=4000
 
 The run token is **not** in `.env`. On startup the web app fetches a per-user token from the tunnel manager (Cloudflare Access) and `POST`s it to `http://localhost:4000/tunnel/connect`, or reconnects with stored credentials via `POST /tunnel/reconnect`. The server stores the run token under `METADATA_PATH/tokens/cloudflare-tunnel-run.json` and starts `cloudflared` on boot when present.
 
-On first start the `cloudflared` binary is downloaded automatically. Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+**Binary install and updates**
 
-**Twitch OAuth**: register redirect URI `https://<your-user>-myhomegames-server.vige.it/auth/twitch/callback` (must match `API_BASE` after connect).
+When the tunnel starts, `ensureCloudflaredBinary` (`utils/cloudflaredBinary.js`):
+
+1. Ensures `METADATA_PATH/bin/cloudflared` exists (creates the directory if needed).
+2. Copies a **newer** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir).
+3. Downloads or updates the Cloudflare CLI:
+   - **Missing binary** → downloads `latest` from GitHub.
+   - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
+   - **Already up to date** → no download.
+
+To pin or disable auto-update:
+
+```env
+# Optional — pin a specific Cloudflare release (e.g. 2026.6.1)
+# CLOUDFLARED_VERSION=2026.6.1
+
+# Optional — only download when the binary is missing (legacy behaviour)
+# CLOUDFLARED_SKIP_UPDATE=true
+
+# Optional — use an external executable instead of metadata/bin (advanced)
+# CLOUDFLARED_BIN=/opt/homebrew/bin/cloudflared
+```
+
+Set `CLOUDFLARE_TUNNEL_VERBOSE=true` to print tunnel logs.
+
+**Manual binary refresh (development)**
+
+After `npm install`, the wrapper may place a copy under `node_modules/cloudflared/bin/`. To refresh it to the latest Cloudflare release:
+
+```bash
+node node_modules/cloudflared/lib/cloudflared.js bin install latest
+node_modules/cloudflared/bin/cloudflared --version
+```
+
+Packaged builds (`npm run build`) also copy that binary into the app bundle for offline first run.
 
 **Web client**: keep `VITE_API_BASE=http://localhost:4000` for local control; set `VITE_TUNNEL_MANAGER_URL=https://myhomegames-server.vige.it`. After connect, API calls use your per-user hostname (saved in `localStorage`).
 
@@ -128,7 +170,7 @@ The server will start:
 - **HTTP**: `http://localhost:4000` (always available)
 - **HTTPS**: `https://localhost:41440` (if `HTTPS_ENABLED=true`)
 
-**Important**: HTTPS in development is optional. The server always provides HTTP access. Use HTTPS only when testing features that require it (like Twitch OAuth callbacks in some scenarios).
+**Important**: HTTPS in development is optional. The server always provides HTTP access. Use HTTPS when testing self-signed certificate acceptance or mixed-content scenarios.
 
 ## Development Configuration
 
@@ -146,17 +188,17 @@ For development, the server uses the following environment variables:
 - `HTTPS_PORT` (default: `41440`) - Port for HTTPS server (only if `HTTPS_ENABLED=true`)
 - `API_TOKEN` - Authentication token for API requests (development only, optional)
   - Default: `changeme` (from `.env.example`)
-  - Used for quick testing without setting up Twitch OAuth
+  - Optional dev token for `GET /auth/me` only
 - `API_BASE` - Base URL of the API server (optional for development)
 - `METADATA_PATH` - Path where game metadata are stored
   - Default: `$HOME/Library/Application Support/MyHomeGames`
 - `DEFAULT_SKIN_URL` - Optional zip URL for first-run default skin installation
-  - Default: `plex.mhg-skin.zip` from the latest GitHub Release of `myhomegames/myhomegames-skins` (override repo with `MHG_SKINS_GITHUB_REPO`)
+  - Default: `plex-<version>.mhg-skin.zip` from the latest GitHub Release of `myhomegames/myhomegames-skins` (override repo with `MHG_SKINS_GITHUB_REPO`)
   - Applied only when `METADATA_PATH/skins` has no installed skins; the installed skin is also selected as active
 
 ## Development Authentication
 
-In development mode, you can use the `API_TOKEN` environment variable for quick testing without setting up Twitch OAuth.
+In development mode, you can set `API_TOKEN` so `GET /auth/me` returns a dev user profile.
 
 Set `API_TOKEN` in your `.env` file:
 ```bash
@@ -188,9 +230,8 @@ The test suite covers:
 - Check console for error messages
 
 ### Authentication issues
-- Verify `API_TOKEN` is set correctly in `.env` (if using development token)
-- Check that Twitch OAuth is properly configured (for production)
-- Review server logs for authentication errors
+- Verify `API_TOKEN` is set correctly in `.env` (development only, for `/auth/me`)
+- Review server logs for API errors
 
 ### HTTPS issues
 - **HTTPS server not starting**: Check that `HTTPS_ENABLED=true` in `.env`
@@ -215,7 +256,8 @@ This will:
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
 4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
-5. Run **`scripts/publish-package-repos.js`** (optional steps below)
+5. Run **`scripts/publish-package-repos.js`** and **`scripts/publish-msstore.js`** (optional; see below)
+6. GitHub Actions **`msstore-release.yml`** builds MSIX and submits to the Microsoft Store when the release is published (requires repository secrets)
 
 ### Package repositories (APT / YUM / Homebrew)
 
@@ -223,24 +265,39 @@ After the GitHub release, `after:release` runs `publish-package-repos.js`. Each 
 
 | Target | Env vars | Docs |
 |--------|----------|------|
-| APT | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_APT_ROOT` | [docs/install-apt.md](docs/install-apt.md) |
-| YUM/DNF | `PACKAGE_REPO_SSH`, `PACKAGE_REPO_YUM_ROOT` | [docs/install-yum.md](docs/install-yum.md) |
+| APT | `CLOUDSMITH_API_KEY`, `CLOUDSMITH_OWNER`, `CLOUDSMITH_REPO` | [docs/install-apt.md](docs/install-apt.md) |
+| YUM/DNF | same as APT | [docs/install-yum.md](docs/install-yum.md) |
 | Homebrew tap | `HOMEBREW_TAP_REPO` | [docs/install-homebrew.md](docs/install-homebrew.md) |
 
 Example (add to `.env.local`, not committed):
 
 ```bash
-export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
-export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
-export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
-export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
+export CLOUDSMITH_API_KEY=cs_api_xxxxxxxx
+export CLOUDSMITH_OWNER=myhomegames
+export CLOUDSMITH_REPO=myhomegames-server
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
 ```
+
+See [docs/install-cloudsmith.md](docs/install-cloudsmith.md) for Cloudsmith setup.
 
 Test publish without a full release:
 
 ```bash
 npm run build
 npm run publish:repos
+```
+
+### Microsoft Store (Windows MSIX)
+
+After the GitHub release is published, [`.github/workflows/msstore-release.yml`](.github/workflows/msstore-release.yml) runs on `windows-latest`: builds the unified `.exe`, packs **`MyHomeGames-<version>-win-x64.msix`**, and runs **`msstore publish`**.
+
+Configure **`MSSTORE_*` secrets** in the GitHub repository (see [docs/install-msstore.md](docs/install-msstore.md)). On macOS, `publish-msstore.js` only logs that the workflow handles Store submission.
+
+Local test on Windows (SDK MakeAppx + Store CLI):
+
+```bash
+npm run build:win-unified
+npm run build:msix
 ```
 
 ### Build prerequisites

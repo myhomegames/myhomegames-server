@@ -4,7 +4,23 @@ const https = require("https");
 const http = require("http");
 
 const DEFAULT_SKINS_GITHUB_REPO = "myhomegames/myhomegames-skins";
-const DEFAULT_SKIN_ZIP_NAME = "plex.mhg-skin.zip";
+const DEFAULT_SKIN_ID = "plex";
+const SKIN_ZIP_SUFFIX = ".mhg-skin.zip";
+
+function parseSkinZipFileName(fileName) {
+  if (typeof fileName !== "string" || !fileName.endsWith(SKIN_ZIP_SUFFIX)) return null;
+  const base = fileName.slice(0, -SKIN_ZIP_SUFFIX.length);
+  const versioned = base.match(/^(.+)-(\d+\.\d+\.\d+)$/);
+  if (versioned) {
+    return { id: versioned[1], version: versioned[2] };
+  }
+  return { id: base };
+}
+
+function isDefaultPlexSkinZip(fileName) {
+  const parsed = parseSkinZipFileName(fileName);
+  return parsed?.id === DEFAULT_SKIN_ID;
+}
 
 function fetchJson(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
@@ -65,11 +81,17 @@ async function resolveDefaultSkinUrl(env = process.env) {
   const release = await fetchJson(
     `https://api.github.com/repos/${owner}/${repo}/releases/latest`
   );
-  const asset = (release.assets || []).find((a) => a.name === DEFAULT_SKIN_ZIP_NAME);
+  const asset = (release.assets || []).find((a) => isDefaultPlexSkinZip(a.name));
   if (!asset?.browser_download_url) {
-    throw new Error(`${DEFAULT_SKIN_ZIP_NAME} not found in latest skins release`);
+    throw new Error(`${DEFAULT_SKIN_ID}*.mhg-skin.zip not found in latest skins release`);
   }
   return asset.browser_download_url;
 }
 
-module.exports = { resolveDefaultSkinUrl, DEFAULT_SKIN_ZIP_NAME, DEFAULT_SKINS_GITHUB_REPO };
+module.exports = {
+  resolveDefaultSkinUrl,
+  DEFAULT_SKIN_ID,
+  DEFAULT_SKINS_GITHUB_REPO,
+  parseSkinZipFileName,
+  isDefaultPlexSkinZip,
+};

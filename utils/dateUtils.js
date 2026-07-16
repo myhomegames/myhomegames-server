@@ -110,9 +110,51 @@ function formatIGDBReleaseDate(firstReleaseDate) {
   };
 }
 
+/**
+ * Formats an IGDB date using its date_format precision (0=full, 1=month, 2=year, 3-6=quarters, 7=TBD).
+ * @param {number|null|undefined} dateValue - Unix timestamp in seconds or year number
+ * @param {number|null|undefined} dateFormat - IGDB DateFormat enum value
+ * @returns {string|null} Human-readable date string or null
+ */
+function formatIGDBDateWithFormat(dateValue, dateFormat) {
+  if (dateValue == null || dateValue === undefined) {
+    return null;
+  }
+  if (dateFormat === 7) {
+    return null;
+  }
+
+  const parsed = createReleaseDate(dateValue);
+  if (!parsed || parsed.year == null) {
+    return null;
+  }
+
+  const { year, month, day } = parsed;
+
+  if (dateFormat === 2) {
+    return String(year);
+  }
+  if (dateFormat === 1) {
+    return month != null ? `${year}-${String(month).padStart(2, "0")}` : String(year);
+  }
+  if (dateFormat === 3) return `${year} Q1`;
+  if (dateFormat === 4) return `${year} Q2`;
+  if (dateFormat === 5) return `${year} Q3`;
+  if (dateFormat === 6) return `${year} Q4`;
+
+  if (month != null && day != null) {
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  if (month != null) {
+    return `${year}-${String(month).padStart(2, "0")}`;
+  }
+  return String(year);
+}
+
 module.exports = {
   parseIGDBReleaseDate,
   createReleaseDate,
   formatIGDBReleaseDate,
+  formatIGDBDateWithFormat,
 };
 

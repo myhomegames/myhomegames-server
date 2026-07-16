@@ -1,55 +1,18 @@
 # Install with APT (Debian / Ubuntu)
 
-MyHomeGames Server is available from a dedicated APT repository. Packages are built on each release (`myhomegames-server_<version>_amd64.deb`).
-
-## Server prerequisites
-
-On the host that serves the repository (e.g. `packages.myhomegames.vige.it`):
-
-- **nginx** (or another web server) with HTTPS
-- **reprepro** to manage the APT pool and indexes
-- **GPG** to sign the repository
-
-Example reprepro config (`/var/www/packages/apt/conf/distributions`):
-
-```
-Origin: MyHomeGames
-Label: MyHomeGames
-Suite: stable
-Codename: stable
-Architectures: amd64
-Components: main
-Description: MyHomeGames server packages
-SignWith: YOUR_GPG_KEY_ID
-```
-
-Export the public key:
-
-```bash
-gpg --armor --export YOUR_GPG_KEY_ID > /var/www/packages/apt/myhomegames-archive-key.gpg
-```
-
-After each release, `npm run release` (with env vars configured) runs:
-
-```bash
-reprepro -b /var/www/packages/apt includedeb stable /tmp/myhomegames-server_<version>_amd64.deb
-```
+MyHomeGames Server is available from a [Cloudsmith](https://cloudsmith.io/) APT repository. Packages are built on each release (`myhomegames-server_<version>_amd64.deb`).
 
 ## Client setup
 
-Replace the URL if you use a domain other than `packages.myhomegames.vige.it`.
+Run the Cloudsmith setup script (configures the GPG key and `sources.list` entry):
 
 ```bash
-sudo curl -fsSL https://packages.myhomegames.vige.it/apt/myhomegames-archive-key.gpg \
-  -o /usr/share/keyrings/myhomegames.gpg
-
-echo "deb [signed-by=/usr/share/keyrings/myhomegames.gpg] \
-https://packages.myhomegames.vige.it/apt stable main" | \
-  sudo tee /etc/apt/sources.list.d/myhomegames.list
-
+curl -sLf 'https://dl.cloudsmith.io/public/myhomegames/myhomegames-server/cfg/setup/bash.deb.sh' | sudo bash
 sudo apt update
 sudo apt install myhomegames-server
 ```
+
+If your workspace uses a different Cloudsmith namespace or repository slug, replace `myhomegames/myhomegames-server` in the URL. The **Set Me Up** tab on the repository page has the exact command.
 
 ## Upgrade
 
@@ -64,15 +27,10 @@ sudo apt upgrade myhomegames-server
 sudo apt remove myhomegames-server
 ```
 
-## Release environment variables (maintainers)
+## Binary location
 
-Set on your Mac (or in `.env.local`, not committed) before `npm run release`:
+The server is installed under `/opt/myhomegames-server`; the `myhomegames-server` command is available in `/usr/bin`.
 
-```bash
-export PACKAGE_REPO_SSH=deploy@packages.myhomegames.vige.it
-export PACKAGE_REPO_APT_ROOT=/var/www/packages/apt
-export PACKAGE_REPO_APT_CODENAME=stable
-export PACKAGE_REPO_YUM_ROOT=/var/www/packages/yum/el9/x86_64
-```
+## Maintainers
 
-The binary is installed under `/opt/myhomegames-server`; the `myhomegames-server` command is available in `/usr/bin`.
+Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).

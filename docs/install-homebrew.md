@@ -7,10 +7,10 @@ MyHomeGames Server for macOS is distributed as a **Cask** that downloads the off
 ### 1. Add the tap
 
 ```bash
-brew tap myhomegames/tap
+brew tap myhomegames/myhomegames-homebrewtap
 ```
 
-Tap repository: [github.com/myhomegames/homebrew-tap](https://github.com/myhomegames/homebrew-tap)
+Tap repository: [github.com/myhomegames/myhomegames-homebrewtap](https://github.com/myhomegames/myhomegames-homebrewtap)
 
 ### 2. Install
 
@@ -48,15 +48,14 @@ brew uninstall --cask myhomegames-server
 On each `npm run release`:
 
 1. macOS `.pkg` files are uploaded to **GitHub Releases**
-2. `scripts/publish-package-repos.js` updates the Cask with version, URL, and `sha256`
-3. If configured, it pushes to the tap repository
+2. `scripts/publish-package-repos.js` builds the Cask (version, URL, `sha256`) and pushes it to the tap repository
 
 ### Tap repository
 
-Create an empty GitHub repo, e.g. `myhomegames/homebrew-tap`, with:
+Separate repo, e.g. `myhomegames/myhomegames-homebrewtap`:
 
 ```
-homebrew-tap/
+myhomegames-homebrewtap/
 └── Casks/
     └── myhomegames-server.rb
 ```
@@ -64,7 +63,7 @@ homebrew-tap/
 ### Environment variables
 
 ```bash
-export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
 export GITHUB_RELEASE_BASE=https://github.com/myhomegames/myhomegames-server/releases/download
 ```
 
@@ -74,18 +73,14 @@ Then:
 npm run release
 ```
 
-The script also writes a local copy to `packaging/homebrew/Casks/myhomegames-server.rb` (reference in the server repo).
-
-### Manual Cask publish
-
-To skip automatic git push:
+### Test publish without a full release
 
 ```bash
 npm run build
-node scripts/publish-package-repos.js
+npm run publish:repos
 ```
 
-Copy the generated `packaging/homebrew/Casks/myhomegames-server.rb` into the `homebrew-tap` repo and commit/push.
+Requires `HOMEBREW_TAP_REPO` and SSH access to GitHub. The Cask is pushed only to the tap repo (nothing is written under this server project).
 
 ### Install without the tap (GitHub Release only)
 

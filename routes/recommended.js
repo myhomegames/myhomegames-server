@@ -2,6 +2,11 @@ const fs = require("fs");
 const path = require("path");
 const { getCoverUrl, getBackgroundUrl } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
+const {
+  resolveRequestLocale,
+  resolveSummary,
+  resolveKeyword,
+} = require("../utils/metadataLocale");
 
 /**
  * Recommended routes module
@@ -368,6 +373,7 @@ function removeGameFromRecommended(metadataPath, gameId) {
 function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
   // Endpoint: get recommended games sections
   app.get("/recommended", requireToken, (req, res) => {
+    const locale = resolveRequestLocale(req, metadataPath);
     const allSections = loadRecommendedSections(metadataPath);
     
     // Select 9 random sections from all available sections
@@ -390,7 +396,7 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
           const gameData = {
             id: g.id,
             title: g.title,
-            summary: g.summary || "",
+            summary: resolveSummary(g.summary, locale),
             cover: getCoverUrl(g, metadataPath),
             day: g.day || null,
             month: g.month || null,
@@ -407,8 +413,8 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
         });
       
       return {
-        id: section.title, // Return title as id (for client compatibility)
-        title: section.title,
+        id: section.title, // Return canonical keyword as id (for client compatibility)
+        title: resolveKeyword(section.title, locale, metadataPath),
         games: games,
       };
     });

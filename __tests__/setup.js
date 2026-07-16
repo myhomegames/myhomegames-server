@@ -27,10 +27,10 @@ fs.mkdirSync(path.join(testMetadataPath, 'content', 'player-perspectives'), { re
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'recommended'), { recursive: true });
 fs.mkdirSync(path.join(testMetadataPath, 'content', 'games'), { recursive: true });
 
-// Create initial settings.json file (twitchLoginEnabled: true so optionalToken requires auth in tests)
+// Create initial settings.json file
 const settingsFile = path.join(testMetadataPath, 'settings.json');
 if (!fs.existsSync(settingsFile)) {
-  fs.writeFileSync(settingsFile, JSON.stringify({ language: 'en', twitchLoginEnabled: true }, null, 2), 'utf8');
+  fs.writeFileSync(settingsFile, JSON.stringify({ language: 'en' }, null, 2), 'utf8');
 }
 
 // No need to create metadata.json files in main directories anymore

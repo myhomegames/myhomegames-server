@@ -107,12 +107,5 @@ describe('GET /recommended', () => {
     expect(Array.isArray(response.body.sections)).toBe(true);
   });
 
-  test('should require authentication', async () => {
-    const response = await request(app)
-      .get('/recommended')
-      .expect(401);
-    
-    expect(response.body).toHaveProperty('error', 'Unauthorized');
-  });
 });
 

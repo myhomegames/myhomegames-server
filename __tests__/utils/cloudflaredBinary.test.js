@@ -5,6 +5,8 @@ const {
   resolveWritableCloudflaredBin,
   resolveMacAppBundledCloudflared,
   findBundledCloudflaredBin,
+  parseCloudflaredVersion,
+  compareCloudflaredVersions,
 } = require("../../utils/cloudflaredBinary");
 
 describe("cloudflaredBinary", () => {
@@ -29,6 +31,19 @@ describe("cloudflaredBinary", () => {
       fs.unlinkSync(expected);
       fs.rmdirSync(dir);
     }
+  });
+
+  test("parseCloudflaredVersion reads semver from --version output", () => {
+    expect(
+      parseCloudflaredVersion("cloudflared version 2026.6.1 (built 2026-05-25T09:32:09Z)"),
+    ).toBe("2026.6.1");
+    expect(parseCloudflaredVersion("unexpected output")).toBeNull();
+  });
+
+  test("compareCloudflaredVersions orders dated releases", () => {
+    expect(compareCloudflaredVersions("2026.5.2", "2026.6.1")).toBeLessThan(0);
+    expect(compareCloudflaredVersions("2026.6.1", "2026.6.1")).toBe(0);
+    expect(compareCloudflaredVersions("2026.6.1", "2026.5.2")).toBeGreaterThan(0);
   });
 
   test("findBundledCloudflaredBin prefers CLOUDFLARED_BIN when set", () => {

@@ -139,10 +139,13 @@ const {
   saveStoredTwitchAppCredentials,
 } = require("./utils/twitchAppCredentialsStore");
 const { resolveDefaultSkinUrl } = require("./utils/defaultSkinUrl");
+const { bulkMetadataReloadLogMiddleware } = require("./utils/bulkMetadataReloadLog");
+const { googleTranslateText, normalizeLangCode } = require("./utils/googleTranslate");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(bulkMetadataReloadLogMiddleware);
 
 const API_TOKEN = process.env.API_TOKEN;
 const PORT = process.env.PORT || 4000; // PORT can have a default
@@ -470,22 +473,8 @@ function requireToken(req, res, next) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
-// Launcher: always allow when Twitch login is disabled (same idea as optionalToken).
-// When Twitch login is enabled, allow requests with no token (local / empty client storage)
-// so Play still works; if a token is sent, it must be valid (reject invalid tokens).
 function optionalLauncherToken(req, res, next) {
-  const settings = readSettings();
-  if (!settings.twitchLoginEnabled) {
-    return next();
-  }
-  const token = getRequestToken(req);
-  if (!token) {
-    return next();
-  }
-  if (isAuthorizedToken(token)) {
-    return next();
-  }
-  return res.status(401).json({ error: "Unauthorized" });
+  return next();
 }
 
 function getRequestToken(req) {
@@ -499,16 +488,11 @@ function getRequestToken(req) {
 function isAuthorizedToken(token) {
   if (!token) return false;
   if (API_TOKEN && token === API_TOKEN) return true;
-  return authRoutes.isValidToken(token, METADATA_PATH);
+  return authRoutes.isValidToken(token);
 }
 
-// Optional token: when Twitch login is disabled, allow access without token; otherwise require token
 function optionalToken(req, res, next) {
-  const settings = readSettings();
-  if (!settings.twitchLoginEnabled) {
-    return next();
-  }
-  return requireToken(req, res, next);
+  return next();
 }
 
 // Load games whitelist from JSON files
@@ -552,7 +536,7 @@ registerTunnelRoutes(app, {
 });
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
-igdbRoutes.registerIGDBRoutes(app, optionalToken);
+igdbRoutes.registerIGDBRoutes(app, optionalToken, METADATA_PATH);
 const collectionsHandler = collectionsRoutes.registerCollectionsRoutes(
   app,
   optionalToken,
@@ -790,7 +774,7 @@ app.get("/launcher", optionalLauncherToken, (req, res) => {
 });
 
 // Reload games list (admin endpoint) — protected by token
-app.post("/reload-games", requireToken, (req, res) => {
+app.post("/reload-games", optionalToken, async (req, res) => {
   allGames = {};
   libraryRoutes.loadLibraryGames(METADATA_PATH, allGames);
   // Recommended games are now just IDs pointing to games already in allGames
@@ -890,7 +874,6 @@ function readSettings() {
   const defaultSettings = {
     language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
-    twitchLoginEnabled: false,
     twitchApiEnabled: false,
     activeSkinId: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
@@ -916,6 +899,7 @@ function readSettings() {
   delete result.fixedFocalStepSound;
   delete result.twitchClientId;
   delete result.twitchClientSecret;
+  delete result.twitchLoginEnabled;
 
   if (migrateLegacyTwitchCredentialsFromSettings(settings)) {
     writeSettings(result);
@@ -943,7 +927,7 @@ function writeSettings(settings) {
 
 setTwitchCredentialsMetadataPath(METADATA_PATH);
 
-// Endpoint: get settings (public so client can load twitchLoginEnabled without token)
+// Endpoint: get settings (public)
 app.get("/settings", (req, res) => {
   const settings = readSettings();
   res.json({
@@ -952,63 +936,58 @@ app.get("/settings", (req, res) => {
   });
 });
 
+const { readPackageVersion } = require("./utils/compatibility");
+
 // Endpoint: get server version (public, for update notification to compare with GitHub releases)
-function getServerVersion() {
+function getServerVersionInfo() {
+  const baseDir = process.cwd();
+  let version = null;
   try {
-    const infoPath = path.join(process.cwd(), "server-info.json");
+    const infoPath = path.join(baseDir, "server-info.json");
     if (fs.existsSync(infoPath)) {
       const data = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      if (data && typeof data.version === "string") return data.version;
+      if (data && typeof data.version === "string") version = data.version;
     }
   } catch (_) {}
-  try {
-    const pkgPath = path.join(__dirname, "package.json");
-    if (fs.existsSync(pkgPath)) {
-      const data = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      if (data && typeof data.version === "string") return data.version;
-    }
-  } catch (_) {}
-  return null;
+  if (!version) {
+    try {
+      version = readPackageVersion(__dirname);
+    } catch (_) {}
+  }
+  if (!version) return null;
+  return {
+    name: "myhomegames-server",
+    version,
+  };
 }
 app.get("/version", (req, res) => {
-  const version = getServerVersion();
-  if (version) res.json({ version });
+  const info = getServerVersionInfo();
+  if (info) res.json(info);
   else res.status(500).json({ error: "Version not available" });
 });
 
+// Machine translation proxy (summary auto-translate in web UI)
+app.post("/translate", optionalToken, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const targetLang = normalizeLangCode(body.targetLang);
+    const sourceLang = normalizeLangCode(body.sourceLang) || "en";
+    if (!text) return res.status(400).json({ error: "text is required" });
+    if (!targetLang) return res.status(400).json({ error: "targetLang is required" });
+    if (targetLang === sourceLang) return res.json({ translated: text });
+    const translated = await googleTranslateText(text, targetLang, sourceLang);
+    if (!translated) return res.status(502).json({ error: "translation failed" });
+    res.json({ translated });
+  } catch (err) {
+    console.error("POST /translate failed:", err?.message || err);
+    res.status(500).json({ error: "translation failed" });
+  }
+});
+
 // Endpoint: update settings
-// Special case: if Twitch login is currently enabled and caller is unauthenticated,
-// allow only recovery writes (disable login and/or replace both Twitch credentials)
-// to avoid lock-out when the configured credentials are no longer valid.
 app.put("/settings", (req, res) => {
   const currentSettings = readSettings();
-  const token = getRequestToken(req);
-  const authorized = isAuthorizedToken(token);
-  const twitchEnabled = !!currentSettings.twitchLoginEnabled;
-
-  if (twitchEnabled && !authorized) {
-    const body = req.body && typeof req.body === "object" ? req.body : {};
-    const keys = Object.keys(body);
-
-    const recoveryKeys = isCloudflareTunnelEnabled()
-      ? ["twitchLoginEnabled", "twitchApiEnabled"]
-      : ["twitchLoginEnabled", "twitchApiEnabled", "twitchClientId", "twitchClientSecret"];
-    const hasClientId = keys.includes("twitchClientId");
-    const hasClientSecret = keys.includes("twitchClientSecret");
-    const partialCredentialsUpdate =
-      (hasClientId && !hasClientSecret) || (!hasClientId && hasClientSecret);
-
-    // Unauthenticated recovery: only Twitch-related keys (no language/skin/etc.).
-    const allowsOnlyRecoveryKeys =
-      keys.length > 0 && keys.every((k) => recoveryKeys.includes(k));
-    const validRecoveryRequest =
-      allowsOnlyRecoveryKeys &&
-      (isCloudflareTunnelEnabled() || !partialCredentialsUpdate);
-
-    if (!validRecoveryRequest) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-  }
 
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
     ? { ...req.body }
@@ -1050,6 +1029,7 @@ app.put("/settings", (req, res) => {
   }
   delete body.twitchClientId;
   delete body.twitchClientSecret;
+  delete body.twitchLoginEnabled;
 
   const updatedSettings = {
     ...currentSettings,
@@ -1057,9 +1037,7 @@ app.put("/settings", (req, res) => {
   };
   delete updatedSettings.twitchClientId;
   delete updatedSettings.twitchClientSecret;
-  if (Object.prototype.hasOwnProperty.call(body, "twitchApiEnabled") && updatedSettings.twitchApiEnabled === false) {
-    updatedSettings.twitchLoginEnabled = false;
-  }
+  delete updatedSettings.twitchLoginEnabled;
   // Drop deprecated top-level key (superseded by settings.skinWeb.fixedFocalStepSound).
   delete updatedSettings.fixedFocalStepSound;
 
@@ -1106,11 +1084,10 @@ function validateEnvironment() {
   
   const API_BASE = process.env.API_BASE;
  
-  // API_BASE is required for OAuth redirects (Twitch app credentials come from API gateway headers).
   const hasApiBase = !!API_BASE;
   
   if (!hasApiBase) {
-    errors.push("API_BASE is required for Twitch OAuth redirects");
+    errors.push("API_BASE is required (public API URL, e.g. Cloudflare Tunnel hostname)");
   }
   
   if (errors.length > 0) {
@@ -1305,7 +1282,7 @@ if (process.env.NODE_ENV !== 'test') {
   }
   
   if (!API_TOKEN) {
-    console.warn("Warning: No API_TOKEN configured for development. For production, use Twitch OAuth (credentials passed via web requests).");
+    console.warn("Warning: No API_TOKEN configured. Optional in development for GET /auth/me.");
   }
 }
 

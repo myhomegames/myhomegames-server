@@ -11,6 +11,7 @@ const multer = require("multer");
 const { getCoverUrl, getLocalMediaPath, deleteMediaFile } = require("../utils/gameMediaUtils");
 const {
   loadItems,
+  loadItemById,
   saveItem,
   deleteItem,
   findById,
@@ -22,7 +23,58 @@ const {
   removeChildFromItem,
 } = require("../utils/collectionsShared");
 const { ensureDirectoryExists } = require("../utils/fileUtils");
-const { coerceToGameTypeId } = require("../utils/igdbGameType");
+const { coerceToGameTypeId } = require("../utils/gameType");
+const {
+  buildCompanyMergePatchFromBody,
+  hasAnyCompanyMergeFieldInBody,
+  normalizeStoredCompanyProfile,
+  linkCompanyRelationsFromMergeBody,
+} = require("../utils/catalogCompany");
+const { readBulkMetadataProgress } = require("../utils/bulkMetadataReloadLog");
+const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchAppCredentials");
+const { getIGDBAccessToken } = require("./igdb");
+const {
+  appendCompanyProfileFields,
+  applyNormalizedCompanyProfileFields,
+  extractCompanyProfileFieldsFromBody,
+  hasAnyCompanyProfileFieldInBody,
+  pickCompanyProfileFields,
+} = require("../utils/companyProfileFields");
+const {
+  isCompanyRoleFolder,
+  loadRoleItems,
+  loadRoleItemById,
+  saveRoleItem,
+  deleteRoleItem,
+  ensureCompanyRoleEntry,
+  hasLocalCompanyCover,
+  mergeParentCompanyProfiles,
+  getCompanyContentDir,
+  removeGameFromAllRoleItems,
+  addChildToRoleItem,
+  removeChildFromRoleItem,
+} = require("../utils/companyStorage");
+const {
+  resolveRequestLocale,
+  resolveSummary,
+  applySummaryEdit,
+  readSettingsLanguage,
+  isSummaryLocaleMap,
+} = require("../utils/metadataLocale");
+const {
+  autoTranslateNewCompanySummary,
+  retranslateAllSummaryLocales,
+} = require("../utils/autoTranslateGameMetadata");
+
+function companyMergeSnapshot(entry) {
+  return JSON.stringify({
+    title: entry.title,
+    summary: entry.summary,
+    externalCoverUrl: entry.externalCoverUrl,
+    externalBackgroundUrl: entry.externalBackgroundUrl,
+    ...pickCompanyProfileFields(entry),
+  });
+}
 
 function storedExternalCoverUrl(entry) {
   const u = entry && entry.externalCoverUrl;
@@ -32,6 +84,10 @@ function storedExternalCoverUrl(entry) {
 function storedExternalBackgroundUrl(entry) {
   const u = entry && entry.externalBackgroundUrl;
   return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
+function appendCompanyProfileToPayload(data, entry) {
+  appendCompanyProfileFields(data, entry);
 }
 
 function createCollectionLikeRoutes(config) {
@@ -47,6 +103,46 @@ function createCollectionLikeRoutes(config) {
   } = config;
 
   const normalizedRouteBase = routeBase.startsWith("/") ? routeBase : `/${routeBase}`;
+  const useCompanyStorage = isCompanyRoleFolder(contentFolder);
+
+  function storageLoadItems(metadataPathArg) {
+    return useCompanyStorage
+      ? loadRoleItems(metadataPathArg, contentFolder)
+      : loadItems(metadataPathArg, contentFolder);
+  }
+
+  function storageLoadItemById(metadataPathArg, id) {
+    return useCompanyStorage
+      ? loadRoleItemById(metadataPathArg, contentFolder, id)
+      : loadItemById(metadataPathArg, contentFolder, id);
+  }
+
+  function storageSaveItem(metadataPathArg, entry) {
+    if (useCompanyStorage) {
+      saveRoleItem(metadataPathArg, contentFolder, entry);
+      return;
+    }
+    saveItem(metadataPathArg, contentFolder, entry);
+  }
+
+  function storageDeleteItem(metadataPathArg, itemId) {
+    if (useCompanyStorage) {
+      deleteRoleItem(metadataPathArg, contentFolder, itemId);
+      return;
+    }
+    deleteItem(metadataPathArg, contentFolder, itemId);
+  }
+
+  function getItemContentDir(metadataPathArg, itemId) {
+    if (useCompanyStorage) {
+      return getCompanyContentDir(metadataPathArg, itemId);
+    }
+    return path.join(metadataPathArg, "content", contentFolder, String(itemId));
+  }
+
+  function getMediaResourceType() {
+    return useCompanyStorage ? "companies" : contentFolder;
+  }
 
   function getIdFromTitle(title) {
     let hash = 0;
@@ -59,9 +155,10 @@ function createCollectionLikeRoutes(config) {
     return Math.abs(hash);
   }
 
-  function ensureBatch(metadataPath, items, gameId) {
+  async function ensureBatch(metadataPath, items, gameId, locale) {
     if (!items || !Array.isArray(items) || items.length === 0) return;
-    const list = loadItems(metadataPath, contentFolder);
+    const targetLocale = locale || readSettingsLanguage(metadataPath);
+    const list = storageLoadItems(metadataPath);
     const byId = new Map(list.map((d) => [d.id, d]));
 
     for (const item of items) {
@@ -74,201 +171,122 @@ function createCollectionLikeRoutes(config) {
       const logo = typeof item === "object" && item && item.logo ? item.logo : null;
       const description =
         typeof item === "object" && item && typeof item.description === "string" ? item.description : "";
+      const companyProfileFields = pickCompanyProfileFields(item);
 
       let entry = byId.get(numId);
       if (!entry) {
+        let summary = description || "";
+        if (useCompanyStorage && typeof summary === "string" && summary.trim() && !isSummaryLocaleMap(summary)) {
+          try {
+            summary = await autoTranslateNewCompanySummary(summary, targetLocale);
+          } catch (translateErr) {
+            console.warn(
+              `Auto-translate for new ${humanName.toLowerCase()} ${numId} failed:`,
+              translateErr?.message || translateErr,
+            );
+          }
+        }
         entry = {
           id: numId,
           title: name.trim(),
           games: [],
-          childs: [],
-          summary: description || "",
+          summary,
           externalCoverUrl: logo || null,
+          ...companyProfileFields,
         };
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         byId.set(numId, entry);
       }
       if (gameId && (!entry.games || !entry.games.includes(gameId))) {
         entry.games = entry.games || [];
         entry.games.push(gameId);
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
       }
     }
   }
 
   function removeGameFrom(metadataPath, resourceId, gameId) {
-    const list = loadItems(metadataPath, contentFolder);
-    const entry = list.find((d) => Number(d.id) === Number(resourceId));
+    const entry = useCompanyStorage
+      ? loadRoleItemById(metadataPath, contentFolder, resourceId)
+      : loadItemById(metadataPath, contentFolder, resourceId);
     if (!entry || !entry.games) return;
     const idx = entry.games.findIndex((g) => Number(g) === Number(gameId));
     if (idx !== -1) {
       entry.games.splice(idx, 1);
-      saveItem(metadataPath, contentFolder, entry);
+      storageSaveItem(metadataPath, entry);
     }
   }
 
   function removeGameFromAllFunc(metadataPath, gameId, updateCacheCallback, cache) {
+    if (useCompanyStorage) {
+      return removeGameFromAllRoleItems(metadataPath, contentFolder, gameId, updateCacheCallback, cache);
+    }
     return removeGameFromAll(metadataPath, contentFolder, gameId, updateCacheCallback, cache);
   }
 
   /** Delete item if it has no games left and no local cover (so orphaned and no custom cover). */
   function deleteItemIfUnused(metadataPath, itemId) {
-    const list = loadItems(metadataPath, contentFolder);
+    const list = storageLoadItems(metadataPath);
     const entry = findById(list, itemId);
     if (!entry) return;
     const games = entry.games || [];
     if (games.length > 0) return;
+    if (useCompanyStorage) {
+      if (hasLocalCompanyCover(metadataPath, itemId)) return;
+      deleteRoleItem(metadataPath, contentFolder, itemId);
+      return;
+    }
     const coverPath = path.join(metadataPath, "content", contentFolder, String(itemId), "cover.webp");
     if (fs.existsSync(coverPath)) return;
-    deleteItem(metadataPath, contentFolder, itemId);
+    storageDeleteItem(metadataPath, itemId);
   }
 
   function registerRoutes(app, requireToken, metadataPath, metadataGamesDir, allGames, removeFromAllGamesFn) {
-    let cache = loadItems(metadataPath, contentFolder);
+    let cache = storageLoadItems(metadataPath);
     const updateCache = () => {
-      cache = loadItems(metadataPath, contentFolder);
+      cache = storageLoadItems(metadataPath);
     };
 
-    const upload = multer({ storage: multer.memoryStorage() });
+    async function linkCompanyRelationsFromRequest(req, companyId, mergeBody) {
+      if (!useCompanyStorage || companyId == null) {
+        return false;
+      }
 
-    app.get(`/${coverPrefix}/:resourceId`, (req, res) => {
-      const id = req.params.resourceId;
-      const coverPath = path.join(metadataPath, "content", contentFolder, String(id), "cover.webp");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET");
-      if (!fs.existsSync(coverPath)) {
-        res.setHeader("Content-Type", "image/webp");
-        return res.status(404).end();
-      }
-      res.type("image/webp");
-      res.sendFile(coverPath);
-    });
-
-    app.get(`/${backgroundPrefix}/:resourceId`, (req, res) => {
-      const id = req.params.resourceId;
-      const backgroundPath = path.join(metadataPath, "content", contentFolder, String(id), "background.webp");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET");
-      if (!fs.existsSync(backgroundPath)) {
-        res.setHeader("Content-Type", "image/webp");
-        return res.status(404).end();
-      }
-      res.type("image/webp");
-      res.sendFile(backgroundPath);
-    });
-
-    app.post(normalizedRouteBase, requireToken, (req, res) => {
-      const { title, summary } = req.body || {};
-      if (!title || typeof title !== "string" || !title.trim()) {
-        return res.status(400).json({ error: "Title is required" });
-      }
-      const trimmedTitle = title.trim();
-      updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
-      const existing = list.find((c) => String(c.title).toLowerCase() === trimmedTitle.toLowerCase());
-      if (existing) {
-        return res.status(409).json({
-          error: `${humanName} with this title already exists`,
-          [singleResponseKey]: { id: existing.id, title: existing.title },
-        });
-      }
-      let newId = getIdFromTitle(trimmedTitle);
-      while (list.some((c) => String(c.id) === String(newId))) {
-        newId++;
-      }
-      const newItem = {
-        id: newId,
-        title: trimmedTitle,
-        summary: (summary && typeof summary === "string") ? summary.trim() : "",
-        showTitle: true,
-        games: [],
-        childs: [],
-      };
-      try {
-        saveItem(metadataPath, contentFolder, newItem);
-        updateCache();
-      } catch (e) {
-        console.error(`Failed to save ${humanName}:`, e.message);
-        return res.status(500).json({ error: `Failed to create ${humanName}` });
-      }
-      const cover = getLocalMediaPath({
-        metadataPath,
-        resourceId: newItem.id,
-        resourceType: contentFolder,
-        mediaType: "cover",
-        urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
-      });
-      const data = {
-        id: newItem.id,
-        title: newItem.title,
-        summary: newItem.summary || "",
-        showTitle: newItem.showTitle,
-        gameCount: 0,
-        cover: cover || null,
-      };
-      const background = getLocalMediaPath({
-        metadataPath,
-        resourceId: newItem.id,
-        resourceType: contentFolder,
-        mediaType: "background",
-        urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
-      });
-      data.background = background || null;
-      data.externalBackgroundUrl = null;
-      res.status(201).json({ status: "success", [singleResponseKey]: data });
-    });
-
-    app.get(normalizedRouteBase, requireToken, (req, res) => {
-      updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
-      res.json({
-        [listResponseKey]: list.map((d) => {
-          const gameIds = d.games || [];
-          const actualCount = gameIds.filter((g) => allGames[g]).length;
-          const data = {
-            id: d.id,
-            title: d.title,
-            gameCount: actualCount,
-            showTitle: d.showTitle !== false,
-            childs: Array.isArray(d.childs) ? d.childs : [],
-          };
-          const cover = getLocalMediaPath({
+      const creds = resolveTwitchAppCredentialsForServerIgdb(req);
+      if (creds.clientId && creds.clientSecret) {
+        try {
+          const accessToken = await getIGDBAccessToken(creds.clientId, creds.clientSecret);
+          return await linkCompanyRelationsFromMergeBody(
             metadataPath,
-            resourceId: d.id,
-            resourceType: contentFolder,
-            mediaType: "cover",
-            urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
-          });
-          data.cover = cover || storedExternalCoverUrl(d) || null;
-          const background = getLocalMediaPath({
-            metadataPath,
-            resourceId: d.id,
-            resourceType: contentFolder,
-            mediaType: "background",
-            urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
-          });
-          data.background = background || storedExternalBackgroundUrl(d) || null;
-          data.externalBackgroundUrl = storedExternalBackgroundUrl(d);
-          if (d.summary) data.summary = d.summary;
-          return data;
-        }),
-      });
-    });
-
-    app.get(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
-      const id = normalizeId(req.params.id);
-      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
-      let entry = findById(list, id);
-      if (!entry) {
-        updateCache();
-        list = cache;
-        entry = findById(list, id);
+            contentFolder,
+            companyId,
+            accessToken,
+            creds.clientId,
+            mergeBody,
+          );
+        } catch (err) {
+          console.warn(
+            `Company relation IGDB link failed for ${contentFolder}/${companyId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
-      if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+
+      return linkCompanyRelationsFromMergeBody(
+        metadataPath,
+        contentFolder,
+        companyId,
+        null,
+        null,
+        mergeBody,
+      );
+    }
+
+    function buildDetailPayload(entry, locale) {
       const data = {
         id: entry.id,
         title: entry.title,
-        summary: entry.summary || "",
+        summary: resolveSummary(entry.summary, locale),
         showTitle: entry.showTitle !== false,
         gameCount: (entry.games || []).filter((g) => allGames[g]).length,
         childs: Array.isArray(entry.childs) ? entry.childs : [],
@@ -291,12 +309,308 @@ function createCollectionLikeRoutes(config) {
       });
       data.background = background || storedExternalBackgroundUrl(entry) || null;
       data.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
-      res.json(data);
+      appendCompanyProfileToPayload(data, entry);
+      return data;
+    }
+
+    function upsertCacheEntry(entry) {
+      const idx = findIndexById(cache, entry.id);
+      if (idx !== -1) {
+        cache[idx] = entry;
+      } else {
+        cache.push(entry);
+      }
+    }
+
+    const upload = multer({ storage: multer.memoryStorage() });
+
+    function resolveMediaFilePath(itemId, mediaType) {
+      if (useCompanyStorage) {
+        const companyPath = path.join(getCompanyContentDir(metadataPath, itemId), `${mediaType}.webp`);
+        if (fs.existsSync(companyPath)) return companyPath;
+      }
+      return path.join(metadataPath, "content", contentFolder, String(itemId), `${mediaType}.webp`);
+    }
+
+    app.get(`/${coverPrefix}/:resourceId`, (req, res) => {
+      const id = req.params.resourceId;
+      const coverPath = resolveMediaFilePath(id, "cover");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET");
+      if (!fs.existsSync(coverPath)) {
+        res.setHeader("Content-Type", "image/webp");
+        return res.status(404).end();
+      }
+      res.type("image/webp");
+      res.sendFile(coverPath);
     });
+
+    app.get(`/${backgroundPrefix}/:resourceId`, (req, res) => {
+      const id = req.params.resourceId;
+      const backgroundPath = resolveMediaFilePath(id, "background");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET");
+      if (!fs.existsSync(backgroundPath)) {
+        res.setHeader("Content-Type", "image/webp");
+        return res.status(404).end();
+      }
+      res.type("image/webp");
+      res.sendFile(backgroundPath);
+    });
+
+    app.post(normalizedRouteBase, requireToken, async (req, res) => {
+      const { title, summary, id: requestedId } = req.body || {};
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      const trimmedTitle = title.trim();
+      updateCache();
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
+      const existing = list.find((c) => String(c.title).toLowerCase() === trimmedTitle.toLowerCase());
+      if (existing) {
+        return res.status(409).json({
+          error: `${humanName} with this title already exists`,
+          [singleResponseKey]: { id: existing.id, title: existing.title },
+        });
+      }
+      const parsedRequestedId =
+        requestedId != null && /^\d+$/.test(String(requestedId)) ? Number(requestedId) : null;
+      let newId;
+      if (parsedRequestedId != null && parsedRequestedId >= 1) {
+        if (list.some((c) => String(c.id) === String(parsedRequestedId))) {
+          return res.status(409).json({
+            error: `${humanName} with this id already exists`,
+            [singleResponseKey]: { id: parsedRequestedId, title: trimmedTitle },
+          });
+        }
+        newId = parsedRequestedId;
+      } else {
+        newId = getIdFromTitle(trimmedTitle);
+        while (list.some((c) => String(c.id) === String(newId))) {
+          newId++;
+        }
+      }
+      const newItem = {
+        id: newId,
+        title: trimmedTitle,
+        summary: (summary && typeof summary === "string") ? summary.trim() : "",
+        showTitle: true,
+        games: [],
+        childs: [],
+      };
+      try {
+        storageSaveItem(metadataPath, newItem);
+        updateCache();
+      } catch (e) {
+        console.error(`Failed to save ${humanName}:`, e.message);
+        return res.status(500).json({ error: `Failed to create ${humanName}` });
+      }
+      const cover = getLocalMediaPath({
+        metadataPath,
+        resourceId: newItem.id,
+        resourceType: contentFolder,
+        mediaType: "cover",
+        urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
+      });
+      const data = {
+        id: newItem.id,
+        title: newItem.title,
+        summary: resolveSummary(newItem.summary, resolveRequestLocale(req, metadataPath)),
+        showTitle: newItem.showTitle,
+        gameCount: 0,
+        cover: cover || null,
+      };
+      const background = getLocalMediaPath({
+        metadataPath,
+        resourceId: newItem.id,
+        resourceType: contentFolder,
+        mediaType: "background",
+        urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
+      });
+      data.background = background || null;
+      data.externalBackgroundUrl = null;
+      appendCompanyProfileToPayload(data, newItem);
+      res.status(201).json({ status: "success", [singleResponseKey]: data });
+    });
+
+    app.get(normalizedRouteBase, requireToken, (req, res) => {
+      updateCache();
+      const locale = resolveRequestLocale(req, metadataPath);
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
+      res.json({
+        [listResponseKey]: list.map((d) => {
+          const gameIds = d.games || [];
+          const actualCount = gameIds.filter((g) => allGames[g]).length;
+          const data = {
+            id: d.id,
+            title: d.title,
+            gameCount: actualCount,
+            gameIds: gameIds.filter((g) => allGames[g]).map((id) => String(id)),
+            showTitle: d.showTitle !== false,
+            childs: Array.isArray(d.childs) ? d.childs : [],
+          };
+          const cover = getLocalMediaPath({
+            metadataPath,
+            resourceId: d.id,
+            resourceType: contentFolder,
+            mediaType: "cover",
+            urlPrefix: `/${coverPrefix}`.replace(/\/$/, ""),
+          });
+          data.cover = cover || storedExternalCoverUrl(d) || null;
+          const background = getLocalMediaPath({
+            metadataPath,
+            resourceId: d.id,
+            resourceType: contentFolder,
+            mediaType: "background",
+            urlPrefix: `/${backgroundPrefix}`.replace(/\/$/, ""),
+          });
+          data.background = background || storedExternalBackgroundUrl(d) || null;
+          data.externalBackgroundUrl = storedExternalBackgroundUrl(d);
+          if (d.summary) data.summary = resolveSummary(d.summary, locale);
+          return data;
+        }),
+      });
+    });
+
+    app.get(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      let entry;
+      if (useCompanyStorage) {
+        entry = storageLoadItemById(metadataPath, id);
+        if (entry) {
+          upsertCacheEntry(entry);
+        }
+      } else {
+        let list = cache.length ? cache : storageLoadItems(metadataPath);
+        entry = findById(list, id);
+        if (!entry) {
+          updateCache();
+          list = cache;
+          entry = findById(list, id);
+        }
+      }
+      if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const locale = resolveRequestLocale(req, metadataPath);
+      res.json(buildDetailPayload(entry, locale));
+    });
+
+    app.post(`${normalizedRouteBase}/:id/reload`, requireToken, (req, res) => {
+      const id = normalizeId(req.params.id);
+      try {
+        const entry = storageLoadItemById(metadataPath, id);
+        if (!entry) {
+          const idx = findIndexById(cache, id);
+          if (idx !== -1) cache.splice(idx, 1);
+          return res.status(404).json({ error: `${humanName} not found` });
+        }
+        upsertCacheEntry(entry);
+        const locale = resolveRequestLocale(req, metadataPath);
+        res.json({ status: "reloaded", [singleResponseKey]: buildDetailPayload(entry, locale) });
+      } catch (e) {
+        console.error(`Failed to reload ${humanName.toLowerCase()} ${id}:`, e.message);
+        res.status(500).json({ error: `Failed to reload ${humanName.toLowerCase()} metadata` });
+      }
+    });
+
+    if (contentFolder === "developers" || contentFolder === "publishers") {
+      const handleMergeCompanyProfile = async (req, res) => {
+        const id = normalizeId(req.params.id);
+        const bulkProgress = readBulkMetadataProgress(req);
+        const bulkTag = bulkProgress
+          ? `[bulk-metadata-reload ${bulkProgress.phase} ${bulkProgress.step}/${bulkProgress.total}] `
+          : "";
+
+        const logMergeFailure = (message, details = {}) => {
+          console.warn(`${bulkTag}[company-profile-merge] ${message}`, {
+            resource: contentFolder,
+            id,
+            ...details,
+          });
+        };
+
+        if (!hasAnyCompanyMergeFieldInBody(req.body)) {
+          logMergeFailure("missing profile fields in request body");
+          return res.status(400).json({ error: "Missing company profile fields in request body" });
+        }
+
+        try {
+          const remotePatch = buildCompanyMergePatchFromBody(req.body);
+
+          let entry = storageLoadItemById(metadataPath, id);
+          let created = false;
+          let changed = false;
+
+          if (!entry) {
+            const createPatch = {
+              ...remotePatch,
+              title:
+                typeof remotePatch.title === "string" && remotePatch.title.trim()
+                  ? remotePatch.title.trim()
+                  : String(id),
+            };
+            entry = ensureCompanyRoleEntry(metadataPath, contentFolder, id, createPatch);
+            if (!entry) {
+              logMergeFailure("cannot create entry without title");
+              return res.status(400).json({ error: `Cannot create ${humanName} without title` });
+            }
+            created = true;
+            const requestLocale = resolveRequestLocale(req, metadataPath);
+            if (
+              typeof entry.summary === "string"
+              && entry.summary.trim()
+              && !isSummaryLocaleMap(entry.summary)
+            ) {
+              try {
+                entry.summary = await autoTranslateNewCompanySummary(entry.summary, requestLocale);
+                storageSaveItem(metadataPath, entry);
+              } catch (translateErr) {
+                console.warn(
+                  `Auto-translate for new ${humanName.toLowerCase()} ${id} failed:`,
+                  translateErr?.message || translateErr,
+                );
+              }
+            }
+            upsertCacheEntry(entry);
+          } else {
+            const merged = mergeParentCompanyProfiles(entry, remotePatch);
+            changed = companyMergeSnapshot(entry) !== companyMergeSnapshot(merged);
+            if (changed) {
+              entry.title = merged.title;
+              entry.summary = merged.summary;
+              entry.externalCoverUrl = merged.externalCoverUrl;
+              entry.externalBackgroundUrl = merged.externalBackgroundUrl;
+              applyNormalizedCompanyProfileFields(entry, pickCompanyProfileFields(merged));
+              storageSaveItem(metadataPath, entry);
+              upsertCacheEntry(entry);
+            }
+          }
+
+          await linkCompanyRelationsFromRequest(req, id, req.body);
+          updateCache();
+
+          entry = storageLoadItemById(metadataPath, id) || entry;
+
+          const status = created ? "created" : changed ? "merged" : "unchanged";
+          const locale = resolveRequestLocale(req, metadataPath);
+          res.json({
+            status,
+            [singleResponseKey]: buildDetailPayload(entry, locale),
+          });
+        } catch (e) {
+          console.error(
+            `${bulkTag}Failed to merge company profile for ${contentFolder}/${id}:`,
+            e.message,
+          );
+          res.status(500).json({ error: "Failed to merge company profile" });
+        }
+      };
+
+      app.post(`${normalizedRouteBase}/:id/merge-company-profile`, requireToken, handleMergeCompanyProfile);
+    }
 
     app.get(`${normalizedRouteBase}/:id/games`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      let list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      let list = cache.length ? cache : storageLoadItems(metadataPath);
       let entry = findById(list, id);
       if (!entry) {
         updateCache();
@@ -304,6 +618,7 @@ function createCollectionLikeRoutes(config) {
         entry = findById(list, id);
       }
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const locale = resolveRequestLocale(req, metadataPath);
       const games = (entry.games || [])
         .map((gId) => {
           const key = normalizeId(gId);
@@ -322,7 +637,7 @@ function createCollectionLikeRoutes(config) {
           return {
             id: g.id,
             title: g.title,
-            summary: g.summary || "",
+            summary: resolveSummary(g.summary, locale),
             cover: getCoverUrl(g, metadataPath),
             day: g.day,
             month: g.month,
@@ -344,14 +659,14 @@ function createCollectionLikeRoutes(config) {
         return res.status(400).json({ error: "gameIds must be an array" });
       }
       updateCache();
-      const list = cache.length ? cache : loadItems(metadataPath, contentFolder);
+      const list = cache.length ? cache : storageLoadItems(metadataPath);
       const entry = findById(list, id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const currentGameIds = entry.games || [];
       const finalGameIds = computeFinalGameIdsForOrder(currentGameIds, gameIds, allGames);
       entry.games = finalGameIds;
       try {
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
         res.json({ status: "success" });
       } catch (e) {
@@ -360,24 +675,35 @@ function createCollectionLikeRoutes(config) {
       }
     });
 
-    app.put(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
+    app.put(`${normalizedRouteBase}/:id`, requireToken, async (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
+      const locale = resolveRequestLocale(req, metadataPath);
       const { title, summary, showTitle, externalCoverUrl, externalBackgroundUrl, childs } = req.body;
       if (title && typeof title === "string" && title.trim()) {
         entry.title = title.trim();
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (summary !== undefined) {
-        entry.summary = typeof summary === "string" ? summary.trim() : "";
-        saveItem(metadataPath, contentFolder, entry);
+        const trimmed = typeof summary === "string" ? summary.trim() : "";
+        if (!trimmed) {
+          entry.summary = applySummaryEdit(entry.summary, locale, "");
+        } else {
+          try {
+            entry.summary = await retranslateAllSummaryLocales(trimmed, locale);
+          } catch (translateErr) {
+            console.warn(`Summary retranslate on ${humanName.toLowerCase()} edit failed:`, translateErr?.message || translateErr);
+            entry.summary = applySummaryEdit(entry.summary, locale, trimmed);
+          }
+        }
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (showTitle !== undefined) {
         entry.showTitle = showTitle !== false;
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (externalCoverUrl !== undefined) {
@@ -389,7 +715,7 @@ function createCollectionLikeRoutes(config) {
           const t = externalCoverUrl.trim();
           entry.externalCoverUrl = t.length > 0 ? t : null;
         }
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (externalBackgroundUrl !== undefined) {
@@ -401,7 +727,7 @@ function createCollectionLikeRoutes(config) {
           const t = externalBackgroundUrl.trim();
           entry.externalBackgroundUrl = t.length > 0 ? t : null;
         }
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       if (childs !== undefined) {
@@ -420,7 +746,21 @@ function createCollectionLikeRoutes(config) {
           normalizedChilds.push(id);
         }
         entry.childs = normalizedChilds;
-        saveItem(metadataPath, contentFolder, entry);
+        storageSaveItem(metadataPath, entry);
+        updateCache();
+      }
+      if (
+        (contentFolder === "developers" || contentFolder === "publishers") &&
+        hasAnyCompanyProfileFieldInBody(req.body)
+      ) {
+        const raw = extractCompanyProfileFieldsFromBody(req.body);
+        if (raw === null) {
+          applyNormalizedCompanyProfileFields(entry, null);
+        } else {
+          const normalized = normalizeStoredCompanyProfile(raw);
+          applyNormalizedCompanyProfileFields(entry, normalized);
+        }
+        storageSaveItem(metadataPath, entry);
         updateCache();
       }
       const cover = getLocalMediaPath({
@@ -433,7 +773,7 @@ function createCollectionLikeRoutes(config) {
       const responsePayload = {
         id: entry.id,
         title: entry.title,
-        summary: entry.summary || "",
+        summary: resolveSummary(entry.summary, locale),
         showTitle: entry.showTitle !== false,
         childs: Array.isArray(entry.childs) ? entry.childs : [],
         cover: cover || storedExternalCoverUrl(entry) || null,
@@ -448,6 +788,9 @@ function createCollectionLikeRoutes(config) {
       });
       responsePayload.background = background || storedExternalBackgroundUrl(entry) || null;
       responsePayload.externalBackgroundUrl = storedExternalBackgroundUrl(entry);
+      if (contentFolder === "developers" || contentFolder === "publishers") {
+        appendCompanyProfileToPayload(responsePayload, entry);
+      }
       res.json({
         status: "success",
         [singleResponseKey]: responsePayload,
@@ -456,13 +799,13 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const idx = findIndexById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const idx = findIndexById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (idx === -1) return res.status(404).json({ error: `${humanName} not found` });
       const entry = cache[idx];
       if (removeFromAllGamesFn) {
         removeFromAllGamesFn(metadataPath, metadataGamesDir, id, allGames);
       }
-      deleteItem(metadataPath, contentFolder, id);
+      storageDeleteItem(metadataPath, id);
       cache.splice(idx, 1);
       res.json({ status: "success" });
     });
@@ -470,7 +813,9 @@ function createCollectionLikeRoutes(config) {
     app.post(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       const childId = normalizeId(req.params.childId);
-      const added = addChildToItem(metadataPath, contentFolder, id, childId);
+      const added = useCompanyStorage
+        ? addChildToRoleItem(metadataPath, contentFolder, id, childId)
+        : addChildToItem(metadataPath, contentFolder, id, childId);
       if (!added) {
         return res.status(404).json({ error: `${humanName} parent or child not found, or child already linked` });
       }
@@ -481,7 +826,9 @@ function createCollectionLikeRoutes(config) {
     app.delete(`${normalizedRouteBase}/:id/childs/:childId`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
       const childId = normalizeId(req.params.childId);
-      const removed = removeChildFromItem(metadataPath, contentFolder, id, childId);
+      const removed = useCompanyStorage
+        ? removeChildFromRoleItem(metadataPath, contentFolder, id, childId)
+        : removeChildFromItem(metadataPath, contentFolder, id, childId);
       if (!removed) {
         return res.status(404).json({ error: `${humanName} parent or child link not found` });
       }
@@ -491,13 +838,13 @@ function createCollectionLikeRoutes(config) {
 
     app.post(`${normalizedRouteBase}/:id/upload-cover`, requireToken, upload.single("file"), (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const file = req.file;
       if (!file || !file.mimetype.startsWith("image/")) {
         return res.status(400).json({ error: "No image file provided" });
       }
-      const dir = path.join(metadataPath, "content", contentFolder, String(id));
+      const dir = getItemContentDir(metadataPath, id);
       ensureDirectoryExists(dir);
       fs.writeFileSync(path.join(dir, "cover.webp"), file.buffer);
       updateCache();
@@ -520,7 +867,7 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id/delete-cover`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       try {
         deleteMediaFile({
@@ -555,13 +902,13 @@ function createCollectionLikeRoutes(config) {
 
     app.post(`${normalizedRouteBase}/:id/upload-background`, requireToken, upload.single("file"), (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       const file = req.file;
       if (!file || !file.mimetype.startsWith("image/")) {
         return res.status(400).json({ error: "No image file provided" });
       }
-      const dir = path.join(metadataPath, "content", contentFolder, String(id));
+      const dir = getItemContentDir(metadataPath, id);
       ensureDirectoryExists(dir);
       fs.writeFileSync(path.join(dir, "background.webp"), file.buffer);
       updateCache();
@@ -584,7 +931,7 @@ function createCollectionLikeRoutes(config) {
 
     app.delete(`${normalizedRouteBase}/:id/delete-background`, requireToken, (req, res) => {
       const id = normalizeId(req.params.id);
-      const entry = findById(cache.length ? cache : loadItems(metadataPath, contentFolder), id);
+      const entry = findById(cache.length ? cache : storageLoadItems(metadataPath), id);
       if (!entry) return res.status(404).json({ error: `${humanName} not found` });
       try {
         deleteMediaFile({
@@ -619,7 +966,7 @@ function createCollectionLikeRoutes(config) {
 
     return {
       reload: () => {
-        cache = loadItems(metadataPath, contentFolder);
+        cache = storageLoadItems(metadataPath);
         return cache;
       },
       getCache: () => cache,
@@ -628,7 +975,7 @@ function createCollectionLikeRoutes(config) {
   }
 
   return {
-    loadItems: (p) => loadItems(p, contentFolder),
+    loadItems: (p) => storageLoadItems(p),
     ensureBatch,
     removeGameFrom,
     removeGameFromAll: removeGameFromAllFunc,

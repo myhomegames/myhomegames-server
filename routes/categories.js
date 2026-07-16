@@ -15,6 +15,7 @@ module.exports = {
   ensureCategoryExists: routes.ensureTagExists,
   ensureCategoriesExistBatch: routes.ensureTagsExist,
   deleteCategoryIfUnused: routes.deleteTagIfUnused,
+  deleteCategoriesIfUnusedBatch: routes.deleteTagsIfUnusedBatch,
   registerCategoriesRoutes: routes.registerTagRoutes,
   resolveCategoryIdsToObjects: routes.resolveTagIdsToObjects,
   normalizeCategoryFieldToIds: routes.normalizeTagFieldToIds,

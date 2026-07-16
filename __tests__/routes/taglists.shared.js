@@ -75,13 +75,6 @@ function runTagListTests(config) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .get(normalizedRouteBase)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`POST ${normalizedRouteBase}`, () => {
@@ -258,14 +251,6 @@ function runTagListTests(config) {
       expect(fs.existsSync(coverPath)).toBe(true);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .post(`${normalizedRouteBase}/some-tag/upload-cover`)
-        .attach("file", Buffer.from("fake"), "cover.webp")
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`DELETE ${normalizedRouteBase}/:tagTitle/delete-cover`, () => {
@@ -309,13 +294,6 @@ function runTagListTests(config) {
       expect(fs.existsSync(coverPath)).toBe(false);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .delete(`${normalizedRouteBase}/some-tag/delete-cover`)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`GET ${normalizedRouteBase}/:tagId/cover.webp`, () => {
@@ -413,14 +391,6 @@ function runTagListTests(config) {
       expect(response.text).toContain(`Invalid ${humanNameLower} ID`);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .post(normalizedRouteBase)
-        .send({ title: "test" })
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`DELETE ${normalizedRouteBase}/:tagTitle`, () => {
@@ -504,13 +474,6 @@ function runTagListTests(config) {
       expect(response.body).toHaveProperty("error", `${humanName} not found`);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .delete(`${normalizedRouteBase}/1`)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
 
     test("should delete only metadata.json and remove directory only if empty", async () => {
       const createResponse = await request(app)

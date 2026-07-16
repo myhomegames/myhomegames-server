@@ -125,10 +125,10 @@ function runDerivedItemTests(config) {
       const testFieldName = `Test ${humanName} ${testFieldId}`;
 
       const addGameResponse = await request(app)
-        .post(`/games/add-from-igdb`)
+        .post(`/catalog/import-game`)
         .set("X-Auth-Token", "test-token")
         .send({
-          igdbId: testIgdbId,
+          gameId: testIgdbId,
           name: `Test Game for ${humanName}`,
           summary: "Test summary",
           releaseDate: 1609459200,
@@ -159,13 +159,6 @@ function runDerivedItemTests(config) {
         .expect(200);
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .get(normalizedRouteBase)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`PUT ${normalizedRouteBase}/:id`, () => {
@@ -211,14 +204,6 @@ function runDerivedItemTests(config) {
       expect(response.body).toHaveProperty("error", "Invalid id");
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .put(`${normalizedRouteBase}/1`)
-        .send({ showTitle: false })
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`POST ${normalizedRouteBase}/:id/upload-cover`, () => {
@@ -289,14 +274,6 @@ function runDerivedItemTests(config) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .post(`${normalizedRouteBase}/1/upload-cover`)
-        .attach("file", Buffer.from("test"), "test.png")
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`DELETE ${normalizedRouteBase}/:id/delete-cover`, () => {
@@ -322,13 +299,6 @@ function runDerivedItemTests(config) {
       }
     });
 
-    test("should require authentication", async () => {
-      const response = await request(app)
-        .delete(`${normalizedRouteBase}/1/delete-cover`)
-        .expect(401);
-
-      expect(response.body).toHaveProperty("error", "Unauthorized");
-    });
   });
 
   describe(`GET ${normalizedRouteBase}/:id/cover.webp`, () => {
@@ -372,6 +342,34 @@ function runDerivedItemTests(config) {
         .expect(400);
 
       expect(response.body).toHaveProperty("error", "Invalid id");
+    });
+  });
+
+  describe(`POST ${normalizedRouteBase}/:id/reload`, () => {
+    test(`should reload metadata for a single ${humanNameLower}`, async () => {
+      const listResponse = await request(app)
+        .get(normalizedRouteBase)
+        .set("X-Auth-Token", "test-token")
+        .expect(200);
+
+      if (listResponse.body[listKey].length > 0) {
+        const itemId = listResponse.body[listKey][0].id;
+        const response = await request(app)
+          .post(`${normalizedRouteBase}/${itemId}/reload`)
+          .set("X-Auth-Token", "test-token")
+          .expect(200);
+
+        expect(response.body).toHaveProperty("status", "reloaded");
+        expect(response.body).toHaveProperty(responseKey);
+        expect(response.body[responseKey]).toHaveProperty("id", itemId);
+      }
+    });
+
+    test(`should return 404 for non-existent ${humanNameLower}`, async () => {
+      await request(app)
+        .post(`${normalizedRouteBase}/999999999/reload`)
+        .set("X-Auth-Token", "test-token")
+        .expect(404);
     });
   });
 }

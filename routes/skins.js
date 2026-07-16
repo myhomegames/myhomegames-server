@@ -115,6 +115,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   fixedFocalStepSound: false,
   autoShowBackgroundOnSelection: false,
   disableTitleTooltips: false,
+  collapsibleLibrarySidebar: false,
 });
 
 const SKIN_WEB_KEYS = Object.freeze(Object.keys(DEFAULT_SKIN_WEB_MANIFEST));
@@ -144,6 +145,7 @@ function extractWebManifest(meta) {
   out.fixedFocalStepSound = w.fixedFocalStepSound === true;
   out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
   out.disableTitleTooltips = w.disableTitleTooltips === true;
+  out.collapsibleLibrarySidebar = w.collapsibleLibrarySidebar === true;
 
   if (out.verticalCoverAlignment && !("autoShowBackgroundOnSelection" in w)) {
     out.autoShowBackgroundOnSelection = true;
@@ -204,7 +206,7 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     limits: { fileSize: MAX_ZIP_BYTES },
   });
 
-  /** Public read: theme CSS must load on /login before the user has a token (Twitch-on). */
+  /** Public read: theme CSS must load before any API token is available. */
   app.get("/skins", (req, res) => {
     try {
       const dir = root();
@@ -219,9 +221,12 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
         const meta = readJsonFile(path.join(skinDir, "skin.json"), null);
         const name =
           meta && typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : ent.name;
+        const version =
+          meta && typeof meta.version === "string" && meta.version.trim() ? meta.version.trim() : undefined;
         skins.push({
           id: ent.name,
           name,
+          version,
           snapshotUrl: `/skins/${encodeURIComponent(ent.name)}/snapshot`,
           web: extractWebManifest(meta),
         });
