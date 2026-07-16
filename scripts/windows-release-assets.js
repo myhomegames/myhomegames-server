@@ -24,17 +24,32 @@ function getServerInfoJson() {
 }
 
 function findWinExe() {
-  const names = ["myhomegames-server-win-x64.exe", "myhomegames-server-node18-win-x64.exe"];
+  // Multi-target pkg: *-win-x64.exe; single-target pkg: myhomegames-server.exe
+  const names = [
+    "myhomegames-server-win-x64.exe",
+    "myhomegames-server-node18-win-x64.exe",
+    "myhomegames-server.exe",
+  ];
   return names.find((n) => fs.existsSync(path.join(BUILD_DIR, n)));
 }
 
 /** Build only the Windows executable with pkg (no macOS/linux targets). */
 function runPkgWindowsOnly() {
   fs.mkdirSync(BUILD_DIR, { recursive: true });
-  execSync("npx pkg . --targets node18-win-x64 --output-path build", {
+  // Use -o with an explicit path: --output-path is not a pkg flag (--out-path is).
+  // Single-target builds otherwise land as myhomegames-server.exe without -win-x64.
+  execSync('npx pkg . --targets node18-win-x64 -o build/myhomegames-server-win-x64.exe', {
     cwd: ROOT,
     stdio: "inherit",
   });
+  if (!findWinExe()) {
+    const listing = fs.existsSync(BUILD_DIR)
+      ? fs.readdirSync(BUILD_DIR).join(", ") || "(empty)"
+      : "(missing)";
+    throw new Error(
+      `pkg finished but no Windows server exe found in build/. Contents: ${listing}`,
+    );
+  }
 }
 
 const TRAY_PS1_DEST = "MyHomeGames-Server-Tray.ps1";
@@ -49,8 +64,11 @@ const UNIFIED_PAYLOAD_DIR = path.join(UNIFIED_EXE_DIR, "payload");
 function populateUnifiedPayload() {
   const winExe = findWinExe();
   if (!winExe) {
+    const listing = fs.existsSync(BUILD_DIR)
+      ? fs.readdirSync(BUILD_DIR).join(", ") || "(empty)"
+      : "(missing)";
     throw new Error(
-      "Windows server exe not found in build/. Run pkg first (e.g. npm run build:win-unified)."
+      `Windows server exe not found in build/. Run pkg first (e.g. npm run build:win-unified). Contents: ${listing}`,
     );
   }
   fs.mkdirSync(UNIFIED_PAYLOAD_DIR, { recursive: true });
@@ -65,7 +83,7 @@ function populateUnifiedPayload() {
       }
     } catch (_) {}
   }
-  fs.copyFileSync(path.join(BUILD_DIR, winExe), path.join(UNIFIED_PAYLOAD_DIR, winExe));
+  fs.copyFileSync(path.join(BUILD_DIR, winExe), path.join(UNIFIED_PAYLOAD_DIR, "myhomegames-server-win-x64.exe"));
   const trayPs1Src = path.join(__dirname, "windows-tray-launcher.ps1");
   if (!fs.existsSync(trayPs1Src)) {
     throw new Error("Missing scripts/windows-tray-launcher.ps1");

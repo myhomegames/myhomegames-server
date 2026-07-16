@@ -63,7 +63,8 @@ function Read-DotEnv([string]$path) {
 
 $exeNames = @(
   "myhomegames-server-win-x64.exe",
-  "myhomegames-server-node18-win-x64.exe"
+  "myhomegames-server-node18-win-x64.exe",
+  "myhomegames-server.exe"
 )
 $serverExe = $null
 foreach ($n in $exeNames) {

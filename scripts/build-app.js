@@ -27,7 +27,7 @@ console.log('Building macOS app bundle...');
 // Step 1: Build all executables with pkg in one run (bytecode enabled)
 console.log('Step 1: Creating executables (macOS x64, macOS arm64, Linux, Windows)...');
 try {
-  execSync('npx pkg . --targets node18-macos-x64,node18-macos-arm64,node18-linux-x64,node18-win-x64 --output-path build', {
+  execSync('npx pkg . --targets node18-macos-x64,node18-macos-arm64,node18-linux-x64,node18-win-x64 --out-path build', {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit'
   });
