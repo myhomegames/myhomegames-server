@@ -18,9 +18,12 @@ describe("googleTranslate", () => {
     ).toBe("sotto di loro. Il sergente Marcus Fenix guida la Squadra Delta.");
   });
 
-  it("strips zero-width spaces and preserves decimals", () => {
+  it("strips zero-width spaces and preserves decimals and initials", () => {
     expect(normalizeTranslatedText("Fenix\u200b\u200b guida")).toBe("Fenix guida");
     expect(normalizeTranslatedText("Version 3.14 is fine")).toBe("Version 3.14 is fine");
+    expect(normalizeTranslatedText("Another J.R.R. Tolkien based game")).toBe(
+      "Another J.R.R. Tolkien based game",
+    );
   });
 
   it("translates English to Italian", async () => {

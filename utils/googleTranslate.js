@@ -12,7 +12,8 @@ function parseGoogleTranslateResponse(data) {
 /**
  * Clean MT output: drop zero-width chars and ensure a space after sentence
  * punctuation when Google returns adjacent segments like "…loro.Il sergente…".
- * Does not touch decimals (digit after ".").
+ * Requires a lowercase letter before the punctuation so abbreviations like
+ * "J.R.R." / "D.C." stay intact. Decimals (digit after ".") are untouched.
  *
  * @param {string} text
  * @returns {string}
@@ -21,7 +22,7 @@ function normalizeTranslatedText(text) {
   if (!text || typeof text !== "string") return text;
   return text
     .replace(/[\u200B\u200C\u200D\uFEFF]/g, "")
-    .replace(/([.!?…])(?=\p{L})/gu, "$1 ")
+    .replace(/(?<=\p{Ll})([.!?…])(?=\p{L})/gu, "$1 ")
     .replace(/[ \t]{2,}/g, " ");
 }
 
