@@ -12,12 +12,17 @@ describe("streaming settings", () => {
     expect(normalizeMoonlightWebUrl("ftp://bad")).toBe("");
   });
 
-  it("requires URL for effective remote streaming", () => {
+  it("defaults remote streaming on with managed Moonlight URL", () => {
     const settings = readStreamingSettings({
-      remoteStreamingEnabled: true,
       moonlightWebUrl: "",
     });
-    expect(settings.remoteStreamingEnabled).toBe(false);
+    expect(settings.remoteStreamingEnabled).toBe(true);
+    expect(settings.moonlightWebUrl).toBe("http://127.0.0.1:8080");
+    const disabled = readStreamingSettings({
+      remoteStreamingEnabled: false,
+      moonlightWebUrl: "https://stream.example.com",
+    });
+    expect(disabled.remoteStreamingEnabled).toBe(false);
     const ready = readStreamingSettings({
       remoteStreamingEnabled: true,
       moonlightWebUrl: "https://stream.example.com",

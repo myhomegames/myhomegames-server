@@ -1,11 +1,25 @@
 const { launchGame } = require("../utils/gameLauncher");
-const { readStreamingSettings, probeSunshineReachable } = require("../utils/streaming");
+const {
+  readStreamingSettings,
+  probeSunshineReachable,
+  probeMoonlightWebReachable,
+  defaultManagedMoonlightWebUrl,
+} = require("../utils/streaming");
 const {
   findSunshineExecutable,
   readInstallManifest,
   resolveSunshineInstallDir,
 } = require("../utils/sunshineBinary");
+const {
+  findMoonlightWebExecutable,
+  readInstallManifest: readMoonlightWebManifest,
+  resolveMoonlightWebInstallDir,
+} = require("../utils/moonlightWebBinary");
 const { isSunshineEnabled } = require("../utils/sunshineService");
+const { isMoonlightWebEnabled, resolveMoonlightWebPort } = require("../utils/moonlightWebService");
+const { listMoonlightHosts, hostLooksPaired } = require("../utils/moonlightWebPairing");
+const { resolveMoonlightDesktopStreamUrl } = require("../utils/moonlightWebEmbed");
+const { ensureMoonlightWebAdminCredentials } = require("../utils/moonlightWebCredentials");
 
 /**
  * @param {import('express').Express} app
@@ -20,9 +34,15 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const settings = readSettings();
       const streaming = readStreamingSettings(settings);
       const sunshineReachable = await probeSunshineReachable(streaming);
+      const moonlightProbeUrl =
+        streaming.moonlightWebUrl || defaultManagedMoonlightWebUrl(resolveMoonlightWebPort());
+      const moonlightWebReachable = await probeMoonlightWebReachable(moonlightProbeUrl);
       const installDir = resolveSunshineInstallDir(metadataPath);
       const manifest = readInstallManifest(installDir);
       const executable = findSunshineExecutable(installDir);
+      const moonlightInstallDir = resolveMoonlightWebInstallDir(metadataPath);
+      const moonlightManifest = readMoonlightWebManifest(moonlightInstallDir);
+      const moonlightExecutable = findMoonlightWebExecutable(moonlightInstallDir);
       res.json({
         remoteStreamingEnabled: streaming.remoteStreamingEnabled,
         moonlightWebUrl: streaming.moonlightWebUrl,
@@ -30,7 +50,16 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         sunshineEnabled: isSunshineEnabled(),
         sunshineInstalled: Boolean(executable),
         sunshineVersion: manifest?.version || null,
-        ready: streaming.remoteStreamingEnabled && sunshineReachable && !!streaming.moonlightWebUrl,
+        moonlightWebEnabled: isMoonlightWebEnabled(),
+        moonlightWebReachable,
+        moonlightWebInstalled: Boolean(moonlightExecutable) || moonlightManifest?.kind === "docker",
+        moonlightWebVersion: moonlightManifest?.version || null,
+        moonlightWebKind: moonlightManifest?.kind || null,
+        ready:
+          streaming.remoteStreamingEnabled &&
+          sunshineReachable &&
+          !!streaming.moonlightWebUrl &&
+          moonlightWebReachable,
       });
     } catch (err) {
       console.error("GET /streaming/status failed:", err?.message || err);
@@ -65,9 +94,39 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const launched = await launchGame(getAllGames(), metadataPath, gameId, executableName);
       const sunshineReachable = await probeSunshineReachable(streaming);
 
+      let moonlightWebUrl = streaming.moonlightWebUrl;
+      let moonlightStream = null;
+      try {
+        let cookie = "";
+        try {
+          const auth = await ensureMoonlightWebAdminCredentials(streaming.moonlightWebUrl);
+          cookie = auth.cookie || "";
+        } catch {
+          // default_user_id may allow unauthenticated API access
+        }
+        const hosts = await listMoonlightHosts(streaming.moonlightWebUrl, cookie);
+        const host =
+          hosts.find((item) => hostLooksPaired(item)) ||
+          hosts[0] ||
+          null;
+        if (host?.host_id != null) {
+          moonlightStream = await resolveMoonlightDesktopStreamUrl({
+            baseUrl: streaming.moonlightWebUrl,
+            cookie,
+            hostId: host.host_id,
+          });
+          moonlightWebUrl = moonlightStream.url;
+        }
+      } catch (error) {
+        console.warn(
+          `Could not resolve Moonlight Desktop stream URL: ${error.message || error}`,
+        );
+      }
+
       res.json({
         ...launched,
-        moonlightWebUrl: streaming.moonlightWebUrl,
+        moonlightWebUrl,
+        moonlightStream,
         sunshineReachable,
       });
     } catch (err) {

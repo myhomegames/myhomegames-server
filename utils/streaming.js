@@ -6,6 +6,7 @@ const http = require("http");
 const DEFAULT_SUNSHINE_HOST = "127.0.0.1";
 const DEFAULT_SUNSHINE_HTTPS_PORT = 47990;
 const DEFAULT_SUNSHINE_HTTP_PORT = 47989;
+const DEFAULT_MOONLIGHT_WEB_PORT = 8080;
 
 function normalizeMoonlightWebUrl(value) {
   const trimmed = String(value || "").trim();
@@ -19,12 +20,20 @@ function normalizeMoonlightWebUrl(value) {
   }
 }
 
+function defaultManagedMoonlightWebUrl(port = DEFAULT_MOONLIGHT_WEB_PORT) {
+  const safePort = Number(port) > 0 ? Number(port) : DEFAULT_MOONLIGHT_WEB_PORT;
+  return `http://127.0.0.1:${safePort}`;
+}
+
 function readStreamingSettings(settings) {
   const fromEnv = normalizeMoonlightWebUrl(process.env.MOONLIGHT_WEB_URL || "");
   const fromSettings = normalizeMoonlightWebUrl(settings?.moonlightWebUrl || "");
-  const moonlightWebUrl = fromSettings || fromEnv;
-  const remoteStreamingEnabled =
-    settings?.remoteStreamingEnabled === true && moonlightWebUrl.length > 0;
+  // Default URL so remote streaming can be on before the user fills settings.
+  const moonlightWebUrl =
+    fromSettings || fromEnv || defaultManagedMoonlightWebUrl();
+  // Default on unless explicitly disabled in settings.
+  const flagEnabled = settings?.remoteStreamingEnabled !== false;
+  const remoteStreamingEnabled = flagEnabled && moonlightWebUrl.length > 0;
 
   const sunshineHost = String(process.env.SUNSHINE_HOST || DEFAULT_SUNSHINE_HOST).trim() || DEFAULT_SUNSHINE_HOST;
   const sunshineHttpsPort = Number(process.env.SUNSHINE_HTTPS_PORT || DEFAULT_SUNSHINE_HTTPS_PORT);
@@ -82,6 +91,28 @@ async function probeSunshineReachable(streamingSettings) {
   });
 }
 
+async function probeMoonlightWebReachable(urlOrSettings) {
+  const raw =
+    typeof urlOrSettings === "string"
+      ? urlOrSettings
+      : urlOrSettings?.moonlightWebUrl || defaultManagedMoonlightWebUrl();
+  const normalized = normalizeMoonlightWebUrl(raw);
+  if (!normalized) return false;
+
+  try {
+    const url = new URL(normalized);
+    const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+    return probeHttpEndpoint({
+      protocol: url.protocol,
+      host: url.hostname,
+      port,
+      path: url.pathname && url.pathname !== "/" ? url.pathname : "/",
+    });
+  } catch {
+    return false;
+  }
+}
+
 function validateStreamingSettingsPatch(patch) {
   const next = {};
   if (Object.prototype.hasOwnProperty.call(patch, "remoteStreamingEnabled")) {
@@ -100,6 +131,9 @@ function validateStreamingSettingsPatch(patch) {
 module.exports = {
   readStreamingSettings,
   probeSunshineReachable,
+  probeMoonlightWebReachable,
   normalizeMoonlightWebUrl,
   validateStreamingSettingsPatch,
+  defaultManagedMoonlightWebUrl,
+  DEFAULT_MOONLIGHT_WEB_PORT,
 };

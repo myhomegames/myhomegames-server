@@ -772,7 +772,7 @@ function readSettings() {
     twitchApiEnabled: false,
     activeSkinId: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
-    remoteStreamingEnabled: false,
+    remoteStreamingEnabled: true,
     moonlightWebUrl: "",
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
@@ -1007,6 +1007,7 @@ const {
   stopCloudflareTunnel,
 } = require("./utils/cloudflareTunnel");
 const { ensureSunshineRunning, stopManagedSunshine } = require("./utils/sunshineService");
+const { ensureMoonlightWebRunning, stopManagedMoonlightWeb } = require("./utils/moonlightWebService");
 
 // Store server references for graceful shutdown
 let httpServer = null;
@@ -1043,6 +1044,7 @@ function closeHttpServersAndExit() {
 function gracefulShutdown(signal) {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
   stopManagedSunshine();
+  stopManagedMoonlightWeb();
 
   if (cloudflareTunnel) {
     stopCloudflareTunnel(cloudflareTunnel);
@@ -1098,8 +1100,24 @@ async function maybeStartSunshine() {
   }
 }
 
+async function maybeStartMoonlightWeb() {
+  try {
+    await ensureMoonlightWebRunning({
+      metadataPath: METADATA_PATH,
+      readSettings,
+      writeSettings,
+    });
+  } catch (error) {
+    console.error("Failed to ensure Moonlight Web:", error.message || error);
+    if (process.env.MOONLIGHT_WEB_STRICT === "true") {
+      process.exit(1);
+    }
+  }
+}
+
 async function onServerListening(localOrigin) {
   await maybeStartSunshine();
+  await maybeStartMoonlightWeb();
   await maybeStartCloudflareTunnel(localOrigin);
 }
 
