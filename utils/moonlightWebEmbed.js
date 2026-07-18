@@ -169,4 +169,7 @@ module.exports = {
   listMoonlightApps,
   pickDesktopApp,
   listMoonlightUsers,
+  readDockerMoonlightConfig,
+  writeDockerMoonlightConfig,
+  restartDockerMoonlight,
 };

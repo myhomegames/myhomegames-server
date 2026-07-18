@@ -520,8 +520,31 @@ authRoutes.registerAuthRoutes(app, METADATA_PATH);
 
 function applyTunnelPublicUrl(publicUrl) {
   const normalized = String(publicUrl || "").trim().replace(/\/$/, "");
-  if (normalized) {
-    process.env.API_BASE = normalized;
+  if (!normalized) return;
+  process.env.API_BASE = normalized;
+
+  // Public Moonlight Web host for browser-only remote play (same tunnel, second hostname).
+  try {
+    const { moonlightWebPublicUrlFromApiBase } = require("./utils/tunnelHostname");
+    const moonlightPublic = moonlightWebPublicUrlFromApiBase(normalized);
+    if (!moonlightPublic) return;
+    const settings = readSettings() || {};
+    if (
+      settings.moonlightWebUrl === moonlightPublic &&
+      settings.remoteStreamingEnabled === true
+    ) {
+      return;
+    }
+    writeSettings({
+      ...settings,
+      moonlightWebUrl: moonlightPublic,
+      remoteStreamingEnabled: true,
+    });
+    console.log(`Remote streaming URL set from tunnel (${moonlightPublic})`);
+  } catch (error) {
+    console.warn(
+      `Could not set Moonlight Web public URL from tunnel: ${error?.message || error}`,
+    );
   }
 }
 

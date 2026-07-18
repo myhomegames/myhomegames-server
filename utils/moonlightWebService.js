@@ -18,6 +18,12 @@ const {
 const { ensureMoonlightWebAdminCredentials } = require("./moonlightWebCredentials");
 const { ensureMoonlightWebSunshinePairing } = require("./moonlightWebPairing");
 const { ensureMoonlightWebDefaultUser } = require("./moonlightWebEmbed");
+const {
+  writeMoonlightIceServerScript,
+  ensureMoonlightCloudflareTurnIce,
+  resolveIceScriptHostPath,
+} = require("./moonlightWebTurn");
+const { moonlightWebPublicUrlFromApiBase } = require("./tunnelHostname");
 
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 
@@ -126,6 +132,9 @@ function startDockerMoonlightWeb({ image, installDir, port, env = process.env })
 
   const lanIp = env.WEBRTC_NAT_1TO1_HOST?.trim() || resolveLanIpHint();
   const udpRange = env.MOONLIGHT_WEB_UDP_RANGE?.trim() || "40000-40100";
+  const httpPort = Number(env.HTTP_PORT || 4000) || 4000;
+  writeMoonlightIceServerScript(installDir, { httpPort });
+  const iceScriptHostPath = resolveIceScriptHostPath(installDir);
   const args = [
     "run",
     "-d",
@@ -141,6 +150,8 @@ function startDockerMoonlightWeb({ image, installDir, port, env = process.env })
     `WEBRTC_NAT_1TO1_HOST=${lanIp}`,
     "-v",
     `${dataDir}:/data`,
+    "-v",
+    `${iceScriptHostPath}:/moonlight-web/server/ice_servers_cf.sh:ro`,
     image,
   ];
 
@@ -189,15 +200,19 @@ async function waitForMoonlightWeb(url, timeoutMs = 120_000) {
 /**
  * Persist URL + enable remote streaming so the user does not need settings UI.
  */
-function persistManagedStreamingSettings({ readSettings, writeSettings, url }) {
+function persistManagedStreamingSettings({ readSettings, writeSettings, url, forceUrl = false }) {
   if (typeof readSettings !== "function" || typeof writeSettings !== "function" || !url) {
     return;
   }
   try {
     const settings = readSettings() || {};
+    const current = String(settings.moonlightWebUrl || "").trim();
+    const nextUrl = forceUrl
+      ? url
+      : current || url;
     const next = {
       ...settings,
-      moonlightWebUrl: String(settings.moonlightWebUrl || "").trim() || url,
+      moonlightWebUrl: nextUrl,
       remoteStreamingEnabled: true,
     };
     const changed =
@@ -211,7 +226,7 @@ function persistManagedStreamingSettings({ readSettings, writeSettings, url }) {
   }
 }
 
-async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = process.env } = {}) {
+async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = process.env, installDir = null } = {}) {
   try {
     const auth = await ensureMoonlightWebAdminCredentials(url, env);
     const effectiveKind = kind || managedKind;
@@ -228,12 +243,25 @@ async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = proce
         if (!ready) {
           console.warn("Moonlight Web did not become ready after default_user_id restart.");
         }
-        // Re-login after restart so pairing uses a fresh session cookie.
         const refreshed = await ensureMoonlightWebAdminCredentials(url, env);
         auth.cookie = refreshed.cookie;
       }
     } catch (error) {
       console.warn(`Could not configure Moonlight Web default user: ${error.message || error}`);
+    }
+    try {
+      const httpPort = Number(env.HTTP_PORT || 4000) || 4000;
+      const turn = await ensureMoonlightCloudflareTurnIce({
+        installDir,
+        kind: effectiveKind,
+        httpPort,
+        env,
+      });
+      if (turn.restarted) {
+        await waitForMoonlightWeb(url, 120_000);
+      }
+    } catch (error) {
+      console.warn(`Could not configure Cloudflare TURN for Moonlight Web: ${error.message || error}`);
     }
     try {
       await ensureMoonlightWebSunshinePairing({
@@ -265,15 +293,27 @@ async function ensureMoonlightWebRunning({
   const streaming = readStreamingSettings(settings);
   const port = resolveMoonlightWebPort(env);
   const managedUrl = defaultManagedMoonlightWebUrl(port);
-  const probeUrl = streaming.moonlightWebUrl || managedUrl;
+  const publicFromTunnel = moonlightWebPublicUrlFromApiBase(env.API_BASE || "");
+  const preferredUrl = publicFromTunnel || streaming.moonlightWebUrl || managedUrl;
+  const installDir = resolveMoonlightWebInstallDir(metadataPath);
 
-  if (await probeMoonlightWebReachable(probeUrl)) {
+  if (await probeMoonlightWebReachable(preferredUrl) || await probeMoonlightWebReachable(managedUrl)) {
     manageLifecycle = true;
-    managedKind = readInstallManifest(resolveMoonlightWebInstallDir(metadataPath))?.kind || null;
+    managedKind = readInstallManifest(installDir)?.kind || null;
     console.log("Moonlight Web is already reachable.");
-    persistManagedStreamingSettings({ readSettings, writeSettings, url: probeUrl });
-    await bootstrapMoonlightWebAdminAndPair(probeUrl, { kind: managedKind, env });
-    return { started: false, reason: "already-running", url: probeUrl };
+    const persistUrl = publicFromTunnel || streaming.moonlightWebUrl || managedUrl;
+    persistManagedStreamingSettings({
+      readSettings,
+      writeSettings,
+      url: persistUrl,
+      forceUrl: Boolean(publicFromTunnel),
+    });
+    await bootstrapMoonlightWebAdminAndPair(managedUrl, {
+      kind: managedKind,
+      env,
+      installDir,
+    });
+    return { started: false, reason: "already-running", url: persistUrl };
   }
 
   const installed = await ensureMoonlightWebBinary({ metadataPath, env });
@@ -293,19 +333,29 @@ async function ensureMoonlightWebRunning({
   }
 
   const ready = await waitForMoonlightWeb(managedUrl);
-  persistManagedStreamingSettings({ readSettings, writeSettings, url: managedUrl });
+  const persistUrl = publicFromTunnel || managedUrl;
+  persistManagedStreamingSettings({
+    readSettings,
+    writeSettings,
+    url: persistUrl,
+    forceUrl: Boolean(publicFromTunnel),
+  });
 
   if (ready) {
-    await bootstrapMoonlightWebAdminAndPair(managedUrl, { kind: installed.kind, env });
+    await bootstrapMoonlightWebAdminAndPair(managedUrl, {
+      kind: installed.kind,
+      env,
+      installDir: installed.installDir,
+    });
     console.log(`Moonlight Web is ready at ${managedUrl}`);
-    return { started: true, url: managedUrl, kind: installed.kind, ready: true };
+    return { started: true, url: persistUrl, kind: installed.kind, ready: true };
   }
 
   console.warn(
     `Moonlight Web was started but is not responding yet at ${managedUrl}. ` +
       "If using Docker, confirm Docker Desktop is running.",
   );
-  return { started: true, url: managedUrl, kind: installed.kind, ready: false };
+  return { started: true, url: persistUrl, kind: installed.kind, ready: false };
 }
 
 function stopManagedMoonlightWeb() {

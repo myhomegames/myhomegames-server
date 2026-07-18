@@ -20,6 +20,10 @@ const { isMoonlightWebEnabled, resolveMoonlightWebPort } = require("../utils/moo
 const { listMoonlightHosts, hostLooksPaired } = require("../utils/moonlightWebPairing");
 const { resolveMoonlightDesktopStreamUrl } = require("../utils/moonlightWebEmbed");
 const { ensureMoonlightWebAdminCredentials } = require("../utils/moonlightWebCredentials");
+const {
+  isCloudflareTurnConfigured,
+  generateCloudflareTurnIceServers,
+} = require("../utils/cloudflareTurn");
 
 /**
  * @param {import('express').Express} app
@@ -136,6 +140,29 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       console.error("POST /streaming/launch failed:", err?.message || err);
       res.status(500).json({
         error: "Launch failed",
+        detail: err?.message || "Unknown error",
+      });
+    }
+  });
+
+  /**
+   * Short-lived Cloudflare Realtime TURN ICE servers for Moonlight Web (ice_server_script).
+   * Called from inside the Moonlight container via host.docker.internal.
+   */
+  app.get("/streaming/turn-ice-servers", optionalToken, async (req, res) => {
+    try {
+      if (!isCloudflareTurnConfigured()) {
+        return res.status(503).json({
+          error: "Cloudflare TURN is not configured",
+          detail: "Set CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN on the server.",
+        });
+      }
+      const { iceServers } = await generateCloudflareTurnIceServers();
+      res.json(iceServers);
+    } catch (err) {
+      console.error("GET /streaming/turn-ice-servers failed:", err?.message || err);
+      res.status(502).json({
+        error: "TURN credential generation failed",
         detail: err?.message || "Unknown error",
       });
     }
