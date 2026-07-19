@@ -147,14 +147,14 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
 
   /**
    * Short-lived Cloudflare Realtime TURN ICE servers for Moonlight Web (ice_server_script).
-   * Called from inside the Moonlight container via host.docker.internal.
+   * Proxies to the tunnel manager Worker (TURN long-term secrets stay on Cloudflare).
    */
   app.get("/streaming/turn-ice-servers", optionalToken, async (req, res) => {
     try {
       if (!isCloudflareTurnConfigured()) {
         return res.status(503).json({
-          error: "Cloudflare TURN is not configured",
-          detail: "Set CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN on the server.",
+          error: "Cloudflare TURN is disabled",
+          detail: "Set CLOUDFLARE_TURN_ENABLED=true (default) to mint ICE via the tunnel manager.",
         });
       }
       const { iceServers } = await generateCloudflareTurnIceServers();

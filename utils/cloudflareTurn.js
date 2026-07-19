@@ -1,12 +1,27 @@
 "use strict";
 
 const DEFAULT_TURN_TTL_SECONDS = 86_400; // 24h — refreshed per stream via ice_server_script
+const DEFAULT_TUNNEL_MANAGER_URL = "https://myhomegames-server.vige.it";
 
 /**
+ * Tunnel manager (Cloudflare Worker) that holds the long-term TURN key as secrets.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function resolveTunnelManagerUrl(env = process.env) {
+  const fromEnv =
+    env.CLOUDFLARE_TUNNEL_MANAGER_URL?.trim() ||
+    env.TUNNEL_MANAGER_URL?.trim() ||
+    "";
+  return (fromEnv || DEFAULT_TUNNEL_MANAGER_URL).replace(/\/$/, "");
+}
+
+/**
+ * TURN long-term secrets live on the Cloudflare Worker — not in server .env / releases.
+ * Local installs always use the tunnel manager unless explicitly disabled.
  * @param {NodeJS.ProcessEnv} [env]
  */
 function isCloudflareTurnConfigured(env = process.env) {
-  return Boolean(env.CLOUDFLARE_TURN_KEY_ID?.trim() && env.CLOUDFLARE_TURN_API_TOKEN?.trim());
+  return env.CLOUDFLARE_TURN_ENABLED !== "false";
 }
 
 /**
@@ -48,16 +63,12 @@ function toMoonlightIceServers(payload) {
 }
 
 /**
- * Generate short-lived Cloudflare Realtime TURN ICE servers for Moonlight Web.
- * @see https://developers.cloudflare.com/realtime/turn/generate-credentials/
+ * Fetch short-lived Cloudflare Realtime TURN ICE servers from the tunnel manager Worker.
+ * The Worker holds CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_API_TOKEN as secrets.
  */
 async function generateCloudflareTurnIceServers(env = process.env) {
-  const keyId = env.CLOUDFLARE_TURN_KEY_ID?.trim();
-  const apiToken = env.CLOUDFLARE_TURN_API_TOKEN?.trim();
-  if (!keyId || !apiToken) {
-    throw new Error(
-      "CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN are required for Cloudflare TURN",
-    );
+  if (!isCloudflareTurnConfigured(env)) {
+    throw new Error("Cloudflare TURN is disabled (CLOUDFLARE_TURN_ENABLED=false)");
   }
 
   const ttl = Math.min(
@@ -65,17 +76,15 @@ async function generateCloudflareTurnIceServers(env = process.env) {
     172_800,
   );
 
-  const response = await fetch(
-    `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ttl }),
+  const manager = resolveTunnelManagerUrl(env);
+  const response = await fetch(`${manager}/api/turn-ice-servers`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify({ ttl }),
+  });
 
   const text = await response.text();
   let payload;
@@ -86,20 +95,24 @@ async function generateCloudflareTurnIceServers(env = process.env) {
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Cloudflare TURN credential request failed (${response.status}): ${text.slice(0, 200)}`,
-    );
+    const detail =
+      (payload && typeof payload.detail === "string" && payload.detail) ||
+      (payload && typeof payload.error === "string" && payload.error) ||
+      text.slice(0, 200);
+    throw new Error(`Tunnel manager TURN request failed (${response.status}): ${detail}`);
   }
 
   const iceServers = toMoonlightIceServers(payload);
   if (iceServers.length === 0) {
-    throw new Error("Cloudflare TURN returned no usable ICE servers");
+    throw new Error("Tunnel manager returned no usable ICE servers");
   }
   return { iceServers, ttl, raw: payload };
 }
 
 module.exports = {
   DEFAULT_TURN_TTL_SECONDS,
+  DEFAULT_TUNNEL_MANAGER_URL,
+  resolveTunnelManagerUrl,
   isCloudflareTurnConfigured,
   filterBrowserSafeTurnUrls,
   toMoonlightIceServers,

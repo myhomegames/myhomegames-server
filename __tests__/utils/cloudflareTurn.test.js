@@ -2,19 +2,25 @@
 
 const {
   isCloudflareTurnConfigured,
+  resolveTunnelManagerUrl,
   filterBrowserSafeTurnUrls,
   toMoonlightIceServers,
+  DEFAULT_TUNNEL_MANAGER_URL,
 } = require("../../utils/cloudflareTurn");
 
 describe("cloudflareTurn", () => {
-  it("detects TURN configuration from env", () => {
-    expect(isCloudflareTurnConfigured({})).toBe(false);
+  it("is enabled by default (secrets live on the tunnel manager Worker)", () => {
+    expect(isCloudflareTurnConfigured({})).toBe(true);
+    expect(isCloudflareTurnConfigured({ CLOUDFLARE_TURN_ENABLED: "false" })).toBe(false);
+  });
+
+  it("resolves tunnel manager URL", () => {
+    expect(resolveTunnelManagerUrl({})).toBe(DEFAULT_TUNNEL_MANAGER_URL);
     expect(
-      isCloudflareTurnConfigured({
-        CLOUDFLARE_TURN_KEY_ID: "key",
-        CLOUDFLARE_TURN_API_TOKEN: "token",
+      resolveTunnelManagerUrl({
+        CLOUDFLARE_TUNNEL_MANAGER_URL: "https://manager.example/",
       }),
-    ).toBe(true);
+    ).toBe("https://manager.example");
   });
 
   it("filters TURN URLs on port 53 (blocked in browsers)", () => {
