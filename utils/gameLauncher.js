@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 
 function sanitizeExecutableName(name) {
   if (!name || typeof name !== "string") return "";
@@ -124,6 +124,45 @@ function spawnGameLaunch(fullCommandPath) {
 }
 
 /**
+ * Kill a process and its descendants (best-effort).
+ * On Unix, prefers the process group when the child was spawned detached.
+ */
+function killProcessTree(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 0) return { ok: false, reason: "invalid-pid" };
+
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/PID", String(n), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      try {
+        process.kill(-n, "SIGTERM");
+      } catch {
+        process.kill(n, "SIGTERM");
+      }
+      try {
+        setTimeout(() => {
+          try {
+            process.kill(-n, "SIGKILL");
+          } catch {
+            try {
+              process.kill(n, "SIGKILL");
+            } catch {
+              // already gone
+            }
+          }
+        }, 1500).unref?.();
+      } catch {
+        // ignore
+      }
+    }
+    return { ok: true, pid: n };
+  } catch (error) {
+    return { ok: false, pid: n, detail: error?.message || String(error) };
+  }
+}
+
+/**
  * @param {Record<number, object>} allGames
  * @param {string} metadataPath
  * @param {string|number} gameId
@@ -138,7 +177,7 @@ async function launchGame(allGames, metadataPath, gameId, requestedExecutableNam
     throw err;
   }
   const result = await spawnGameLaunch(resolved.fullCommandPath);
-  return { ...result, executableName: resolved.executableName };
+  return { ...result, executableName: resolved.executableName, gameId: Number(gameId) };
 }
 
 module.exports = {
@@ -146,4 +185,5 @@ module.exports = {
   resolveGameLaunch,
   resolveExecutableScriptPath,
   sanitizeExecutableName,
+  killProcessTree,
 };

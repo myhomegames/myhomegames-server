@@ -24,6 +24,7 @@ const {
   isCloudflareTurnConfigured,
   generateCloudflareTurnIceServers,
 } = require("../utils/cloudflareTurn");
+const { stopRemoteStreamingSession, rememberStreamingLaunch } = require("../utils/streamingSessionStop");
 
 /**
  * @param {import('express').Express} app
@@ -96,6 +97,11 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
             : undefined;
 
       const launched = await launchGame(getAllGames(), metadataPath, gameId, executableName);
+      rememberStreamingLaunch({
+        pid: launched.pid,
+        gameId,
+        executableName: launched.executableName,
+      });
       const sunshineReachable = await probeSunshineReachable(streaming);
 
       let moonlightWebUrl = streaming.moonlightWebUrl;
@@ -140,6 +146,36 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       console.error("POST /streaming/launch failed:", err?.message || err);
       res.status(500).json({
         error: "Launch failed",
+        detail: err?.message || "Unknown error",
+      });
+    }
+  });
+
+  /**
+   * Cancel Moonlight Web / Sunshine stream and kill the game started by /streaming/launch.
+   */
+  app.post("/streaming/stop", optionalToken, async (req, res) => {
+    try {
+      const settings = readSettings();
+      const streaming = readStreamingSettings(settings);
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const hostId =
+        body.hostId != null
+          ? Number(body.hostId)
+          : body.host_id != null
+            ? Number(body.host_id)
+            : null;
+
+      const result = await stopRemoteStreamingSession({
+        moonlightWebUrl: streaming.moonlightWebUrl,
+        hostId: Number.isFinite(hostId) ? hostId : null,
+      });
+      // Prefer HTTP 200 even if some sub-steps failed (best-effort cleanup).
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("POST /streaming/stop failed:", err?.message || err);
+      res.status(502).json({
+        error: "Stop streaming session failed",
         detail: err?.message || "Unknown error",
       });
     }
