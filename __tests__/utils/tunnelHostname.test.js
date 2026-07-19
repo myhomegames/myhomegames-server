@@ -6,6 +6,7 @@ const {
   isUserTunnelHostname,
   isUserMoonlightWebHostname,
   moonlightWebPublicUrlFromApiBase,
+  apiPublicUrlFromMoonlightWebUrl,
 } = require("../../utils/tunnelHostname");
 
 describe("tunnelHostname", () => {
@@ -35,5 +36,14 @@ describe("tunnelHostname", () => {
     ).toBe("https://luca-moonlight-web.vige.it");
     expect(moonlightWebPublicUrlFromApiBase("http://127.0.0.1:4000")).toBe("");
     expect(moonlightWebPublicUrlFromApiBase("")).toBe("");
+  });
+
+  it("derives public API URL from Moonlight Web URL", () => {
+    expect(
+      apiPublicUrlFromMoonlightWebUrl(
+        "https://luca-stancapiano-vige-it-moonlight-web.vige.it/stream.html",
+      ),
+    ).toBe("https://luca-stancapiano-vige-it-myhomegames-server.vige.it");
+    expect(apiPublicUrlFromMoonlightWebUrl("http://127.0.0.1:8080")).toBe("");
   });
 });

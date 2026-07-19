@@ -43,6 +43,25 @@ function moonlightWebPublicUrlFromApiBase(apiPublicUrl) {
   }
 }
 
+/**
+ * Derive public API tunnel URL from the per-user Moonlight Web URL.
+ * https://user-moonlight-web.vige.it → https://user-myhomegames-server.vige.it
+ */
+function apiPublicUrlFromMoonlightWebUrl(moonlightPublicUrl) {
+  const normalized = String(moonlightPublicUrl || "").trim();
+  if (!normalized) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(normalized) ? normalized : `https://${normalized}`);
+    const host = url.hostname.toLowerCase();
+    if (!isUserMoonlightWebHostname(host)) return "";
+    const username = host.slice(0, -USER_MOONLIGHT_HOST_SUFFIX.length);
+    if (!username) return "";
+    return `https://${userTunnelHostname(username)}`;
+  } catch {
+    return "";
+  }
+}
+
 module.exports = {
   USER_TUNNEL_HOST_SUFFIX,
   USER_MOONLIGHT_HOST_SUFFIX,
@@ -51,4 +70,5 @@ module.exports = {
   isUserTunnelHostname,
   isUserMoonlightWebHostname,
   moonlightWebPublicUrlFromApiBase,
+  apiPublicUrlFromMoonlightWebUrl,
 };

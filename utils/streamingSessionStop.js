@@ -51,49 +51,64 @@ function clearActiveStreamingLaunch() {
  */
 function killActiveStreamingGame(fallback = {}) {
   const session = activeStreamingLaunch ? { ...activeStreamingLaunch } : null;
-  let fullCommandPath = session?.fullCommandPath || "";
   let pid = session?.pid || null;
   let gameId = session?.gameId ?? null;
   let executableName = session?.executableName || "";
+  const scripts = [];
 
-  // Client can resend gameId on stop so we still find the script after restart / lost memory.
-  if (!fullCommandPath && fallback?.gameId != null && fallback?.metadataPath && fallback?.allGames) {
+  const pushScript = (path) => {
+    const p = String(path || "").trim();
+    if (p && !scripts.includes(p)) scripts.push(p);
+  };
+
+  const resolveScript = (id, exe) => {
+    if (id == null || !fallback?.metadataPath || !fallback?.allGames) return null;
     try {
-      const resolved = resolveGameLaunch(
-        fallback.allGames,
-        fallback.metadataPath,
-        fallback.gameId,
-        fallback.executableName,
-      );
-      if (resolved.ok) {
-        fullCommandPath = resolved.fullCommandPath;
-        executableName = resolved.executableName;
-        gameId = Number(fallback.gameId);
-      }
+      const resolved = resolveGameLaunch(fallback.allGames, fallback.metadataPath, id, exe);
+      return resolved.ok ? resolved : null;
     } catch {
-      // ignore resolve errors
+      return null;
     }
-  } else if (fallback?.gameId != null && gameId == null) {
-    gameId = Number(fallback.gameId);
-  }
+  };
 
-  if (!pid && !fullCommandPath) {
+  // Client gameId wins: this is what Back/Exit intend to stop.
+  if (fallback?.gameId != null) {
+    const resolved = resolveScript(fallback.gameId, fallback.executableName);
+    if (resolved) {
+      pushScript(resolved.fullCommandPath);
+      executableName = resolved.executableName;
+      gameId = Number(fallback.gameId);
+    } else {
+      gameId = Number(fallback.gameId);
+    }
+  }
+  pushScript(session?.fullCommandPath);
+
+  if (!pid && scripts.length === 0) {
     return { ok: false, reason: "no-active-launch" };
   }
 
-  const result = killLaunchedGame({
+  let result = killLaunchedGame({
     pid,
-    fullCommandPath,
+    fullCommandPath: scripts[0] || "",
   });
+  for (const script of scripts.slice(1)) {
+    if (result.ok) break;
+    const extra = killLaunchedGame({ fullCommandPath: script });
+    if (extra.ok) {
+      result = { ...result, ...extra, ok: true };
+    }
+  }
+
   clearActiveStreamingLaunch();
   console.log(
-    `[streaming/stop] local game kill ok=${result.ok} gameId=${gameId} script=${fullCommandPath || "-"} pids=${JSON.stringify(result.byScript?.killedPids || [])}`,
+    `[streaming/stop] local game kill ok=${result.ok} gameId=${gameId} scripts=${JSON.stringify(scripts)} pids=${JSON.stringify(result.byScript?.killedPids || [])}`,
   );
   return {
     ...result,
     gameId,
     executableName,
-    fullCommandPath,
+    fullCommandPath: scripts[0] || session?.fullCommandPath || "",
   };
 }
 

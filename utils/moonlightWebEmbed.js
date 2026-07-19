@@ -163,6 +163,33 @@ async function resolveMoonlightDesktopStreamUrl({
   };
 }
 
+/**
+ * Attach mhgStop so Moonlight Exit can POST/GET the home API and kill the local game.
+ * Prefer a public HTTPS API base (per-user tunnel), never localhost.
+ */
+function attachMoonlightStopHook(streamUrl, { apiBase, gameId, executableName, hostId } = {}) {
+  const stream = String(streamUrl || "").trim();
+  const api = String(apiBase || "").trim().replace(/\/$/, "");
+  if (!stream || !api || gameId == null || gameId === "") return stream;
+  try {
+    const apiUrl = new URL(/^https?:\/\//i.test(api) ? api : `https://${api}`);
+    if (apiUrl.hostname === "localhost" || apiUrl.hostname === "127.0.0.1") {
+      return stream;
+    }
+    const stop = new URL("/streaming/stop", apiUrl);
+    stop.searchParams.set("gameId", String(gameId));
+    if (executableName) stop.searchParams.set("executableName", String(executableName));
+    if (hostId != null && Number.isFinite(Number(hostId))) {
+      stop.searchParams.set("hostId", String(hostId));
+    }
+    const out = new URL(stream);
+    out.searchParams.set("mhgStop", stop.toString());
+    return out.toString();
+  } catch {
+    return stream;
+  }
+}
+
 async function listMoonlightRoles(baseUrl, cookie) {
   const response = await requestJson({
     urlString: `${baseUrl}/api/roles`,
@@ -291,7 +318,12 @@ function patchMoonlightStaticFullscreenAssets() {
             try {
                 const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
                 if (mhgStop) {
-                    yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                    try {
+                        yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                    catch (_postErr) {
+                        yield fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
                 }
             }
             catch (e) {
@@ -311,6 +343,22 @@ function patchMoonlightStaticFullscreenAssets() {
                 window.close();
             }
         }));`,
+        ],
+        // Migrate earlier POST-only mhgStop hook to POST+GET fallback.
+        [
+          `const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+                if (mhgStop) {
+                    yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                }`,
+          `const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+                if (mhgStop) {
+                    try {
+                        yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                    catch (_postErr) {
+                        yield fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                }`,
         ],
       ],
     },
@@ -431,6 +479,7 @@ module.exports = {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
   resolveMoonlightDesktopStreamUrl,
+  attachMoonlightStopHook,
   listMoonlightApps,
   pickDesktopApp,
   listMoonlightUsers,

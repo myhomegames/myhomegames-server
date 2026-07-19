@@ -18,13 +18,43 @@ const {
 const { isSunshineEnabled } = require("../utils/sunshineService");
 const { isMoonlightWebEnabled, resolveMoonlightWebPort } = require("../utils/moonlightWebService");
 const { listMoonlightHosts, hostLooksPaired } = require("../utils/moonlightWebPairing");
-const { resolveMoonlightDesktopStreamUrl } = require("../utils/moonlightWebEmbed");
+const { resolveMoonlightDesktopStreamUrl, attachMoonlightStopHook } = require("../utils/moonlightWebEmbed");
 const { ensureMoonlightWebAdminCredentials } = require("../utils/moonlightWebCredentials");
 const {
   isCloudflareTurnConfigured,
   generateCloudflareTurnIceServers,
 } = require("../utils/cloudflareTurn");
 const { stopRemoteStreamingSession, rememberStreamingLaunch } = require("../utils/streamingSessionStop");
+const {
+  isUserTunnelHostname,
+  apiPublicUrlFromMoonlightWebUrl,
+} = require("../utils/tunnelHostname");
+
+function resolvePublicApiBaseForStop(req, moonlightWebUrl) {
+  const forwarded = String(req.get("x-forwarded-host") || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const host = String(forwarded || req.get("host") || "")
+    .split(":")[0]
+    .trim()
+    .toLowerCase();
+  if (host && isUserTunnelHostname(host)) {
+    return `https://${host}`;
+  }
+  const fromMoonlight = apiPublicUrlFromMoonlightWebUrl(moonlightWebUrl);
+  if (fromMoonlight) return fromMoonlight;
+  const envBase = String(process.env.API_BASE || "").trim().replace(/\/$/, "");
+  if (envBase) {
+    try {
+      const u = new URL(/^https?:\/\//i.test(envBase) ? envBase : `https://${envBase}`);
+      if (isUserTunnelHostname(u.hostname)) return `${u.protocol}//${u.host}`;
+    } catch {
+      // ignore
+    }
+  }
+  return "";
+}
 
 /**
  * @param {import('express').Express} app
@@ -134,6 +164,22 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         );
       }
 
+      const publicApiBase = resolvePublicApiBaseForStop(req, moonlightWebUrl);
+      moonlightWebUrl = attachMoonlightStopHook(moonlightWebUrl, {
+        apiBase: publicApiBase,
+        gameId,
+        executableName: launched.executableName,
+        hostId: moonlightStream?.hostId ?? null,
+      });
+      if (moonlightStream) {
+        moonlightStream = { ...moonlightStream, url: moonlightWebUrl };
+      }
+      if (publicApiBase) {
+        console.log(`[streaming/launch] mhgStop attached via ${publicApiBase}`);
+      } else {
+        console.warn("[streaming/launch] could not resolve public API base for mhgStop");
+      }
+
       res.json({
         ...launched,
         moonlightWebUrl,
@@ -155,7 +201,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
   /**
    * Cancel Moonlight Web / Sunshine stream and kill the game started by /streaming/launch.
    */
-  app.post("/streaming/stop", optionalToken, async (req, res) => {
+  async function handleStreamingStop(req, res) {
     try {
       const settings = readSettings();
       const streaming = readStreamingSettings(settings);
@@ -194,7 +240,11 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         detail: err?.message || "Unknown error",
       });
     }
-  });
+  }
+
+  app.post("/streaming/stop", optionalToken, handleStreamingStop);
+  // GET for Moonlight Exit fallback (img/beacon / simple fetch without preflight).
+  app.get("/streaming/stop", optionalToken, handleStreamingStop);
 
   /**
    * Short-lived Cloudflare Realtime TURN ICE servers for Moonlight Web (ice_server_script).
