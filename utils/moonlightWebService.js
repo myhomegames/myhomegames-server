@@ -17,7 +17,10 @@ const {
 } = require("./streaming");
 const { ensureMoonlightWebAdminCredentials } = require("./moonlightWebCredentials");
 const { ensureMoonlightWebSunshinePairing } = require("./moonlightWebPairing");
-const { ensureMoonlightWebDefaultUser } = require("./moonlightWebEmbed");
+const {
+  ensureMoonlightWebDefaultUser,
+  ensureMoonlightEnterFullscreenDefault,
+} = require("./moonlightWebEmbed");
 const {
   writeMoonlightIceServerScript,
   ensureMoonlightCloudflareTurnIce,
@@ -248,6 +251,17 @@ async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = proce
       }
     } catch (error) {
       console.warn(`Could not configure Moonlight Web default user: ${error.message || error}`);
+    }
+    try {
+      await ensureMoonlightEnterFullscreenDefault({
+        baseUrl: url,
+        cookie: auth.cookie,
+        kind: effectiveKind,
+      });
+    } catch (error) {
+      console.warn(
+        `Could not configure Moonlight Web fullscreen default: ${error.message || error}`,
+      );
     }
     try {
       const httpPort = Number(env.HTTP_PORT || 4000) || 4000;

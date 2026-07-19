@@ -3,17 +3,22 @@
 const { postJson, ensureMoonlightWebAdminCredentials } = require("./moonlightWebCredentials");
 const { listMoonlightHosts, hostLooksPaired } = require("./moonlightWebPairing");
 const { defaultManagedMoonlightWebUrl } = require("./streaming");
-const { killProcessTree } = require("./gameLauncher");
+const { killLaunchedGame, resolveGameLaunch } = require("./gameLauncher");
 
 const DEFAULT_SUNSHINE_HOST = "127.0.0.1";
 const DEFAULT_SUNSHINE_HTTPS_PORT = 47990;
 const DEFAULT_SUNSHINE_USERNAME = "sunshine";
 const DEFAULT_SUNSHINE_PASSWORD = "admin";
 
-/** @type {{ pid: number, gameId: number|null, executableName: string, startedAt: number } | null} */
+/** @type {{ pid: number, gameId: number|null, executableName: string, fullCommandPath: string, startedAt: number } | null} */
 let activeStreamingLaunch = null;
 
-function rememberStreamingLaunch({ pid, gameId = null, executableName = "" } = {}) {
+function rememberStreamingLaunch({
+  pid,
+  gameId = null,
+  executableName = "",
+  fullCommandPath = "",
+} = {}) {
   const n = Number(pid);
   if (!Number.isFinite(n) || n <= 0) {
     activeStreamingLaunch = null;
@@ -23,6 +28,7 @@ function rememberStreamingLaunch({ pid, gameId = null, executableName = "" } = {
     pid: n,
     gameId: gameId != null && Number.isFinite(Number(gameId)) ? Number(gameId) : null,
     executableName: String(executableName || ""),
+    fullCommandPath: String(fullCommandPath || ""),
     startedAt: Date.now(),
   };
   return { ...activeStreamingLaunch };
@@ -38,15 +44,57 @@ function clearActiveStreamingLaunch() {
 
 /**
  * Kill the game process started by the last POST /streaming/launch (best-effort).
+ * Uses both the remembered PID and the launch script command line (emulators often
+ * outlive the shell PID we get from spawn).
+ *
+ * @param {{ gameId?: number|string|null, executableName?: string, allGames?: Record<number, object>, metadataPath?: string }} [fallback]
  */
-function killActiveStreamingGame() {
-  const session = activeStreamingLaunch;
-  if (!session?.pid) {
+function killActiveStreamingGame(fallback = {}) {
+  const session = activeStreamingLaunch ? { ...activeStreamingLaunch } : null;
+  let fullCommandPath = session?.fullCommandPath || "";
+  let pid = session?.pid || null;
+  let gameId = session?.gameId ?? null;
+  let executableName = session?.executableName || "";
+
+  // Client can resend gameId on stop so we still find the script after restart / lost memory.
+  if (!fullCommandPath && fallback?.gameId != null && fallback?.metadataPath && fallback?.allGames) {
+    try {
+      const resolved = resolveGameLaunch(
+        fallback.allGames,
+        fallback.metadataPath,
+        fallback.gameId,
+        fallback.executableName,
+      );
+      if (resolved.ok) {
+        fullCommandPath = resolved.fullCommandPath;
+        executableName = resolved.executableName;
+        gameId = Number(fallback.gameId);
+      }
+    } catch {
+      // ignore resolve errors
+    }
+  } else if (fallback?.gameId != null && gameId == null) {
+    gameId = Number(fallback.gameId);
+  }
+
+  if (!pid && !fullCommandPath) {
     return { ok: false, reason: "no-active-launch" };
   }
-  const result = killProcessTree(session.pid);
+
+  const result = killLaunchedGame({
+    pid,
+    fullCommandPath,
+  });
   clearActiveStreamingLaunch();
-  return { ...result, gameId: session.gameId, executableName: session.executableName };
+  console.log(
+    `[streaming/stop] local game kill ok=${result.ok} gameId=${gameId} script=${fullCommandPath || "-"} pids=${JSON.stringify(result.byScript?.killedPids || [])}`,
+  );
+  return {
+    ...result,
+    gameId,
+    executableName,
+    fullCommandPath,
+  };
 }
 
 function resolveMoonlightWebPort(env = process.env) {
@@ -132,6 +180,10 @@ async function closeSunshineStreamingApp(env = process.env) {
 async function stopRemoteStreamingSession({
   moonlightWebUrl,
   hostId = null,
+  gameId = null,
+  executableName = "",
+  allGames = null,
+  metadataPath = "",
   env = process.env,
 } = {}) {
   const controlBase = resolveMoonlightControlBase(moonlightWebUrl, env);
@@ -193,7 +245,12 @@ async function stopRemoteStreamingSession({
     };
   }
 
-  results.localGame = killActiveStreamingGame();
+  results.localGame = killActiveStreamingGame({
+    gameId,
+    executableName,
+    allGames,
+    metadataPath,
+  });
 
   return results;
 }

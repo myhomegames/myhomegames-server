@@ -101,6 +101,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         pid: launched.pid,
         gameId,
         executableName: launched.executableName,
+        fullCommandPath: launched.fullCommandPath,
       });
       const sunshineReachable = await probeSunshineReachable(streaming);
 
@@ -159,17 +160,31 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const settings = readSettings();
       const streaming = readStreamingSettings(settings);
       const body = req.body && typeof req.body === "object" ? req.body : {};
-      const hostId =
-        body.hostId != null
-          ? Number(body.hostId)
-          : body.host_id != null
-            ? Number(body.host_id)
-            : null;
+      const hostIdRaw = body.hostId ?? body.host_id ?? req.query.hostId ?? req.query.host_id;
+      const hostId = hostIdRaw != null ? Number(hostIdRaw) : null;
+      const gameId = body.gameId ?? body.game_id ?? req.query.gameId ?? req.query.game_id ?? null;
+      const executableName =
+        typeof body.executableName === "string"
+          ? body.executableName
+          : typeof body.executable === "string"
+            ? body.executable
+            : typeof req.query.executableName === "string"
+              ? req.query.executableName
+              : typeof req.query.executable === "string"
+                ? req.query.executable
+                : "";
 
       const result = await stopRemoteStreamingSession({
         moonlightWebUrl: streaming.moonlightWebUrl,
         hostId: Number.isFinite(hostId) ? hostId : null,
+        gameId,
+        executableName,
+        allGames: getAllGames(),
+        metadataPath,
       });
+      console.log(
+        `[streaming/stop] moonlight=${JSON.stringify(result.moonlightCancel)} sunshine=${JSON.stringify(result.sunshineClose)} local=${JSON.stringify(result.localGame)}`,
+      );
       // Prefer HTTP 200 even if some sub-steps failed (best-effort cleanup).
       res.json({ ok: true, ...result });
     } catch (err) {

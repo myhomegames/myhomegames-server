@@ -163,8 +163,273 @@ async function resolveMoonlightDesktopStreamUrl({
   };
 }
 
+async function listMoonlightRoles(baseUrl, cookie) {
+  const response = await requestJson({
+    urlString: `${baseUrl}/api/roles`,
+    method: "GET",
+    headers: cookie ? { Cookie: cookie } : {},
+    timeoutMs: 30_000,
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`GET /api/roles failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
+  }
+  const parsed = JSON.parse(response.body || "{}");
+  return Array.isArray(parsed.roles) ? parsed.roles : [];
+}
+
+async function getMoonlightRole(baseUrl, cookie, roleId) {
+  const qs = roleId != null ? `?id=${encodeURIComponent(roleId)}` : "";
+  const response = await requestJson({
+    urlString: `${baseUrl}/api/role${qs}`,
+    method: "GET",
+    headers: cookie ? { Cookie: cookie } : {},
+    timeoutMs: 30_000,
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`GET /api/role failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
+  }
+  const parsed = JSON.parse(response.body || "{}");
+  return parsed.role || parsed;
+}
+
+/**
+ * Force Moonlight Web to enable enterFullscreenOnStreamStart.
+ * Role defaults alone are not enough: browser localStorage can override them, and
+ * the shipped stream.js does not accept a query-param override. We also patch the
+ * static JS inside the Docker container so auto-fullscreen is always armed.
+ *
+ * IMPORTANT: replacements must be unique and must not insert `yield` into non-generator
+ * callbacks (that SyntaxError blank-screens the whole stream page).
+ */
+function patchMoonlightStaticFullscreenAssets() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-fs-"));
+  const replacements = [
+    {
+      file: "default_settings.js",
+      containerPath: "/moonlight-web/static/default_settings.js",
+      replace: [
+        ['"enterFullscreenOnStreamStart": false', '"enterFullscreenOnStreamStart": true'],
+        ["enterFullscreenOnStreamStart: false", "enterFullscreenOnStreamStart: true"],
+      ],
+    },
+    {
+      file: "stream.js",
+      containerPath: "/moonlight-web/static/stream.js",
+      replace: [
+        [
+          "this.autoEnterFullscreenOnStart = settings.enterFullscreenOnStreamStart;",
+          "this.autoEnterFullscreenOnStart = true;",
+        ],
+        [
+          "this.autoEnterFullscreenOnStart=settings.enterFullscreenOnStreamStart;",
+          "this.autoEnterFullscreenOnStart=true;",
+        ],
+        // Unique block after connection modal.
+        // Skip AutoFullscreenModal (OK/Cancel): browsers still need a user gesture, so
+        // arm fullscreen on the next tap instead of showing a confirm dialog.
+        // Also drop pendingAutoFullscreenPrompt from the guard (Moonlight sets it AFTER
+        // showModal, so a fast connection can skip arming forever).
+        [
+          `void showModal(connectionInfo).then(() => __awaiter(this, void 0, void 0, function* () {
+                this.stream.removeInfoListener(connectionInfoListener);
+                if (this.autoEnterFullscreenOnStart && this.pendingAutoFullscreenPrompt && !this.fullscreenPromptShown && !this.isFullscreen()) {
+                    this.fullscreenPromptShown = true;
+                    this.pendingAutoFullscreenPrompt = false;
+                    this.armFullscreenOnNextInteraction();
+                }
+            }));`,
+          `void showModal(connectionInfo).then(() => __awaiter(this, void 0, void 0, function* () {
+                this.stream.removeInfoListener(connectionInfoListener);
+                if (this.autoEnterFullscreenOnStart && !this.fullscreenPromptShown && !this.isFullscreen()) {
+                    this.fullscreenPromptShown = true;
+                    this.pendingAutoFullscreenPrompt = false;
+                    this.armFullscreenOnNextInteraction();
+                }
+            }));`,
+        ],
+        // Migrate previous MHG patch that showed the confirm modal.
+        [
+          `void showModal(connectionInfo).then(() => __awaiter(this, void 0, void 0, function* () {
+                this.stream.removeInfoListener(connectionInfoListener);
+                if (this.autoEnterFullscreenOnStart && !this.fullscreenPromptShown && !this.isFullscreen()) {
+                    this.fullscreenPromptShown = true;
+                    this.pendingAutoFullscreenPrompt = false;
+                    yield this.promptAutoFullscreen();
+                    if (!this.isFullscreen()) {
+                        this.armFullscreenOnNextInteraction();
+                    }
+                }
+            }));`,
+          `void showModal(connectionInfo).then(() => __awaiter(this, void 0, void 0, function* () {
+                this.stream.removeInfoListener(connectionInfoListener);
+                if (this.autoEnterFullscreenOnStart && !this.fullscreenPromptShown && !this.isFullscreen()) {
+                    this.fullscreenPromptShown = true;
+                    this.pendingAutoFullscreenPrompt = false;
+                    this.armFullscreenOnNextInteraction();
+                }
+            }));`,
+        ],
+        // On Exit: notify MyHomeGames stop URL (mhgStop query) so the home PC kills the game
+        // even when the MHG tab cannot see popup.closed (common on mobile).
+        [
+          `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+            const stream = this.app.getStream();
+            if (stream) {
+                const success = yield stream.stop();
+                if (!success) {
+                    console.debug("Failed to close stream correctly");
+                }
+            }
+            if (window.matchMedia('(display-mode: standalone)').matches) {
+                history.back();
+            }
+            else {
+                window.close();
+            }
+        }));`,
+          `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+                if (mhgStop) {
+                    yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                }
+            }
+            catch (e) {
+                console.warn("mhgStop failed", e);
+            }
+            const stream = this.app.getStream();
+            if (stream) {
+                const success = yield stream.stop();
+                if (!success) {
+                    console.debug("Failed to close stream correctly");
+                }
+            }
+            if (window.matchMedia('(display-mode: standalone)').matches) {
+                history.back();
+            }
+            else {
+                window.close();
+            }
+        }));`,
+        ],
+      ],
+    },
+  ];
+
+  let applied = 0;
+  try {
+    for (const entry of replacements) {
+      const hostPath = path.join(tmpDir, entry.file);
+      try {
+        execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:${entry.containerPath}`, hostPath], {
+          stdio: "pipe",
+          timeout: 30_000,
+        });
+      } catch {
+        continue;
+      }
+      let body = fs.readFileSync(hostPath, "utf8");
+      let changed = false;
+      for (const [from, to] of entry.replace) {
+        if (body.includes(to)) continue;
+        if (!body.includes(from)) continue;
+        body = body.replace(from, to);
+        changed = true;
+      }
+      if (!changed) continue;
+      fs.writeFileSync(hostPath, body, "utf8");
+      execFileSync("docker", ["cp", hostPath, `${DOCKER_CONTAINER_NAME}:${entry.containerPath}`], {
+        stdio: "pipe",
+        timeout: 30_000,
+      });
+      applied += 1;
+    }
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+  return { applied };
+}
+
+async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = null } = {}) {
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  if (!normalized) throw new Error("Moonlight Web URL is required");
+
+  const result = {
+    rolePatched: false,
+    staticPatched: 0,
+    roleId: null,
+  };
+
+  if (kind === "docker" || kind == null) {
+    try {
+      const staticResult = patchMoonlightStaticFullscreenAssets();
+      result.staticPatched = staticResult.applied;
+      if (staticResult.applied > 0) {
+        console.log(
+          `Moonlight Web static assets patched for fullscreen (${staticResult.applied} replacement(s)).`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `Could not patch Moonlight Web static fullscreen assets: ${error.message || error}`,
+      );
+    }
+  }
+
+  let role = null;
+  try {
+    role = await getMoonlightRole(normalized, cookie);
+  } catch {
+    const roles = await listMoonlightRoles(normalized, cookie);
+    role = roles.find((item) => item?.ty === "Admin" || item?.type === "Admin") || roles[0] || null;
+    if (role?.id != null) {
+      role = await getMoonlightRole(normalized, cookie, role.id);
+    }
+  }
+  if (!role?.id) {
+    if (result.staticPatched > 0) return { applied: true, ...result };
+    throw new Error("Moonlight role not found for fullscreen default");
+  }
+  result.roleId = role.id;
+
+  const currentDefaults =
+    role.default_settings && typeof role.default_settings === "object"
+      ? role.default_settings
+      : {};
+  if (currentDefaults.enterFullscreenOnStreamStart !== true) {
+    const nextDefaults = {
+      ...currentDefaults,
+      enterFullscreenOnStreamStart: true,
+    };
+    const response = await requestJson({
+      urlString: `${normalized}/api/role`,
+      method: "PATCH",
+      body: { id: role.id, default_settings: nextDefaults },
+      headers: cookie ? { Cookie: cookie } : {},
+      timeoutMs: 30_000,
+    });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(
+        `PATCH /api/role failed (${response.statusCode}): ${response.body.slice(0, 200)}`,
+      );
+    }
+    result.rolePatched = true;
+    console.log("Moonlight Web role default: enterFullscreenOnStreamStart=true");
+  }
+
+  return {
+    applied: result.rolePatched || result.staticPatched > 0,
+    ...result,
+  };
+}
+
 module.exports = {
   ensureMoonlightWebDefaultUser,
+  ensureMoonlightEnterFullscreenDefault,
   resolveMoonlightDesktopStreamUrl,
   listMoonlightApps,
   pickDesktopApp,
@@ -172,4 +437,5 @@ module.exports = {
   readDockerMoonlightConfig,
   writeDockerMoonlightConfig,
   restartDockerMoonlight,
+  patchMoonlightStaticFullscreenAssets,
 };
