@@ -360,6 +360,37 @@ function patchMoonlightStaticFullscreenAssets() {
                     }
                 }`,
         ],
+        // Browser/system Back (and tab close): same stop as Exit.
+        [
+          `startApp();`,
+          `startApp();
+// MHG: stop home game when leaving via browser Back / tab close (not only Exit).
+(() => {
+    const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+    if (!mhgStop)
+        return;
+    let sent = false;
+    const send = () => {
+        if (sent)
+            return;
+        sent = true;
+        try {
+            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+                navigator.sendBeacon(mhgStop);
+            }
+        }
+        catch (_beaconErr) { }
+        try {
+            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
+                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
+            });
+        }
+        catch (_fetchErr) { }
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+})();`,
+        ],
       ],
     },
   ];
