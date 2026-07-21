@@ -444,10 +444,8 @@ async function ensureSunshineBinary({ metadataPath, env = process.env } = {}) {
   const manifest = readInstallManifest(installDir);
   const existingExecutable = findSunshineExecutable(installDir);
   if (manifest?.version === asset.version && existingExecutable) {
-    const appBundle = resolveMacAppBundle(existingExecutable);
-    if (appBundle) {
-      prepareMacAppBundle(appBundle);
-    }
+    // Do not re-sign on every boot: `codesign --force` resets macOS TCC grants
+    // (Accessibility) needed for mouse/keyboard injection.
     return { installDir, executable: existingExecutable, version: asset.version };
   }
 

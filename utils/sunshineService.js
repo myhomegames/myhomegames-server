@@ -6,7 +6,6 @@ const path = require("path");
 const {
   ensureSunshineBinary,
   findSunshineExecutable,
-  prepareMacAppBundle,
   resolveMacAppBundle,
   resolveSunshineInstallDir,
 } = require("./sunshineBinary");
@@ -58,27 +57,36 @@ function spawnSunshine(executable, env = process.env) {
   return child;
 }
 
+function resolveDarwinAppBundle(executable) {
+  return (
+    resolveMacAppBundle(executable) ||
+    (executable.endsWith(".app") ? executable : null) ||
+    (executable.includes("/Contents/MacOS/") ? executable.split("/Contents/MacOS/")[0] : null)
+  );
+}
+
 function startSunshineProcess(executable, env = process.env) {
-  if (process.platform === "darwin" && executable.includes(".app/Contents/MacOS/")) {
-    const appBundle = resolveMacAppBundle(executable);
-    if (appBundle) {
-      prepareMacAppBundle(appBundle);
+  // On macOS, launch via `open -a` so TCC Accessibility/Input Monitoring attach to
+  // Sunshine.app. Spawning Contents/MacOS/Sunshine directly breaks mouse/keyboard
+  // injection even when Accessibility is granted. Do not re-sign on every start —
+  // `codesign --force` invalidates prior privacy grants (signing happens at install).
+  if (process.platform === "darwin") {
+    const appBundle = resolveDarwinAppBundle(executable);
+    if (appBundle && fs.existsSync(appBundle)) {
+      try {
+        execFileSync("open", ["-na", appBundle], { stdio: "ignore" });
+        managedSunshineChild = null;
+        return { mode: "open", child: null };
+      } catch (error) {
+        console.warn(
+          `open -a Sunshine failed (${error.message || error}); falling back to spawn`,
+        );
+      }
     }
   }
 
-  // Prefer spawn so we keep a PID; fall back to `open` on macOS if spawn fails.
-  try {
-    managedSunshineChild = spawnSunshine(executable, env);
-    return { mode: "spawn", child: managedSunshineChild };
-  } catch (error) {
-    if (process.platform === "darwin") {
-      const appBundle = resolveMacAppBundle(executable) || executable.split("/Contents/MacOS/")[0];
-      execFileSync("open", ["-na", appBundle], { stdio: "ignore" });
-      managedSunshineChild = null;
-      return { mode: "open", child: null };
-    }
-    throw error;
-  }
+  managedSunshineChild = spawnSunshine(executable, env);
+  return { mode: "spawn", child: managedSunshineChild };
 }
 
 async function waitForSunshine(streamingSettings, timeoutMs = 90_000) {
