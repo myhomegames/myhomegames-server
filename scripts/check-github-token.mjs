@@ -22,7 +22,7 @@ automatically in that mode, and a long changelog in the URL may fail with
 
 Recommended:
   https://github.com/settings/tokens → Generate new token (classic) → scope "repo"
-  export GITHUB_TOKEN=ghp_your_token_here
+  Add GITHUB_TOKEN=ghp_... to .env (or .env.local), then:
   npm run release
 
 See DEVELOPMENT.md for details.

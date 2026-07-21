@@ -131,6 +131,9 @@ const publishersRoutes = require("./routes/publishers");
 const authRoutes = require("./routes/auth");
 const igdbRoutes = require("./routes/igdb");
 const { registerTunnelRoutes } = require("./routes/tunnel");
+const { registerStreamingRoutes } = require("./routes/streaming");
+const { launchGame } = require("./utils/gameLauncher");
+const { validateStreamingSettingsPatch } = require("./utils/streaming");
 const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
 const { isCloudflareTunnelEnabled } = require("./utils/cloudflareTunnel");
 const { setTwitchCredentialsMetadataPath } = require("./utils/twitchAppCredentials");
@@ -517,8 +520,31 @@ authRoutes.registerAuthRoutes(app, METADATA_PATH);
 
 function applyTunnelPublicUrl(publicUrl) {
   const normalized = String(publicUrl || "").trim().replace(/\/$/, "");
-  if (normalized) {
-    process.env.API_BASE = normalized;
+  if (!normalized) return;
+  process.env.API_BASE = normalized;
+
+  // Public Moonlight Web host for browser-only remote play (same tunnel, second hostname).
+  try {
+    const { moonlightWebPublicUrlFromApiBase } = require("./utils/tunnelHostname");
+    const moonlightPublic = moonlightWebPublicUrlFromApiBase(normalized);
+    if (!moonlightPublic) return;
+    const settings = readSettings() || {};
+    if (
+      settings.moonlightWebUrl === moonlightPublic &&
+      settings.remoteStreamingEnabled === true
+    ) {
+      return;
+    }
+    writeSettings({
+      ...settings,
+      moonlightWebUrl: moonlightPublic,
+      remoteStreamingEnabled: true,
+    });
+    console.log(`Remote streaming URL set from tunnel (${moonlightPublic})`);
+  } catch (error) {
+    console.warn(
+      `Could not set Moonlight Web public URL from tunnel: ${error?.message || error}`,
+    );
   }
 }
 
@@ -534,6 +560,7 @@ registerTunnelRoutes(app, {
   },
   applyPublicUrl: applyTunnelPublicUrl,
 });
+registerStreamingRoutes(app, optionalToken, readSettings, METADATA_PATH, () => allGames);
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
 categoriesRoutes.registerCategoriesRoutes(app, optionalToken, METADATA_PATH, METADATA_PATH, allGames);
 igdbRoutes.registerIGDBRoutes(app, optionalToken, METADATA_PATH);
@@ -643,133 +670,24 @@ app.get("/collection-backgrounds/:collectionId", (req, res) => {
 });
 
 // Endpoint: launcher — launches an executable for a game (no strict auth when Twitch is off or no token is sent)
-app.get("/launcher", optionalLauncherToken, (req, res) => {
+app.get("/launcher", optionalLauncherToken, async (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
 
-  const entry = allGames[Number(gameId)];
-  if (!entry) return res.status(404).json({ error: "Game not found" });
-
-  // 'executables' field contains array of names (without extension)
-  // We need to construct the full path automatically using the first executable
-  const executables = entry.executables;
-
-  // Validate executables exists and has at least one item
-  if (!executables || !Array.isArray(executables) || executables.length === 0) {
-    return res.status(400).json({
-      error: "Launch failed",
-      detail: "No executables configured. Please check the game configuration."
-    });
-  }
-
-  // Get executable name from query parameter or use first one
-  const requestedExecutableName = req.query.executableName;
-  let executableName;
-  if (requestedExecutableName && typeof requestedExecutableName === 'string' && requestedExecutableName.trim()) {
-    // Verify the requested executable exists in the list
-    if (executables.includes(requestedExecutableName.trim())) {
-      executableName = requestedExecutableName.trim();
-    } else {
-      return res.status(400).json({
-        error: "Launch failed",
-        detail: `Executable "${requestedExecutableName}" not found in game configuration.`
-      });
-    }
-  } else {
-    // Use first executable if no specific one requested
-    executableName = executables[0];
-  }
-  if (!executableName || typeof executableName !== 'string' || executableName.trim() === '') {
-    return res.status(400).json({
-      error: "Launch failed",
-      detail: "Invalid executable name. Please check the game configuration."
-    });
-  }
-  
-  // Metadata stores labels; files on disk can be label+platformId (e.g. Play1.sh). Resolve to path.
-  const sanitizeExecutableName = (name) => {
-    if (!name || typeof name !== 'string') return '';
-    return name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  };
-  const sanitizedExecutableName = sanitizeExecutableName(executableName);
-  const scriptsDir = path.join(METADATA_PATH, "content", "games", String(gameId), "scripts");
-  let fullCommandPath = path.join(scriptsDir, `${sanitizedExecutableName}.sh`);
-  if (!fs.existsSync(fullCommandPath)) {
-    fullCommandPath = path.join(scriptsDir, `${sanitizedExecutableName}.bat`);
-  }
-  if (!fs.existsSync(fullCommandPath) && fs.existsSync(scriptsDir)) {
-    const matchLabel = (base, label) => {
-      if (base === label) return true;
-      const m = base.match(/^\d+-(.+)$/);
-      if (!m) return false;
-      const rest = m[1];
-      return rest === label || rest.startsWith(label + '-');
-    };
-    const files = fs.readdirSync(scriptsDir);
-    const match = files.find(f => {
-      const ext = path.extname(f).toLowerCase();
-      if (ext !== '.sh' && ext !== '.bat') return false;
-      const base = path.basename(f, ext);
-      return matchLabel(base, sanitizedExecutableName);
-    });
-    if (match) fullCommandPath = path.join(scriptsDir, match);
-  }
-
-  if (!fs.existsSync(fullCommandPath)) {
-    return res.status(404).json({
-      error: "Launch failed",
-      detail: `Script file not found: ${fullCommandPath}. Please upload the executable file first.`
-    });
-  }
-
-  // Spawn process with shell to allow command with arguments
-  // Quote the path if it contains spaces to avoid shell interpretation issues
-  let responseSent = false;
+  const requestedExecutableName =
+    typeof req.query.executableName === "string" ? req.query.executableName : undefined;
 
   try {
-    // Quote the path if it contains spaces
-    const quotedPath = fullCommandPath.includes(' ') 
-      ? `"${fullCommandPath}"` 
-      : fullCommandPath;
-
-    const child = spawn(quotedPath, {
-      shell: true,
-      detached: true,
-      stdio: "ignore",
-    });
-
-    // Handle spawn errors (e.g., executable not found) - this happens synchronously
-    child.on("error", (err) => {
-      if (!responseSent) {
-        responseSent = true;
-        const errorMessage =
-          err.code === "ENOENT"
-            ? `Executable not found: ${fullCommandPath}. Please check if the executable exists.`
-            : err.message;
-        return res.status(500).json({
-          error: "Launch failed",
-          detail: errorMessage,
-        });
-      }
-    });
-
-    // Only send success response if spawn succeeded
-    child.once("spawn", () => {
-      if (!responseSent) {
-        responseSent = true;
-        child.unref();
-        return res.json({ status: "launched", pid: child.pid });
-      }
-    });
-  } catch (e) {
-    if (!responseSent) {
-      responseSent = true;
-      // Include full error message and stack if available
-      const errorDetail = e.message || e.toString() || "Unknown error occurred";
-      return res
-        .status(500)
-        .json({ error: "Launch failed", detail: errorDetail });
+    const result = await launchGame(allGames, METADATA_PATH, gameId, requestedExecutableName);
+    return res.json(result);
+  } catch (err) {
+    if (err?.payload && err?.status) {
+      return res.status(err.status).json(err.payload);
     }
+    return res.status(500).json({
+      error: "Launch failed",
+      detail: err?.message || "Unknown error occurred",
+    });
   }
 });
 
@@ -877,6 +795,8 @@ function readSettings() {
     twitchApiEnabled: false,
     activeSkinId: "",
     skinWeb: { ...skinsRoutes.DEFAULT_SKIN_WEB_MANIFEST },
+    remoteStreamingEnabled: true,
+    moonlightWebUrl: "",
   };
   const settings = readJsonFile(SETTINGS_FILE, defaultSettings);
   // Ensure we always return an object and merge with defaults for missing keys
@@ -1031,6 +951,12 @@ app.put("/settings", (req, res) => {
   delete body.twitchClientSecret;
   delete body.twitchLoginEnabled;
 
+  const streamingPatch = validateStreamingSettingsPatch(body);
+  if (!streamingPatch.ok) {
+    return res.status(400).json({ error: streamingPatch.error });
+  }
+  Object.assign(body, streamingPatch.value);
+
   const updatedSettings = {
     ...currentSettings,
     ...body,
@@ -1103,6 +1029,8 @@ const {
   startCloudflareTunnel,
   stopCloudflareTunnel,
 } = require("./utils/cloudflareTunnel");
+const { ensureSunshineRunning, stopManagedSunshine } = require("./utils/sunshineService");
+const { ensureMoonlightWebRunning, stopManagedMoonlightWeb } = require("./utils/moonlightWebService");
 
 // Store server references for graceful shutdown
 let httpServer = null;
@@ -1138,6 +1066,8 @@ function closeHttpServersAndExit() {
 // Graceful shutdown handler
 function gracefulShutdown(signal) {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  stopManagedSunshine();
+  stopManagedMoonlightWeb();
 
   if (cloudflareTunnel) {
     stopCloudflareTunnel(cloudflareTunnel);
@@ -1177,6 +1107,41 @@ async function maybeStartCloudflareTunnel(localOrigin) {
       process.exit(1);
     }
   }
+}
+
+async function maybeStartSunshine() {
+  try {
+    await ensureSunshineRunning({
+      metadataPath: METADATA_PATH,
+      readSettings,
+    });
+  } catch (error) {
+    console.error("Failed to ensure Sunshine:", error.message || error);
+    if (process.env.SUNSHINE_STRICT === "true") {
+      process.exit(1);
+    }
+  }
+}
+
+async function maybeStartMoonlightWeb() {
+  try {
+    await ensureMoonlightWebRunning({
+      metadataPath: METADATA_PATH,
+      readSettings,
+      writeSettings,
+    });
+  } catch (error) {
+    console.error("Failed to ensure Moonlight Web:", error.message || error);
+    if (process.env.MOONLIGHT_WEB_STRICT === "true") {
+      process.exit(1);
+    }
+  }
+}
+
+async function onServerListening(localOrigin) {
+  await maybeStartSunshine();
+  await maybeStartMoonlightWeb();
+  await maybeStartCloudflareTunnel(localOrigin);
 }
 
 // Handle termination signals
@@ -1242,7 +1207,10 @@ if (process.env.NODE_ENV !== 'test') {
         httpsServer.listen(HTTPS_PORT, "127.0.0.1", () => {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
-          process.stdout.write("Server ready\n");
+          const localOrigin = `https://127.0.0.1:${HTTPS_PORT}`;
+          onServerListening(localOrigin).finally(() => {
+            process.stdout.write("Server ready\n");
+          });
         });
 
         httpsServer.on("error", (error) => {
@@ -1267,7 +1235,7 @@ if (process.env.NODE_ENV !== 'test') {
     const localOrigin = `http://127.0.0.1:${HTTP_PORT}`;
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
-      maybeStartCloudflareTunnel(localOrigin).finally(() => {
+      onServerListening(localOrigin).finally(() => {
         process.stdout.write('Server ready\n');
       });
     });

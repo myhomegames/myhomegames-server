@@ -78,6 +78,8 @@ HTTP_PORT=4000
 
 The run token is **not** in `.env`. On startup the web app fetches a per-user token from the tunnel manager (Cloudflare Access) and `POST`s it to `http://localhost:4000/tunnel/connect`, or reconnects with stored credentials via `POST /tunnel/reconnect`. The server stores the run token under `METADATA_PATH/tokens/cloudflare-tunnel-run.json` and starts `cloudflared` on boot when present.
 
+**Realtime TURN (browser remote play)** is also **not** in `.env`. The long-term TURN key is a Worker secret on the tunnel manager; the home server calls `POST https://myhomegames-server.vige.it/api/turn-ice-servers` and only receives short-lived ICE credentials for Moonlight Web.
+
 **Binary install and updates**
 
 When the tunnel starts, `ensureCloudflaredBinary` (`utils/cloudflaredBinary.js`):
@@ -243,11 +245,10 @@ The test suite covers:
 The project uses `release-it` to automate GitHub releases. To create a release:
 
 ```bash
-export GITHUB_TOKEN=ghp_your_token_here   # recommended — classic PAT with repo scope
 npm run release
 ```
 
-Without `GITHUB_TOKEN`, `release-it` falls back to the GitHub “new release” page in the browser. A long changelog in the URL may fail with **“Your request URL is too long”**, and build artifacts are **not** uploaded automatically in that mode.
+Requires `GITHUB_TOKEN` in `.env` (or `.env.local`). Without it, `release-it` falls back to the GitHub “new release” page in the browser. A long changelog in the URL may fail with **“Your request URL is too long”**, and build artifacts are **not** uploaded automatically in that mode.
 
 `npm run release` uses `scripts/run-release.mjs`, which sets `NODE_DEBUG=release-it:config` to work around a release-it/Octokit bug (`log: null` → *Cannot read properties of null (reading 'debug')*). GitHub config uses `skipChecks: true` for the same compatibility reason.
 
@@ -256,8 +257,7 @@ This will:
 2. Create a Git tag with the current version
 3. Create a GitHub release with the changelog
 4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
-5. Run **`scripts/publish-package-repos.js`** and **`scripts/publish-msstore.js`** (optional; see below)
-6. GitHub Actions **`msstore-release.yml`** builds MSIX and submits to the Microsoft Store when the release is published (requires repository secrets)
+5. Run **`scripts/publish-package-repos.js`** (optional; see below)
 
 ### Package repositories (APT / YUM / Homebrew)
 
@@ -287,19 +287,6 @@ npm run build
 npm run publish:repos
 ```
 
-### Microsoft Store (Windows MSIX)
-
-After the GitHub release is published, [`.github/workflows/msstore-release.yml`](.github/workflows/msstore-release.yml) runs on `windows-latest`: builds the unified `.exe`, packs **`MyHomeGames-<version>-win-x64.msix`**, and runs **`msstore publish`**.
-
-Configure **`MSSTORE_*` secrets** in the GitHub repository (see [docs/install-msstore.md](docs/install-msstore.md)). On macOS, `publish-msstore.js` only logs that the workflow handles Store submission.
-
-Local test on Windows (SDK MakeAppx + Store CLI):
-
-```bash
-npm run build:win-unified
-npm run build:msix
-```
-
 ### Build prerequisites
 
 The full build (`npm run build`) produces packages for multiple platforms. Requirements:
@@ -321,10 +308,11 @@ Temporary build files (including RPM working directory) are created under `build
 A **GitHub Personal Access Token** with `repo` scope is **recommended** for automated releases (not required — `npm run release` warns and falls back to the web UI).
 
 1. Create a token at [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)** → scope **`repo`**.
-2. Export it (or set in `.env` / `.env.local` — see `.env.example`; never commit the token):
+2. Add it to `.env` (or `.env.local` — see `.env.example`; never commit the token). `npm run release` loads both automatically.
 
 ```bash
-export GITHUB_TOKEN=ghp_your_token_here
+# .env
+GITHUB_TOKEN=ghp_your_token_here
 ```
 
 #### Token troubleshooting
@@ -334,12 +322,13 @@ If release fails with authentication or Octokit errors:
 1. **Classic PAT** — scope **`repo`** must be enabled.
 2. **Organization SSO** — if `myhomegames` uses SAML SSO, open the token → **Configure SSO** → **Authorize** for the org.
 3. **Fine-grained PAT** — select repository `myhomegames-server` and grant **Contents: Read and write** + **Metadata: Read**.
-4. Verify the token:
+4. Verify the token (loads `GITHUB_TOKEN` from `.env`):
 
 ```bash
+set -a && source .env && set +a
 curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
 ```
 
 A valid response includes your `"login"`.
 
-**Security Note:** Never commit your `GITHUB_TOKEN` to the repository. The `.gitignore` file already excludes `.env.local` and `.env.*.local` files.
+**Security Note:** Never commit your `GITHUB_TOKEN` to the repository. The `.gitignore` file already excludes `.env`, `.env.local`, and `.env.*.local`.
