@@ -84,16 +84,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var stdoutBuffer = ""
     private var serverReady = false
     private let readyLock = NSLock()
+    private var attentionRequestId: Int = 0
     
-    /// Dock bounce continues while we stay inside applicationDidFinishLaunching.
     /// Server prints "Server ready" only after Sunshine / Moonlight Web / tunnel bootstrap.
     private let readyTimeoutSeconds: TimeInterval = 600
-    
-    private func markServerReady() {
-        readyLock.lock()
-        defer { readyLock.unlock() }
-        serverReady = true
-    }
     
     private func isServerReady() -> Bool {
         readyLock.lock()
@@ -105,8 +99,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print(chunk, terminator: "")
         readyLock.lock()
         stdoutBuffer += chunk
-        let sawReady = stdoutBuffer.contains("Server ready")
-        if sawReady { serverReady = true }
+        if stdoutBuffer.contains("Server ready") {
+            serverReady = true
+        }
         // Keep a small tail so a split "Server ready" across reads still matches.
         if stdoutBuffer.count > 4096 {
             stdoutBuffer = String(stdoutBuffer.suffix(512))
@@ -114,12 +109,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         readyLock.unlock()
     }
     
-    private func signalDockReady() {
+    /// macOS ends the Finder launch bounce almost immediately. Keep the Dock icon
+    /// bouncing with critical attention until Sunshine / Moonlight finish starting.
+    private var lastAttentionRearm = Date.distantPast
+    
+    private func beginDockBounceUntilReady() {
+        NSApp.setActivationPolicy(.regular)
+        attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
+        lastAttentionRearm = Date()
+    }
+    
+    private func rearmDockBounceIfNeeded() {
+        // Do not activate the app while waiting — activation cancels critical bounce.
+        if Date().timeIntervalSince(lastAttentionRearm) >= 2 {
+            attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
+            lastAttentionRearm = Date()
+        }
+    }
+    
+    private func endDockBounceAndActivate() {
+        if attentionRequestId != 0 {
+            NSApp.cancelUserAttentionRequest(attentionRequestId)
+            attentionRequestId = 0
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        beginDockBounceUntilReady()
+        
         // Get the bundle path
         let bundle = Bundle.main
         let bundlePath = bundle.bundlePath
@@ -136,7 +155,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Could not find server executable at: \\(executablePath)"
             alert.alertStyle = .critical
             alert.runModal()
-            signalDockReady()
+            endDockBounceAndActivate()
             return
         }
         
@@ -211,12 +230,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     print("Timed out waiting for Server ready after \\(Int(readyTimeoutSeconds))s — activating Dock icon anyway")
                     break
                 }
+                rearmDockBounceIfNeeded()
                 RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
             }
             
-            signalDockReady()
+            endDockBounceAndActivate()
             if isServerReady() {
-                print("Dock activated after Server ready")
+                print("Dock bounce stopped after Server ready")
             }
         } catch {
             print("Error launching server: \\(error)")
@@ -226,7 +246,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Failed to start server: \\(error.localizedDescription)"
             alert.alertStyle = .critical
             alert.runModal()
-            signalDockReady()
+            endDockBounceAndActivate()
             // Keep app running for a moment to see the error
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 NSApplication.shared.terminate(nil)

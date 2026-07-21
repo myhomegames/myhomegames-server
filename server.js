@@ -1209,7 +1209,12 @@ if (process.env.NODE_ENV !== 'test') {
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
           const localOrigin = `https://127.0.0.1:${HTTPS_PORT}`;
           onServerListening(localOrigin).finally(() => {
-            process.stdout.write("Server ready\n");
+            // writeSync: when stdout is a pipe (macOS .app wrapper), Node may block-buffer write().
+            try {
+              fs.writeSync(1, "Server ready\n");
+            } catch {
+              process.stdout.write("Server ready\n");
+            }
           });
         });
 
@@ -1236,7 +1241,11 @@ if (process.env.NODE_ENV !== 'test') {
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
       onServerListening(localOrigin).finally(() => {
-        process.stdout.write('Server ready\n');
+        try {
+          fs.writeSync(1, "Server ready\n");
+        } catch {
+          process.stdout.write("Server ready\n");
+        }
       });
     });
     
