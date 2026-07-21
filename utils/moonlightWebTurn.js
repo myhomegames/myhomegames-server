@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   isCloudflareTurnConfigured,
+  generateCloudflareTurnIceServers,
 } = require("./cloudflareTurn");
 const {
   readDockerMoonlightConfig,
@@ -14,33 +15,53 @@ const {
 
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_SCRIPT_PATH = "/moonlight-web/server/ice_servers_cf.sh";
+const CONTAINER_JSON_PATH = "/moonlight-web/server/ice_servers.json";
 const SCRIPT_FILENAME = "ice_servers_cf.sh";
+const JSON_FILENAME = "ice_servers.json";
 
 function resolveIceScriptHostPath(installDir) {
   return path.join(installDir, SCRIPT_FILENAME);
 }
 
+function resolveIceJsonHostPath(installDir) {
+  return path.join(installDir, JSON_FILENAME);
+}
+
 /**
  * Script executed by Moonlight Web on every stream start (inside Docker).
- * Calls the local MyHomeGames API to mint short-lived Cloudflare TURN ICE servers.
+ * The Moonlight image has no curl/wget — host mints TURN JSON; this script only cats it.
  */
-function writeMoonlightIceServerScript(installDir, { httpPort = 4000 } = {}) {
+function writeMoonlightIceServerScript(installDir) {
   const scriptPath = resolveIceScriptHostPath(installDir);
-  const port = Number(httpPort) > 0 ? Number(httpPort) : 4000;
   const body = `#!/bin/sh
 set -e
-# Mint Cloudflare Realtime TURN credentials via MyHomeGames (host gateway).
-curl -sf "http://host.docker.internal:${port}/streaming/turn-ice-servers"
+# Cloudflare TURN ICE servers minted on the host (MyHomeGames) — no HTTP client in image.
+cat "${CONTAINER_JSON_PATH}"
 `;
   fs.writeFileSync(scriptPath, body, { encoding: "utf8", mode: 0o755 });
   return scriptPath;
 }
 
-function dockerCpIceScript(hostScriptPath) {
-  execFileSync("docker", ["cp", hostScriptPath, `${DOCKER_CONTAINER_NAME}:${CONTAINER_SCRIPT_PATH}`], {
+/**
+ * @param {string} installDir
+ * @param {unknown} iceServers
+ */
+function writeMoonlightIceServersJson(installDir, iceServers) {
+  const jsonPath = resolveIceJsonHostPath(installDir);
+  fs.writeFileSync(jsonPath, `${JSON.stringify(iceServers)}\n`, { encoding: "utf8", mode: 0o644 });
+  return jsonPath;
+}
+
+function dockerCpIntoMoonlight(hostPath, containerPath) {
+  execFileSync("docker", ["cp", hostPath, `${DOCKER_CONTAINER_NAME}:${containerPath}`], {
     stdio: "pipe",
     timeout: 30_000,
   });
+}
+
+function dockerCpIceArtifacts(hostScriptPath, hostJsonPath) {
+  dockerCpIntoMoonlight(hostScriptPath, CONTAINER_SCRIPT_PATH);
+  dockerCpIntoMoonlight(hostJsonPath, CONTAINER_JSON_PATH);
   try {
     execFileSync(
       "docker",
@@ -53,7 +74,41 @@ function dockerCpIceScript(hostScriptPath) {
 }
 
 /**
- * Point Moonlight Web at the Cloudflare TURN ice_server_script (Docker installs).
+ * Mint Cloudflare TURN on the host and refresh the JSON Moonlight's ice_server_script cats.
+ * Safe to call on every stream launch (no container restart).
+ */
+async function refreshMoonlightTurnIceServers({
+  installDir,
+  kind = null,
+  env = process.env,
+} = {}) {
+  if (!isCloudflareTurnConfigured(env)) {
+    return { applied: false, reason: "turn-not-configured" };
+  }
+  if (kind != null && kind !== "docker") {
+    return { applied: false, reason: "unsupported-kind" };
+  }
+  if (!installDir) {
+    throw new Error("Moonlight installDir is required to refresh TURN ICE servers");
+  }
+
+  const { iceServers } = await generateCloudflareTurnIceServers(env);
+  const hostScriptPath = writeMoonlightIceServerScript(installDir);
+  const hostJsonPath = writeMoonlightIceServersJson(installDir, iceServers);
+
+  try {
+    dockerCpIceArtifacts(hostScriptPath, hostJsonPath);
+  } catch (error) {
+    console.warn(`Could not copy TURN ICE artifacts into Moonlight container: ${error.message || error}`);
+    return { applied: false, reason: "docker-cp-failed", iceServers };
+  }
+
+  return { applied: true, iceServers, scriptPath: CONTAINER_SCRIPT_PATH, jsonPath: CONTAINER_JSON_PATH };
+}
+
+/**
+ * Point Moonlight Web at the Cloudflare TURN ice_server_script (Docker installs)
+ * and seed ice_servers / JSON so the first stream works even before a later refresh.
  */
 async function ensureMoonlightCloudflareTurnIce({
   installDir,
@@ -61,6 +116,7 @@ async function ensureMoonlightCloudflareTurnIce({
   httpPort = 4000,
   env = process.env,
 } = {}) {
+  void httpPort; // kept for call-site compatibility; ICE is minted on the host now
   if (!isCloudflareTurnConfigured(env)) {
     return { applied: false, reason: "turn-not-configured" };
   }
@@ -72,7 +128,10 @@ async function ensureMoonlightCloudflareTurnIce({
     throw new Error("Moonlight installDir is required to install the ICE script");
   }
 
-  const hostScriptPath = writeMoonlightIceServerScript(installDir, { httpPort });
+  const refreshed = await refreshMoonlightTurnIceServers({ installDir, kind, env });
+  if (!refreshed.iceServers) {
+    return refreshed;
+  }
 
   let config;
   try {
@@ -82,32 +141,35 @@ async function ensureMoonlightCloudflareTurnIce({
   }
 
   const currentScript = config?.webrtc?.ice_server_script;
-  const already = currentScript === CONTAINER_SCRIPT_PATH || currentScript === "./server/ice_servers_cf.sh";
-
-  try {
-    dockerCpIceScript(hostScriptPath);
-  } catch (error) {
-    console.warn(`Could not copy ICE script into Moonlight container: ${error.message || error}`);
-  }
-
-  if (already) {
-    return { applied: false, reason: "already-configured", scriptPath: CONTAINER_SCRIPT_PATH };
-  }
+  const scriptReady =
+    currentScript === CONTAINER_SCRIPT_PATH || currentScript === "./server/ice_servers_cf.sh";
 
   config.webrtc = {
     ...(config.webrtc || {}),
     ice_server_script: CONTAINER_SCRIPT_PATH,
+    ice_servers: refreshed.iceServers,
   };
   writeDockerMoonlightConfig(config);
-  console.log("Moonlight Web configured to use Cloudflare TURN (ice_server_script).");
+
+  if (scriptReady && refreshed.applied) {
+    console.log("Moonlight Web Cloudflare TURN ICE servers refreshed.");
+    return { applied: true, restarted: false, ...refreshed };
+  }
+
+  console.log("Moonlight Web configured to use Cloudflare TURN (ice_server_script + host-minted JSON).");
   restartDockerMoonlight();
-  return { applied: true, restarted: true, scriptPath: CONTAINER_SCRIPT_PATH };
+  return { applied: true, restarted: true, ...refreshed };
 }
 
 module.exports = {
   CONTAINER_SCRIPT_PATH,
+  CONTAINER_JSON_PATH,
   SCRIPT_FILENAME,
+  JSON_FILENAME,
   writeMoonlightIceServerScript,
+  writeMoonlightIceServersJson,
+  refreshMoonlightTurnIceServers,
   ensureMoonlightCloudflareTurnIce,
   resolveIceScriptHostPath,
+  resolveIceJsonHostPath,
 };

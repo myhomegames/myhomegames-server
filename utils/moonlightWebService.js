@@ -23,8 +23,10 @@ const {
 } = require("./moonlightWebEmbed");
 const {
   writeMoonlightIceServerScript,
+  writeMoonlightIceServersJson,
   ensureMoonlightCloudflareTurnIce,
   resolveIceScriptHostPath,
+  resolveIceJsonHostPath,
 } = require("./moonlightWebTurn");
 const { moonlightWebPublicUrlFromApiBase } = require("./tunnelHostname");
 
@@ -135,9 +137,10 @@ function startDockerMoonlightWeb({ image, installDir, port, env = process.env })
 
   const lanIp = env.WEBRTC_NAT_1TO1_HOST?.trim() || resolveLanIpHint();
   const udpRange = env.MOONLIGHT_WEB_UDP_RANGE?.trim() || "40000-40100";
-  const httpPort = Number(env.HTTP_PORT || 4000) || 4000;
-  writeMoonlightIceServerScript(installDir, { httpPort });
+  writeMoonlightIceServerScript(installDir);
+  writeMoonlightIceServersJson(installDir, []);
   const iceScriptHostPath = resolveIceScriptHostPath(installDir);
+  const iceJsonHostPath = resolveIceJsonHostPath(installDir);
   const args = [
     "run",
     "-d",
@@ -155,6 +158,8 @@ function startDockerMoonlightWeb({ image, installDir, port, env = process.env })
     `${dataDir}:/data`,
     "-v",
     `${iceScriptHostPath}:/moonlight-web/server/ice_servers_cf.sh:ro`,
+    "-v",
+    `${iceJsonHostPath}:/moonlight-web/server/ice_servers.json:ro`,
     image,
   ];
 
