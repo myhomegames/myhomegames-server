@@ -81,6 +81,43 @@ import Foundation
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var serverProcess: Process?
+    private var stdoutBuffer = ""
+    private var serverReady = false
+    private let readyLock = NSLock()
+    
+    /// Dock bounce continues while we stay inside applicationDidFinishLaunching.
+    /// Server prints "Server ready" only after Sunshine / Moonlight Web / tunnel bootstrap.
+    private let readyTimeoutSeconds: TimeInterval = 600
+    
+    private func markServerReady() {
+        readyLock.lock()
+        defer { readyLock.unlock() }
+        serverReady = true
+    }
+    
+    private func isServerReady() -> Bool {
+        readyLock.lock()
+        defer { readyLock.unlock() }
+        return serverReady
+    }
+    
+    private func consumeStdout(_ chunk: String) {
+        print(chunk, terminator: "")
+        readyLock.lock()
+        stdoutBuffer += chunk
+        let sawReady = stdoutBuffer.contains("Server ready")
+        if sawReady { serverReady = true }
+        // Keep a small tail so a split "Server ready" across reads still matches.
+        if stdoutBuffer.count > 4096 {
+            stdoutBuffer = String(stdoutBuffer.suffix(512))
+        }
+        readyLock.unlock()
+    }
+    
+    private func signalDockReady() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Get the bundle path
@@ -99,6 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Could not find server executable at: \\(executablePath)"
             alert.alertStyle = .critical
             alert.runModal()
+            signalDockReady()
             return
         }
         
@@ -133,14 +171,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         
-        // Read output asynchronously
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        // Read output asynchronously — look for "Server ready" before stopping Dock bounce
+        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            if data.count > 0 {
-                if let output = String(data: data, encoding: .utf8) {
-                    print(output, terminator: "")
-                }
-            }
+            guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
+            self?.consumeStdout(output)
         }
         
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -157,16 +192,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.serverProcess = process
             print("Server process started with PID: \\(process.processIdentifier)")
             
-            // Signal that app is ready (this stops the bouncing icon)
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            
             // Monitor the process
             process.terminationHandler = { process in
                 print("Server process terminated with status: \\(process.terminationStatus)")
                 DispatchQueue.main.async {
                     NSApplication.shared.terminate(nil)
                 }
+            }
+            
+            // Keep Dock bouncing until HTTP API + Sunshine + Moonlight Web (+ tunnel) are up.
+            let deadline = Date().addingTimeInterval(readyTimeoutSeconds)
+            while !isServerReady() {
+                if !process.isRunning {
+                    print("Server exited before printing Server ready")
+                    break
+                }
+                if Date() >= deadline {
+                    print("Timed out waiting for Server ready after \\(Int(readyTimeoutSeconds))s — activating Dock icon anyway")
+                    break
+                }
+                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+            }
+            
+            signalDockReady()
+            if isServerReady() {
+                print("Dock activated after Server ready")
             }
         } catch {
             print("Error launching server: \\(error)")
@@ -176,6 +226,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Failed to start server: \\(error.localizedDescription)"
             alert.alertStyle = .critical
             alert.runModal()
+            signalDockReady()
             // Keep app running for a moment to see the error
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 NSApplication.shared.terminate(nil)
