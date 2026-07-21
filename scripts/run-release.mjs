@@ -28,7 +28,7 @@ if (check.status !== 0) {
   process.exit(check.status ?? 1);
 }
 
-const result = spawnSync("npx", ["release-it", "--no-increment"], {
+const result = spawnSync("npx", ["release-it", "--no-increment", "--ci", ...process.argv.slice(2)], {
   stdio: "inherit",
   env: process.env,
   shell: process.platform === "win32",
