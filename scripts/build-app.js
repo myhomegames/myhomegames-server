@@ -729,7 +729,6 @@ function keepOnlyFinalArtifacts() {
     /\.pkg$/,
     /-linux-x64\.tar\.gz$/,
     /^MyHomeGames-.*-win-x64\.zip$/,
-    /^MyHomeGames-.*-win-x64\.msix$/,
     /^myhomegames-server_.*_amd64\.deb$/,
     /^myhomegames-server-.*\.x86_64\.rpm$/,
   ];
