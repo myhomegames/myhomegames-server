@@ -110,7 +110,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     /// macOS ends the Finder launch bounce almost immediately. Keep the Dock icon
-    /// bouncing with critical attention until Sunshine / Moonlight finish starting.
+    /// bouncing with a single critical attention until Sunshine / Moonlight finish starting.
+    /// Important: each criticalRequest stacks — always cancel the previous id before re-arming.
     private var lastAttentionRearm = Date.distantPast
     
     private func beginDockBounceUntilReady() {
@@ -121,16 +122,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func rearmDockBounceIfNeeded() {
         // Do not activate the app while waiting — activation cancels critical bounce.
-        if Date().timeIntervalSince(lastAttentionRearm) >= 2 {
-            attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
-            lastAttentionRearm = Date()
-        }
-    }
-    
-    private func endDockBounceAndActivate() {
+        guard Date().timeIntervalSince(lastAttentionRearm) >= 2 else { return }
         if attentionRequestId != 0 {
             NSApp.cancelUserAttentionRequest(attentionRequestId)
             attentionRequestId = 0
+        }
+        attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
+        lastAttentionRearm = Date()
+    }
+    
+    private func endDockBounceAndActivate() {
+        let lastId = attentionRequestId
+        attentionRequestId = 0
+        if lastId != 0 {
+            NSApp.cancelUserAttentionRequest(lastId)
+            // Cancel any earlier ids from before cancel-on-rearm existed / race windows.
+            if lastId > 1 {
+                for staleId in 1..<lastId {
+                    NSApp.cancelUserAttentionRequest(staleId)
+                }
+            }
         }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
