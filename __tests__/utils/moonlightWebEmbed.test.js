@@ -46,7 +46,9 @@ describe("moonlightWebEmbed", () => {
       bitrate: 5000,
       fps: 30,
       videoSize: "720p",
-      dataTransport: "websocket",
+      dataTransport: "webrtc",
+      canvasRenderer: false,
+      forceVideoElementRenderer: true,
     });
   });
 

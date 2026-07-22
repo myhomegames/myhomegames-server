@@ -9,8 +9,26 @@ const { requestJson } = require("./moonlightWebCredentials");
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
 
-/** Lower quality + websocket transport for Tizen / smart TV browsers. */
+/** Lower quality + WebRTC video element for Tizen / smart TV browsers.
+ *  Do NOT use websocket+canvas: Tizen often paints one frame then freezes while audio plays.
+ *  forceVideoElementRenderer only works with WebRTC (videotrack), per Moonlight pipeline.js.
+ */
 const MOONLIGHT_TV_STREAM_SETTINGS = {
+  bitrate: 5000,
+  fps: 30,
+  videoSize: "720p",
+  videoCodec: "h264",
+  dataTransport: "webrtc",
+  canvasRenderer: false,
+  forceVideoElementRenderer: true,
+  hdr: false,
+  enterFullscreenOnStreamStart: true,
+};
+
+const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
+
+/** Previous TV profile that froze video on Tizen (canvas + websocket). */
+const MOONLIGHT_TV_SETTINGS_JSON_LEGACY = JSON.stringify({
   bitrate: 5000,
   fps: 30,
   videoSize: "720p",
@@ -20,15 +38,12 @@ const MOONLIGHT_TV_STREAM_SETTINGS = {
   forceVideoElementRenderer: false,
   hdr: false,
   enterFullscreenOnStreamStart: true,
-};
-
-const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
+});
 
 const MOONLIGHT_SETTINGS_LOAD_STOCK = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
         Object.assign(this.inputConfig, {`;
 
-const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
-        // MHG: smart TV / mhgProfile=tv - lower quality + websocket for weak browsers
+const MOONLIGHT_TV_PROFILE_IIFE = `        // MHG: smart TV / mhgProfile=tv - lower quality + WebRTC video element for Tizen
         (() => {
             try {
                 const profile = new URLSearchParams(window.location.search).get("mhgProfile");
@@ -36,6 +51,7 @@ const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStr
                 const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
                 if (!isTv)
                     return;
+                window.__MHG_TV__ = true;
                 Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
                 try {
                     localStorage.setItem("mlSettings", JSON.stringify(settings));
@@ -43,8 +59,96 @@ const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStr
                 catch (_e) { }
             }
             catch (_e) { }
-        })();
+        })();`;
+
+const MOONLIGHT_TV_PROFILE_IIFE_LEGACY = `        // MHG: smart TV / mhgProfile=tv - lower quality + websocket for weak browsers
+        (() => {
+            try {
+                const profile = new URLSearchParams(window.location.search).get("mhgProfile");
+                const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+                const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+                if (!isTv)
+                    return;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON_LEGACY});
+                try {
+                    localStorage.setItem("mlSettings", JSON.stringify(settings));
+                }
+                catch (_e) { }
+            }
+            catch (_e) { }
+        })();`;
+
+/** Em-dash comment variant applied by an earlier patch revision. */
+const MOONLIGHT_TV_PROFILE_IIFE_LEGACY_EMDASH = MOONLIGHT_TV_PROFILE_IIFE_LEGACY.replace(
+  "mhgProfile=tv - lower quality",
+  "mhgProfile=tv \u2014 lower quality",
+);
+
+const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE}
         Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_SETTINGS_LOAD_TV_LEGACY = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE_LEGACY}
+        Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_SETTINGS_LOAD_TV_LEGACY_EMDASH = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE_LEGACY_EMDASH}
+        Object.assign(this.inputConfig, {`;
+
+/** Remote / gamepad must unmute WebRTC <audio> and can request fullscreen (mouse/touch only in stock). */
+const MOONLIGHT_KEYDOWN_STOCK = `    onKeyDown(event) {
+        this.onUserInteraction();
+        console.debug(event);`;
+
+const MOONLIGHT_KEYDOWN_PATCHED = `    onKeyDown(event) {
+        this.consumeAutoFullscreenInteraction();
+        this.onUserInteraction();
+        console.debug(event);`;
+
+const MOONLIGHT_GAMEPAD_UPDATE_STOCK = `    onGamepadUpdate() {
+        this.stream.getInput().onGamepadUpdate();
+        window.requestAnimationFrame(this.onGamepadUpdate.bind(this));
+    }`;
+
+const MOONLIGHT_GAMEPAD_UPDATE_PATCHED = `    onGamepadUpdate() {
+        try {
+            const pads = typeof navigator !== "undefined" && navigator.getGamepads ? navigator.getGamepads() : [];
+            for (const pad of pads) {
+                if (!pad)
+                    continue;
+                if (pad.buttons && pad.buttons.some((b) => b && b.pressed)) {
+                    this.consumeAutoFullscreenInteraction();
+                    this.onUserInteraction();
+                    break;
+                }
+            }
+        }
+        catch (_gpErr) { }
+        this.stream.getInput().onGamepadUpdate();
+        window.requestAnimationFrame(this.onGamepadUpdate.bind(this));
+    }`;
+
+const MOONLIGHT_AUDIO_MUTED_STOCK = `        this.audioElement.autoplay = true;
+        this.audioElement.muted = true;
+        this.audioElement.srcObject = this.stream;`;
+
+const MOONLIGHT_AUDIO_MUTED_PATCHED = `        this.audioElement.autoplay = true;
+        // MHG: Tizen WebRTC audio stays silent until unmute; start unmuted on smart TVs.
+        this.audioElement.muted = !(typeof window !== "undefined" && window.__MHG_TV__);
+        this.audioElement.srcObject = this.stream;`;
+
+const MOONLIGHT_AUDIO_INTERACT_STOCK = `    onUserInteraction() {
+        this.audioElement.muted = false;
+    }`;
+
+const MOONLIGHT_AUDIO_INTERACT_PATCHED = `    onUserInteraction() {
+        this.audioElement.muted = false;
+        try {
+            this.audioElement.play();
+        }
+        catch (_playErr) { }
+    }`;
 
 function shouldUseMoonlightTvProfile(search = "", userAgent = "") {
   const params = new URLSearchParams(String(search || "").replace(/^\?/, ""));
@@ -400,8 +504,24 @@ function patchMoonlightStaticFullscreenAssets() {
           "this.autoEnterFullscreenOnStart=settings.enterFullscreenOnStreamStart;",
           "this.autoEnterFullscreenOnStart=true;",
         ],
-        // Smart TV / mhgProfile=tv: cap quality and prefer websocket over flaky WebRTC.
+        // Smart TV / mhgProfile=tv: WebRTC + HTML video element (not canvas/websocket).
         [MOONLIGHT_SETTINGS_LOAD_STOCK, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        // Migrate previous freeze-prone TV profiles already patched into stream.js.
+        [MOONLIGHT_SETTINGS_LOAD_TV_LEGACY, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        [MOONLIGHT_SETTINGS_LOAD_TV_LEGACY_EMDASH, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        // Ensure TV flag is set (needed for unmuted WebRTC audio bootstrap).
+        [
+          `                if (!isTv)
+                    return;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});`,
+          `                if (!isTv)
+                    return;
+                window.__MHG_TV__ = true;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});`,
+        ],
+        // TV remote: key / gamepad must unmute audio and request fullscreen (stock = mouse/touch only).
+        [MOONLIGHT_KEYDOWN_STOCK, MOONLIGHT_KEYDOWN_PATCHED],
+        [MOONLIGHT_GAMEPAD_UPDATE_STOCK, MOONLIGHT_GAMEPAD_UPDATE_PATCHED],
         // Unique block after connection modal.
         // Skip AutoFullscreenModal (OK/Cancel): browsers still need a user gesture, so
         // arm fullscreen on the next tap instead of showing a confirm dialog.
@@ -574,6 +694,97 @@ function patchMoonlightStaticFullscreenAssets() {
     window.addEventListener("pagehide", send);
     window.addEventListener("popstate", send);
 })();`,
+        ],
+      ],
+    },
+    {
+      file: "audio_element.js",
+      containerPath: "/moonlight-web/static/stream/audio/audio_element.js",
+      replace: [
+        [MOONLIGHT_AUDIO_MUTED_STOCK, MOONLIGHT_AUDIO_MUTED_PATCHED],
+        [MOONLIGHT_AUDIO_INTERACT_STOCK, MOONLIGHT_AUDIO_INTERACT_PATCHED],
+      ],
+    },
+    {
+      file: "stream.html",
+      containerPath: "/moonlight-web/static/stream.html",
+      replace: [
+        // Bust Tizen's aggressive cache of stream.js after MHG patches.
+        [
+          '<script type="module" src="stream.js" defer></script>',
+          '<script type="module" src="stream.js?mhg=4" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=3" defer></script>',
+          '<script type="module" src="stream.js?mhg=4" defer></script>',
+        ],
+        // Seed TV-friendly settings before modules load (overrides stale localStorage).
+        [
+          `    <script>
+        try {
+            const raw = localStorage.getItem("mlSettings");
+            const parsed = raw ? JSON.parse(raw) : null;
+            const language = parsed && (parsed.language === "zh-CN" || parsed.language === "zh" || parsed.language === "zh_CN")
+                ? "zh-CN"
+                : "en";
+            document.documentElement.lang = language;
+            document.documentElement.translate = false;
+            document.documentElement.classList.add("notranslate");
+        } catch (_err) { }
+    </script>`,
+          `    <script>
+        try {
+            const raw = localStorage.getItem("mlSettings");
+            const parsed = raw ? JSON.parse(raw) : null;
+            const language = parsed && (parsed.language === "zh-CN" || parsed.language === "zh" || parsed.language === "zh_CN")
+                ? "zh-CN"
+                : "en";
+            document.documentElement.lang = language;
+            document.documentElement.translate = false;
+            document.documentElement.classList.add("notranslate");
+        } catch (_err) { }
+        // MHG: smart TV - WebRTC video element + unmute/fullscreen helpers for the remote
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                window.__MHG_TV__ = true;
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }
+    </script>`,
+        ],
+        // Migrate earlier TV seed (mhg=3) that lacked __MHG_TV__.
+        [
+          `        // MHG: smart TV — prefer WebRTC + HTML video (canvas freezes on first frame on Tizen)
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }`,
+          `        // MHG: smart TV - WebRTC video element + unmute/fullscreen helpers for the remote
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                window.__MHG_TV__ = true;
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }`,
         ],
       ],
     },
