@@ -110,7 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     /// macOS ends the Finder launch bounce almost immediately, and
-    /// `criticalRequest` only bounces while this app is *not* frontmost.
+    /// criticalRequest only bounces while this app is not frontmost.
     /// Yield focus to Finder while waiting, keep a single attention id (cancel before re-arm).
     private var lastAttentionRearm = Date.distantPast
     
