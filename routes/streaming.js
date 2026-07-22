@@ -24,6 +24,7 @@ const {
   isCloudflareTurnConfigured,
   generateCloudflareTurnIceServers,
 } = require("../utils/cloudflareTurn");
+const { refreshMoonlightTurnIceServers } = require("../utils/moonlightWebTurn");
 const { stopRemoteStreamingSession, rememberStreamingLaunch } = require("../utils/streamingSessionStop");
 const {
   isUserTunnelHostname,
@@ -134,6 +135,19 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         fullCommandPath: launched.fullCommandPath,
       });
       const sunshineReachable = await probeSunshineReachable(streaming);
+
+      try {
+        const moonlightInstallDir = resolveMoonlightWebInstallDir(metadataPath);
+        const moonlightKind = readMoonlightWebManifest(moonlightInstallDir)?.kind || null;
+        if (moonlightKind === "docker" || moonlightKind == null) {
+          await refreshMoonlightTurnIceServers({
+            installDir: moonlightInstallDir,
+            kind: moonlightKind === "docker" ? "docker" : null,
+          });
+        }
+      } catch (error) {
+        console.warn(`Could not refresh Cloudflare TURN ICE servers: ${error.message || error}`);
+      }
 
       let moonlightWebUrl = streaming.moonlightWebUrl;
       let moonlightStream = null;

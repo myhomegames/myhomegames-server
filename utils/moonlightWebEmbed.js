@@ -9,6 +9,155 @@ const { requestJson } = require("./moonlightWebCredentials");
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
 
+/** Lower quality + WebRTC video element for Tizen / smart TV browsers.
+ *  Do NOT use websocket+canvas: Tizen often paints one frame then freezes while audio plays.
+ *  forceVideoElementRenderer only works with WebRTC (videotrack), per Moonlight pipeline.js.
+ */
+const MOONLIGHT_TV_STREAM_SETTINGS = {
+  bitrate: 5000,
+  fps: 30,
+  videoSize: "720p",
+  videoCodec: "h264",
+  dataTransport: "webrtc",
+  canvasRenderer: false,
+  forceVideoElementRenderer: true,
+  hdr: false,
+  enterFullscreenOnStreamStart: true,
+};
+
+const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
+
+/** Previous TV profile that froze video on Tizen (canvas + websocket). */
+const MOONLIGHT_TV_SETTINGS_JSON_LEGACY = JSON.stringify({
+  bitrate: 5000,
+  fps: 30,
+  videoSize: "720p",
+  videoCodec: "h264",
+  dataTransport: "websocket",
+  canvasRenderer: true,
+  forceVideoElementRenderer: false,
+  hdr: false,
+  enterFullscreenOnStreamStart: true,
+});
+
+const MOONLIGHT_SETTINGS_LOAD_STOCK = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+        Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_TV_PROFILE_IIFE = `        // MHG: smart TV / mhgProfile=tv - lower quality + WebRTC video element for Tizen
+        (() => {
+            try {
+                const profile = new URLSearchParams(window.location.search).get("mhgProfile");
+                const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+                const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+                if (!isTv)
+                    return;
+                window.__MHG_TV__ = true;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                try {
+                    localStorage.setItem("mlSettings", JSON.stringify(settings));
+                }
+                catch (_e) { }
+            }
+            catch (_e) { }
+        })();`;
+
+const MOONLIGHT_TV_PROFILE_IIFE_LEGACY = `        // MHG: smart TV / mhgProfile=tv - lower quality + websocket for weak browsers
+        (() => {
+            try {
+                const profile = new URLSearchParams(window.location.search).get("mhgProfile");
+                const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+                const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+                if (!isTv)
+                    return;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON_LEGACY});
+                try {
+                    localStorage.setItem("mlSettings", JSON.stringify(settings));
+                }
+                catch (_e) { }
+            }
+            catch (_e) { }
+        })();`;
+
+/** Em-dash comment variant applied by an earlier patch revision. */
+const MOONLIGHT_TV_PROFILE_IIFE_LEGACY_EMDASH = MOONLIGHT_TV_PROFILE_IIFE_LEGACY.replace(
+  "mhgProfile=tv - lower quality",
+  "mhgProfile=tv \u2014 lower quality",
+);
+
+const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE}
+        Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_SETTINGS_LOAD_TV_LEGACY = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE_LEGACY}
+        Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_SETTINGS_LOAD_TV_LEGACY_EMDASH = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+${MOONLIGHT_TV_PROFILE_IIFE_LEGACY_EMDASH}
+        Object.assign(this.inputConfig, {`;
+
+/** Remote / gamepad must unmute WebRTC <audio> and can request fullscreen (mouse/touch only in stock). */
+const MOONLIGHT_KEYDOWN_STOCK = `    onKeyDown(event) {
+        this.onUserInteraction();
+        console.debug(event);`;
+
+const MOONLIGHT_KEYDOWN_PATCHED = `    onKeyDown(event) {
+        this.consumeAutoFullscreenInteraction();
+        this.onUserInteraction();
+        console.debug(event);`;
+
+const MOONLIGHT_GAMEPAD_UPDATE_STOCK = `    onGamepadUpdate() {
+        this.stream.getInput().onGamepadUpdate();
+        window.requestAnimationFrame(this.onGamepadUpdate.bind(this));
+    }`;
+
+const MOONLIGHT_GAMEPAD_UPDATE_PATCHED = `    onGamepadUpdate() {
+        try {
+            const pads = typeof navigator !== "undefined" && navigator.getGamepads ? navigator.getGamepads() : [];
+            for (const pad of pads) {
+                if (!pad)
+                    continue;
+                if (pad.buttons && pad.buttons.some((b) => b && b.pressed)) {
+                    this.consumeAutoFullscreenInteraction();
+                    this.onUserInteraction();
+                    break;
+                }
+            }
+        }
+        catch (_gpErr) { }
+        this.stream.getInput().onGamepadUpdate();
+        window.requestAnimationFrame(this.onGamepadUpdate.bind(this));
+    }`;
+
+const MOONLIGHT_AUDIO_MUTED_STOCK = `        this.audioElement.autoplay = true;
+        this.audioElement.muted = true;
+        this.audioElement.srcObject = this.stream;`;
+
+const MOONLIGHT_AUDIO_MUTED_PATCHED = `        this.audioElement.autoplay = true;
+        // MHG: Tizen WebRTC audio stays silent until unmute; start unmuted on smart TVs.
+        this.audioElement.muted = !(typeof window !== "undefined" && window.__MHG_TV__);
+        this.audioElement.srcObject = this.stream;`;
+
+const MOONLIGHT_AUDIO_INTERACT_STOCK = `    onUserInteraction() {
+        this.audioElement.muted = false;
+    }`;
+
+const MOONLIGHT_AUDIO_INTERACT_PATCHED = `    onUserInteraction() {
+        this.audioElement.muted = false;
+        try {
+            this.audioElement.play();
+        }
+        catch (_playErr) { }
+    }`;
+
+function shouldUseMoonlightTvProfile(search = "", userAgent = "") {
+  const params = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+  if (params.get("mhgProfile") === "tv") return true;
+  return /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(
+    String(userAgent || "").toLowerCase(),
+  );
+}
+
 function listMoonlightUsers(baseUrl, cookie) {
   return requestJson({
     urlString: `${baseUrl}/api/users`,
@@ -164,10 +313,12 @@ async function resolveMoonlightDesktopStreamUrl({
 }
 
 /**
- * Attach mhgStop so Moonlight Exit can POST/GET the home API and kill the local game.
+ * Attach mhgStop / mhgReturn so Moonlight Exit can stop the home game and leave Moonlight.
  * Prefer a public HTTPS API base (per-user tunnel), never localhost.
+ * @param {string} streamUrl
+ * @param {{ apiBase?: string, gameId?: string|number, executableName?: string, hostId?: number|null, returnUrl?: string }} [opts]
  */
-function attachMoonlightStopHook(streamUrl, { apiBase, gameId, executableName, hostId } = {}) {
+function attachMoonlightStopHook(streamUrl, { apiBase, gameId, executableName, hostId, returnUrl } = {}) {
   const stream = String(streamUrl || "").trim();
   const api = String(apiBase || "").trim().replace(/\/$/, "");
   if (!stream || !api || gameId == null || gameId === "") return stream;
@@ -184,11 +335,113 @@ function attachMoonlightStopHook(streamUrl, { apiBase, gameId, executableName, h
     }
     const out = new URL(stream);
     out.searchParams.set("mhgStop", stop.toString());
+    const ret = String(returnUrl || "").trim();
+    if (ret && /^https?:\/\//i.test(ret)) {
+      out.searchParams.set("mhgReturn", ret);
+    }
     return out.toString();
   } catch {
     return stream;
   }
 }
+
+/** Shared Exit-button body used when patching Moonlight stream.js (must stay unique). */
+const MOONLIGHT_EXIT_HANDLER_PATCHED = `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const mhgStop = params.get("mhgStop");
+                if (mhgStop) {
+                    try {
+                        yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                    catch (_postErr) {
+                        yield fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                }
+            }
+            catch (e) {
+                console.warn("mhgStop failed", e);
+            }
+            const stream = this.app.getStream();
+            if (stream) {
+                const success = yield stream.stop();
+                if (!success) {
+                    console.debug("Failed to close stream correctly");
+                }
+            }
+            try {
+                const msg = { type: "mhg-moonlight-exit" };
+                if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage(msg, "*");
+                }
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage(msg, "*");
+                }
+            }
+            catch (_msgErr) { }
+            try {
+                window.close();
+            }
+            catch (_closeErr) { }
+            const mhgReturn = new URLSearchParams(window.location.search).get("mhgReturn");
+            if (mhgReturn) {
+                try {
+                    window.location.replace(mhgReturn);
+                    return;
+                }
+                catch (_retErr) { }
+            }
+            if (window.matchMedia('(display-mode: standalone)').matches) {
+                history.back();
+            }
+        }));`;
+
+const MOONLIGHT_EXIT_HANDLER_STOCK = `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+            const stream = this.app.getStream();
+            if (stream) {
+                const success = yield stream.stop();
+                if (!success) {
+                    console.debug("Failed to close stream correctly");
+                }
+            }
+            if (window.matchMedia('(display-mode: standalone)').matches) {
+                history.back();
+            }
+            else {
+                window.close();
+            }
+        }));`;
+
+/** Previous MHG patch: stop worked, but mobile stayed on Moonlight (history.back / failed close). */
+const MOONLIGHT_EXIT_HANDLER_LEGACY_MHG = `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+                if (mhgStop) {
+                    try {
+                        yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                    catch (_postErr) {
+                        yield fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" });
+                    }
+                }
+            }
+            catch (e) {
+                console.warn("mhgStop failed", e);
+            }
+            const stream = this.app.getStream();
+            if (stream) {
+                const success = yield stream.stop();
+                if (!success) {
+                    console.debug("Failed to close stream correctly");
+                }
+            }
+            if (window.matchMedia('(display-mode: standalone)').matches) {
+                history.back();
+            }
+            else {
+                window.close();
+            }
+        }));`;
 
 async function listMoonlightRoles(baseUrl, cookie) {
   const response = await requestJson({
@@ -251,6 +504,24 @@ function patchMoonlightStaticFullscreenAssets() {
           "this.autoEnterFullscreenOnStart=settings.enterFullscreenOnStreamStart;",
           "this.autoEnterFullscreenOnStart=true;",
         ],
+        // Smart TV / mhgProfile=tv: WebRTC + HTML video element (not canvas/websocket).
+        [MOONLIGHT_SETTINGS_LOAD_STOCK, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        // Migrate previous freeze-prone TV profiles already patched into stream.js.
+        [MOONLIGHT_SETTINGS_LOAD_TV_LEGACY, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        [MOONLIGHT_SETTINGS_LOAD_TV_LEGACY_EMDASH, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
+        // Ensure TV flag is set (needed for unmuted WebRTC audio bootstrap).
+        [
+          `                if (!isTv)
+                    return;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});`,
+          `                if (!isTv)
+                    return;
+                window.__MHG_TV__ = true;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});`,
+        ],
+        // TV remote: key / gamepad must unmute audio and request fullscreen (stock = mouse/touch only).
+        [MOONLIGHT_KEYDOWN_STOCK, MOONLIGHT_KEYDOWN_PATCHED],
+        [MOONLIGHT_GAMEPAD_UPDATE_STOCK, MOONLIGHT_GAMEPAD_UPDATE_PATCHED],
         // Unique block after connection modal.
         // Skip AutoFullscreenModal (OK/Cancel): browsers still need a user gesture, so
         // arm fullscreen on the next tap instead of showing a confirm dialog.
@@ -296,55 +567,11 @@ function patchMoonlightStaticFullscreenAssets() {
                 }
             }));`,
         ],
-        // On Exit: notify MyHomeGames stop URL (mhgStop query) so the home PC kills the game
-        // even when the MHG tab cannot see popup.closed (common on mobile).
-        [
-          `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
-            const stream = this.app.getStream();
-            if (stream) {
-                const success = yield stream.stop();
-                if (!success) {
-                    console.debug("Failed to close stream correctly");
-                }
-            }
-            if (window.matchMedia('(display-mode: standalone)').matches) {
-                history.back();
-            }
-            else {
-                window.close();
-            }
-        }));`,
-          `this.exitStreamButton.addEventListener("click", () => __awaiter(this, void 0, void 0, function* () {
-            try {
-                const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
-                if (mhgStop) {
-                    try {
-                        yield fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" });
-                    }
-                    catch (_postErr) {
-                        yield fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" });
-                    }
-                }
-            }
-            catch (e) {
-                console.warn("mhgStop failed", e);
-            }
-            const stream = this.app.getStream();
-            if (stream) {
-                const success = yield stream.stop();
-                if (!success) {
-                    console.debug("Failed to close stream correctly");
-                }
-            }
-            if (window.matchMedia('(display-mode: standalone)').matches) {
-                history.back();
-            }
-            else {
-                window.close();
-            }
-        }));`,
-        ],
-        // Migrate earlier POST-only mhgStop hook to POST+GET fallback.
+        // On Exit: stop home game (mhgStop), notify MHG tab (postMessage), close popup,
+        // else navigate to mhgReturn (mobile often ignores window.close / history.back stays in Moonlight).
+        [MOONLIGHT_EXIT_HANDLER_STOCK, MOONLIGHT_EXIT_HANDLER_PATCHED],
+        [MOONLIGHT_EXIT_HANDLER_LEGACY_MHG, MOONLIGHT_EXIT_HANDLER_PATCHED],
+        // Migrate earlier POST-only mhgStop hook to POST+GET fallback (partial older patches).
         [
           `const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
                 if (mhgStop) {
@@ -360,9 +587,9 @@ function patchMoonlightStaticFullscreenAssets() {
                     }
                 }`,
         ],
-        // Browser/system Back (and tab close): same stop as Exit.
+        // Browser/system Back (and tab close): same stop as Exit + notify MHG tab.
+        // Migrate previous MHG pagehide hook (no postMessage) first, then patch stock startApp().
         [
-          `startApp();`,
           `startApp();
 // MHG: stop home game when leaving via browser Back / tab close (not only Exit).
 (() => {
@@ -390,6 +617,174 @@ function patchMoonlightStaticFullscreenAssets() {
     window.addEventListener("pagehide", send);
     window.addEventListener("popstate", send);
 })();`,
+          `startApp();
+// MHG: stop home game when leaving via browser Back / tab close (not only Exit).
+(() => {
+    const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+    if (!mhgStop)
+        return;
+    let sent = false;
+    const send = () => {
+        if (sent)
+            return;
+        sent = true;
+        try {
+            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+                navigator.sendBeacon(mhgStop);
+            }
+        }
+        catch (_beaconErr) { }
+        try {
+            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
+                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
+            });
+        }
+        catch (_fetchErr) { }
+        try {
+            const msg = { type: "mhg-moonlight-exit" };
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage(msg, "*");
+            }
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, "*");
+            }
+        }
+        catch (_msgErr) { }
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+})();`,
+        ],
+        [
+          `startApp();`,
+          `startApp();
+// MHG: stop home game when leaving via browser Back / tab close (not only Exit).
+(() => {
+    const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
+    if (!mhgStop)
+        return;
+    let sent = false;
+    const send = () => {
+        if (sent)
+            return;
+        sent = true;
+        try {
+            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+                navigator.sendBeacon(mhgStop);
+            }
+        }
+        catch (_beaconErr) { }
+        try {
+            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
+                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
+            });
+        }
+        catch (_fetchErr) { }
+        try {
+            const msg = { type: "mhg-moonlight-exit" };
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage(msg, "*");
+            }
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, "*");
+            }
+        }
+        catch (_msgErr) { }
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+})();`,
+        ],
+      ],
+    },
+    {
+      file: "audio_element.js",
+      containerPath: "/moonlight-web/static/stream/audio/audio_element.js",
+      replace: [
+        [MOONLIGHT_AUDIO_MUTED_STOCK, MOONLIGHT_AUDIO_MUTED_PATCHED],
+        [MOONLIGHT_AUDIO_INTERACT_STOCK, MOONLIGHT_AUDIO_INTERACT_PATCHED],
+      ],
+    },
+    {
+      file: "stream.html",
+      containerPath: "/moonlight-web/static/stream.html",
+      replace: [
+        // Bust Tizen's aggressive cache of stream.js after MHG patches.
+        [
+          '<script type="module" src="stream.js" defer></script>',
+          '<script type="module" src="stream.js?mhg=4" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=3" defer></script>',
+          '<script type="module" src="stream.js?mhg=4" defer></script>',
+        ],
+        // Seed TV-friendly settings before modules load (overrides stale localStorage).
+        [
+          `    <script>
+        try {
+            const raw = localStorage.getItem("mlSettings");
+            const parsed = raw ? JSON.parse(raw) : null;
+            const language = parsed && (parsed.language === "zh-CN" || parsed.language === "zh" || parsed.language === "zh_CN")
+                ? "zh-CN"
+                : "en";
+            document.documentElement.lang = language;
+            document.documentElement.translate = false;
+            document.documentElement.classList.add("notranslate");
+        } catch (_err) { }
+    </script>`,
+          `    <script>
+        try {
+            const raw = localStorage.getItem("mlSettings");
+            const parsed = raw ? JSON.parse(raw) : null;
+            const language = parsed && (parsed.language === "zh-CN" || parsed.language === "zh" || parsed.language === "zh_CN")
+                ? "zh-CN"
+                : "en";
+            document.documentElement.lang = language;
+            document.documentElement.translate = false;
+            document.documentElement.classList.add("notranslate");
+        } catch (_err) { }
+        // MHG: smart TV - WebRTC video element + unmute/fullscreen helpers for the remote
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                window.__MHG_TV__ = true;
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }
+    </script>`,
+        ],
+        // Migrate earlier TV seed (mhg=3) that lacked __MHG_TV__.
+        [
+          `        // MHG: smart TV — prefer WebRTC + HTML video (canvas freezes on first frame on Tizen)
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }`,
+          `        // MHG: smart TV - WebRTC video element + unmute/fullscreen helpers for the remote
+        try {
+            const profile = new URLSearchParams(location.search).get("mhgProfile");
+            const ua = String(navigator.userAgent || "").toLowerCase();
+            const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+            if (isTv) {
+                window.__MHG_TV__ = true;
+                const raw = localStorage.getItem("mlSettings");
+                const settings = raw ? JSON.parse(raw) : {};
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                localStorage.setItem("mlSettings", JSON.stringify(settings));
+            }
+        } catch (_tvErr) { }`,
         ],
       ],
     },
@@ -480,6 +875,10 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
       ? role.default_settings
       : {};
   if (currentDefaults.enterFullscreenOnStreamStart !== true) {
+    const roleType = role.ty || role.type;
+    if (!roleType) {
+      throw new Error("Moonlight role type missing for fullscreen default");
+    }
     const nextDefaults = {
       ...currentDefaults,
       enterFullscreenOnStreamStart: true,
@@ -487,7 +886,7 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
     const response = await requestJson({
       urlString: `${normalized}/api/role`,
       method: "PATCH",
-      body: { id: role.id, default_settings: nextDefaults },
+      body: { id: role.id, ty: roleType, default_settings: nextDefaults },
       headers: cookie ? { Cookie: cookie } : {},
       timeoutMs: 30_000,
     });
@@ -518,4 +917,6 @@ module.exports = {
   writeDockerMoonlightConfig,
   restartDockerMoonlight,
   patchMoonlightStaticFullscreenAssets,
+  shouldUseMoonlightTvProfile,
+  MOONLIGHT_TV_STREAM_SETTINGS,
 };

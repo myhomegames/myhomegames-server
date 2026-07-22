@@ -81,8 +81,61 @@ import Foundation
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var serverProcess: Process?
+    private var stdoutBuffer = ""
+    private var serverReady = false
+    private let readyLock = NSLock()
+    private var readyFlagPath = ""
+    
+    /// Wait until Node writes the ready flag / "Server ready" (Sunshine, Moonlight, tunnel).
+    private let readyTimeoutSeconds: TimeInterval = 600
+    
+    private func isServerReady() -> Bool {
+        readyLock.lock()
+        defer { readyLock.unlock() }
+        if serverReady { return true }
+        if !readyFlagPath.isEmpty, FileManager.default.fileExists(atPath: readyFlagPath) {
+            serverReady = true
+            return true
+        }
+        return false
+    }
+    
+    private func consumeStdout(_ chunk: String) {
+        print(chunk, terminator: "")
+        readyLock.lock()
+        stdoutBuffer += chunk
+        if stdoutBuffer.contains("Server ready") {
+            serverReady = true
+        }
+        if stdoutBuffer.count > 4096 {
+            stdoutBuffer = String(stdoutBuffer.suffix(512))
+        }
+        readyLock.unlock()
+    }
+    
+    private func beginLoadingDockCue() {
+        NSApp.setActivationPolicy(.regular)
+        // Badge is reliable; criticalRequest is not (stops on hover, ignores cancel).
+        NSApp.dockTile.badgeLabel = "…"
+        NSApp.dockTile.display()
+    }
+    
+    private func endLoadingDockCue() {
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.display()
+        NSApp.setActivationPolicy(.regular)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        // Single bounce when fully ready — not a sticky critical attention request.
+        _ = NSApp.requestUserAttention(.informationalRequest)
+    }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        beginLoadingDockCue()
+        
         // Get the bundle path
         let bundle = Bundle.main
         let bundlePath = bundle.bundlePath
@@ -99,6 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Could not find server executable at: \\(executablePath)"
             alert.alertStyle = .critical
             alert.runModal()
+            endLoadingDockCue()
             return
         }
         
@@ -108,6 +162,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             print("Warning: Could not set executable permissions: \\(error)")
         }
+        
+        // Ready flag: Node touches this file when Sunshine/Moonlight/tunnel are up.
+        let supportRoot = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Application Support/MyHomeGames")
+        try? fileManager.createDirectory(atPath: supportRoot, withIntermediateDirectories: true)
+        readyFlagPath = (supportRoot as NSString).appendingPathComponent("server-ready.flag")
+        try? fileManager.removeItem(atPath: readyFlagPath)
         
         // Launch the server process
         let process = Process()
@@ -121,6 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         }
+        env["MHG_READY_FLAG"] = readyFlagPath
         process.environment = env
         
         // Set working directory to Resources (where .env file is)
@@ -133,50 +195,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         
-        // Read output asynchronously
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            if data.count > 0 {
-                if let output = String(data: data, encoding: .utf8) {
-                    print(output, terminator: "")
-                }
-            }
+            guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
+            self?.consumeStdout(output)
         }
         
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            if data.count > 0 {
-                if let output = String(data: data, encoding: .utf8) {
-                    print(output, terminator: "")
-                }
-            }
+            guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
+            print(output, terminator: "")
+            self?.consumeStdout(output)
         }
         
         do {
             try process.run()
             self.serverProcess = process
             print("Server process started with PID: \\(process.processIdentifier)")
+            print("Waiting for ready flag at: \\(readyFlagPath)")
             
-            // Signal that app is ready (this stops the bouncing icon)
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            
-            // Monitor the process
             process.terminationHandler = { process in
                 print("Server process terminated with status: \\(process.terminationStatus)")
                 DispatchQueue.main.async {
                     NSApplication.shared.terminate(nil)
                 }
             }
+            
+            let deadline = Date().addingTimeInterval(readyTimeoutSeconds)
+            while !isServerReady() {
+                if !process.isRunning {
+                    print("Server exited before ready flag")
+                    break
+                }
+                if Date() >= deadline {
+                    print("Timed out waiting for ready after \\(Int(readyTimeoutSeconds))s")
+                    break
+                }
+                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+            }
+            
+            endLoadingDockCue()
+            if isServerReady() {
+                print("Dock loading cue cleared after Server ready")
+            }
         } catch {
             print("Error launching server: \\(error)")
-            // Show alert instead of terminating immediately
             let alert = NSAlert()
             alert.messageText = "Error Launching Server"
             alert.informativeText = "Failed to start server: \\(error.localizedDescription)"
             alert.alertStyle = .critical
             alert.runModal()
-            // Keep app running for a moment to see the error
+            endLoadingDockCue()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 NSApplication.shared.terminate(nil)
             }

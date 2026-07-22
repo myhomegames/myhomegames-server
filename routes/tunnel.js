@@ -52,10 +52,25 @@ async function startTunnelFromStored(deps, stored) {
 
 /**
  * @param {import('express').Express} app
- * @param {{ metadataPath: string, getTunnelProcess: () => import('cloudflared').Tunnel | null, setTunnelProcess: (t: import('cloudflared').Tunnel | null) => void, getLocalOrigin: () => string, applyPublicUrl: (url: string) => void }} deps
+ * @param {{ metadataPath: string, getTunnelProcess: () => import('cloudflared').Tunnel | null, setTunnelProcess: (t: import('cloudflared').Tunnel | null) => void, getLocalOrigin: () => string, applyPublicUrl: (url: string) => void, onTunnelConnected?: () => void }} deps
  */
 function registerTunnelRoutes(app, deps) {
-  const { metadataPath, getTunnelProcess, setTunnelProcess, getLocalOrigin, applyPublicUrl } = deps;
+  const {
+    metadataPath,
+    getTunnelProcess,
+    setTunnelProcess,
+    getLocalOrigin,
+    applyPublicUrl,
+    onTunnelConnected,
+  } = deps;
+
+  const notifyTunnelConnected = () => {
+    try {
+      onTunnelConnected?.();
+    } catch (err) {
+      console.warn(`onTunnelConnected failed: ${err?.message || err}`);
+    }
+  };
 
   app.get("/tunnel/status", (req, res) => {
     const stored = loadStoredTunnelCredentials(metadataPath);
@@ -89,6 +104,7 @@ function registerTunnelRoutes(app, deps) {
 
     try {
       const result = await startTunnelFromStored(deps, { token, publicUrl });
+      notifyTunnelConnected();
       res.json(result);
     } catch (err) {
       res.status(500).json({
@@ -105,6 +121,7 @@ function registerTunnelRoutes(app, deps) {
 
     if (getTunnelProcess()) {
       const stored = loadStoredTunnelCredentials(metadataPath);
+      notifyTunnelConnected();
       return res.json({
         connected: true,
         publicUrl: (stored?.publicUrl || "").replace(/\/$/, ""),
@@ -118,6 +135,7 @@ function registerTunnelRoutes(app, deps) {
 
     try {
       const result = await startTunnelFromStored(deps, stored);
+      notifyTunnelConnected();
       res.json(result);
     } catch (err) {
       res.status(500).json({
