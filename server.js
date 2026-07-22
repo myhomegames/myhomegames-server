@@ -559,6 +559,7 @@ registerTunnelRoutes(app, {
     return `http://127.0.0.1:${HTTP_PORT}`;
   },
   applyPublicUrl: applyTunnelPublicUrl,
+  onTunnelConnected: () => signalServerReady("tunnel-connect"),
 });
 registerStreamingRoutes(app, optionalToken, readSettings, METADATA_PATH, () => allGames);
 recommendedRoutes.registerRecommendedRoutes(app, optionalToken, METADATA_PATH, allGames);
@@ -1080,14 +1081,17 @@ function gracefulShutdown(signal) {
 }
 
 async function maybeStartCloudflareTunnel(localOrigin) {
-  if (!isCloudflareTunnelEnabled()) return;
+  if (!isCloudflareTunnelEnabled()) {
+    return { started: false, deferReady: false };
+  }
 
   const stored = loadStoredTunnelCredentials(METADATA_PATH);
   if (!stored?.token) {
     console.warn(
       "Cloudflare Tunnel enabled: no stored run token. The web app will fetch one from the tunnel manager on startup.",
     );
-    return;
+    // Do not emit Server ready yet — Dock waits until POST /tunnel/connect succeeds.
+    return { started: false, deferReady: true };
   }
 
   if (stored.publicUrl) {
@@ -1101,11 +1105,14 @@ async function maybeStartCloudflareTunnel(localOrigin) {
       publicUrl: stored.publicUrl,
       metadataPath: METADATA_PATH,
     });
+    return { started: true, deferReady: false };
   } catch (error) {
     console.error("Failed to start Cloudflare Tunnel:", error.message || error);
     if (process.env.CLOUDFLARE_TUNNEL_STRICT === "true") {
       process.exit(1);
     }
+    // Soft-fail: stop Dock bounce even if tunnel failed.
+    return { started: false, deferReady: false };
   }
 }
 
@@ -1138,19 +1145,32 @@ async function maybeStartMoonlightWeb() {
   }
 }
 
+/**
+ * @returns {Promise<{ signalReady: boolean }>}
+ * signalReady false = Cloudflare Tunnel will connect later via the web app; Dock keeps bouncing.
+ */
 async function onServerListening(localOrigin) {
   await maybeStartSunshine();
   await maybeStartMoonlightWeb();
-  // Tunnel is part of "fully ready": macOS Dock waits for the following Server ready line.
-  await maybeStartCloudflareTunnel(localOrigin);
+  const tunnel = await maybeStartCloudflareTunnel(localOrigin);
+  return { signalReady: !tunnel.deferReady };
 }
 
-function signalServerReady() {
+let serverReadySignaled = false;
+
+function signalServerReady(reason = "bootstrap") {
   // Marker read by the macOS .app wrapper to stop Dock bounce (must flush on piped stdout).
+  // Safe to call again when the tunnel connects after a deferred bootstrap.
   try {
     fs.writeSync(1, "Server ready\n");
   } catch {
     process.stdout.write("Server ready\n");
+  }
+  if (!serverReadySignaled) {
+    serverReadySignaled = true;
+    console.log(`Server ready signaled (${reason})`);
+  } else {
+    console.log(`Server ready re-signaled (${reason})`);
   }
 }
 
@@ -1218,9 +1238,20 @@ if (process.env.NODE_ENV !== 'test') {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
           const localOrigin = `https://127.0.0.1:${HTTPS_PORT}`;
-          onServerListening(localOrigin).finally(() => {
-            signalServerReady();
-          });
+          onServerListening(localOrigin)
+            .then((state) => {
+              if (state?.signalReady) {
+                signalServerReady("bootstrap");
+              } else {
+                console.log(
+                  "Dock: waiting for Cloudflare Tunnel connect from the web app before Server ready…",
+                );
+              }
+            })
+            .catch((err) => {
+              console.error(err);
+              signalServerReady("bootstrap-error");
+            });
         });
 
         httpsServer.on("error", (error) => {
@@ -1245,9 +1276,20 @@ if (process.env.NODE_ENV !== 'test') {
     const localOrigin = `http://127.0.0.1:${HTTP_PORT}`;
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
-      onServerListening(localOrigin).finally(() => {
-        signalServerReady();
-      });
+      onServerListening(localOrigin)
+        .then((state) => {
+          if (state?.signalReady) {
+            signalServerReady("bootstrap");
+          } else {
+            console.log(
+              "Dock: waiting for Cloudflare Tunnel connect from the web app before Server ready…",
+            );
+          }
+        })
+        .catch((err) => {
+          console.error(err);
+          signalServerReady("bootstrap-error");
+        });
     });
     
     // Handle server errors
