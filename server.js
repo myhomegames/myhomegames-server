@@ -1141,7 +1141,9 @@ async function maybeStartMoonlightWeb() {
 async function onServerListening(localOrigin) {
   await maybeStartSunshine();
   await maybeStartMoonlightWeb();
-  await maybeStartCloudflareTunnel(localOrigin);
+  // Tunnel connect can take up to ~30s and must not keep the macOS Dock bouncing
+  // after Sunshine / Moonlight are already up. Start it in the background.
+  void maybeStartCloudflareTunnel(localOrigin);
 }
 
 // Handle termination signals
