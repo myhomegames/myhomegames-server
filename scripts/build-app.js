@@ -109,20 +109,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         readyLock.unlock()
     }
     
-    /// macOS ends the Finder launch bounce almost immediately. Keep the Dock icon
-    /// bouncing with a single critical attention until Sunshine / Moonlight finish starting.
-    /// Important: each criticalRequest stacks — always cancel the previous id before re-arming.
+    /// macOS ends the Finder launch bounce almost immediately, and
+    /// `criticalRequest` only bounces while this app is *not* frontmost.
+    /// Yield focus to Finder while waiting, keep a single attention id (cancel before re-arm).
     private var lastAttentionRearm = Date.distantPast
     
-    private func beginDockBounceUntilReady() {
-        NSApp.setActivationPolicy(.regular)
-        attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
-        lastAttentionRearm = Date()
+    private func yieldFrontSoCriticalBounceWorks() {
+        guard NSRunningApplication.current.isActive else { return }
+        if let finder = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.apple.finder"
+        }) {
+            finder.activate(options: [.activateIgnoringOtherApps])
+        }
     }
     
-    private func rearmDockBounceIfNeeded() {
-        // Do not activate the app while waiting — activation cancels critical bounce.
-        guard Date().timeIntervalSince(lastAttentionRearm) >= 2 else { return }
+    private func armCriticalDockBounce() {
         if attentionRequestId != 0 {
             NSApp.cancelUserAttentionRequest(attentionRequestId)
             attentionRequestId = 0
@@ -131,17 +132,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lastAttentionRearm = Date()
     }
     
+    private func beginDockBounceUntilReady() {
+        NSApp.setActivationPolicy(.regular)
+        yieldFrontSoCriticalBounceWorks()
+        armCriticalDockBounce()
+    }
+    
+    private func rearmDockBounceIfNeeded() {
+        guard Date().timeIntervalSince(lastAttentionRearm) >= 2 else { return }
+        // Launch / menu setup may re-activate us; without yielding, critical bounce is invisible.
+        yieldFrontSoCriticalBounceWorks()
+        armCriticalDockBounce()
+    }
+    
     private func endDockBounceAndActivate() {
-        let lastId = attentionRequestId
-        attentionRequestId = 0
-        if lastId != 0 {
-            NSApp.cancelUserAttentionRequest(lastId)
-            // Cancel any earlier ids from before cancel-on-rearm existed / race windows.
-            if lastId > 1 {
-                for staleId in 1..<lastId {
-                    NSApp.cancelUserAttentionRequest(staleId)
-                }
-            }
+        if attentionRequestId != 0 {
+            NSApp.cancelUserAttentionRequest(attentionRequestId)
+            attentionRequestId = 0
         }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
