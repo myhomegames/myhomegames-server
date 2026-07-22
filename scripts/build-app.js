@@ -111,7 +111,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     /// macOS ends the Finder launch bounce almost immediately, and
     /// criticalRequest only bounces while this app is not frontmost.
-    /// Yield focus to Finder while waiting, keep a single attention id (cancel before re-arm).
+    /// Also: cancelUserAttentionRequest often leaves the Dock bouncing until mouse-over —
+    /// so we clear the tile explicitly and re-assert activate/cancel on the next runloop turns.
     private var lastAttentionRearm = Date.distantPast
     
     private func yieldFrontSoCriticalBounceWorks() {
@@ -134,24 +135,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func beginDockBounceUntilReady() {
         NSApp.setActivationPolicy(.regular)
+        // Visible loading cue that does not depend on attention-request quirks.
+        NSApp.dockTile.badgeLabel = "…"
+        NSApp.dockTile.display()
         yieldFrontSoCriticalBounceWorks()
         armCriticalDockBounce()
     }
     
     private func rearmDockBounceIfNeeded() {
-        guard Date().timeIntervalSince(lastAttentionRearm) >= 2 else { return }
-        // Launch / menu setup may re-activate us; without yielding, critical bounce is invisible.
+        // Do not steal focus every 2s — only re-arm if we became frontmost (bounce dies).
+        guard NSRunningApplication.current.isActive else { return }
+        guard Date().timeIntervalSince(lastAttentionRearm) >= 1.5 else { return }
         yieldFrontSoCriticalBounceWorks()
         armCriticalDockBounce()
     }
     
-    private func endDockBounceAndActivate() {
-        if attentionRequestId != 0 {
-            NSApp.cancelUserAttentionRequest(attentionRequestId)
-            attentionRequestId = 0
+    private func clearDockAttention(_ id: Int) {
+        if id != 0 {
+            NSApp.cancelUserAttentionRequest(id)
         }
-        NSApp.setActivationPolicy(.regular)
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.display()
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    private func endDockBounceAndActivate() {
+        let id = attentionRequestId
+        attentionRequestId = 0
+        NSApp.setActivationPolicy(.regular)
+        // Activate first — critical bounce is defined to stop when the app becomes active.
+        clearDockAttention(id)
+        // Dock often keeps drawing the bounce until a later UI pass or mouse-over; re-clear.
+        DispatchQueue.main.async { [weak self] in
+            self?.clearDockAttention(id)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.clearDockAttention(id)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.clearDockAttention(id)
+        }
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -215,13 +238,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.consumeStdout(output)
         }
         
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        // Some runtimes mix logs; still watch stderr for the ready marker.
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            if data.count > 0 {
-                if let output = String(data: data, encoding: .utf8) {
-                    print(output, terminator: "")
-                }
-            }
+            guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
+            print(output, terminator: "")
+            self?.consumeStdout(output)
         }
         
         do {
