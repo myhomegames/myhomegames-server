@@ -1,6 +1,19 @@
-const { pickDesktopApp, attachMoonlightStopHook } = require("../../utils/moonlightWebEmbed");
+jest.mock("../../utils/moonlightWebCredentials", () => ({
+  requestJson: jest.fn(),
+}));
+
+const { requestJson } = require("../../utils/moonlightWebCredentials");
+const {
+  pickDesktopApp,
+  attachMoonlightStopHook,
+  ensureMoonlightEnterFullscreenDefault,
+} = require("../../utils/moonlightWebEmbed");
 
 describe("moonlightWebEmbed", () => {
+  beforeEach(() => {
+    requestJson.mockReset();
+  });
+
   it("prefers Desktop app by title then app_id 0", () => {
     expect(
       pickDesktopApp([
@@ -17,6 +30,34 @@ describe("moonlightWebEmbed", () => {
       title: "Other",
     });
     expect(pickDesktopApp([])).toBeNull();
+  });
+
+  it("includes ty when patching Moonlight role fullscreen default", async () => {
+    requestJson
+      .mockResolvedValueOnce({
+        statusCode: 200,
+        body: JSON.stringify({
+          role: {
+            id: 1,
+            ty: "Admin",
+            default_settings: { enterFullscreenOnStreamStart: false },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({ statusCode: 200, body: "" });
+
+    await ensureMoonlightEnterFullscreenDefault({
+      baseUrl: "http://127.0.0.1:8080",
+      cookie: "session=x",
+      kind: "native",
+    });
+
+    const patchCall = requestJson.mock.calls.find((call) => call[0].method === "PATCH");
+    expect(patchCall?.[0].body).toEqual({
+      id: 1,
+      ty: "Admin",
+      default_settings: { enterFullscreenOnStreamStart: true },
+    });
   });
 
   it("attaches mhgStop and optional mhgReturn on the stream URL", () => {

@@ -617,6 +617,10 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
       ? role.default_settings
       : {};
   if (currentDefaults.enterFullscreenOnStreamStart !== true) {
+    const roleType = role.ty || role.type;
+    if (!roleType) {
+      throw new Error("Moonlight role type missing for fullscreen default");
+    }
     const nextDefaults = {
       ...currentDefaults,
       enterFullscreenOnStreamStart: true,
@@ -624,7 +628,7 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
     const response = await requestJson({
       urlString: `${normalized}/api/role`,
       method: "PATCH",
-      body: { id: role.id, default_settings: nextDefaults },
+      body: { id: role.id, ty: roleType, default_settings: nextDefaults },
       headers: cookie ? { Cookie: cookie } : {},
       timeoutMs: 30_000,
     });
