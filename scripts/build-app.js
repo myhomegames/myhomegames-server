@@ -120,7 +120,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let finder = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == "com.apple.finder"
         }) {
-            finder.activate(options: [.activateIgnoringOtherApps])
+            if #available(macOS 14.0, *) {
+                // ignoringOtherApps is deprecated and has no effect on macOS 14+.
+                finder.activate(from: NSRunningApplication.current)
+            } else {
+                finder.activate(options: [.activateIgnoringOtherApps])
+            }
         }
     }
     
