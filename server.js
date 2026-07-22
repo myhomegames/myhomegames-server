@@ -1141,9 +1141,17 @@ async function maybeStartMoonlightWeb() {
 async function onServerListening(localOrigin) {
   await maybeStartSunshine();
   await maybeStartMoonlightWeb();
-  // Tunnel connect can take up to ~30s and must not keep the macOS Dock bouncing
-  // after Sunshine / Moonlight are already up. Start it in the background.
-  void maybeStartCloudflareTunnel(localOrigin);
+  // Tunnel is part of "fully ready": macOS Dock waits for the following Server ready line.
+  await maybeStartCloudflareTunnel(localOrigin);
+}
+
+function signalServerReady() {
+  // Marker read by the macOS .app wrapper to stop Dock bounce (must flush on piped stdout).
+  try {
+    fs.writeSync(1, "Server ready\n");
+  } catch {
+    process.stdout.write("Server ready\n");
+  }
 }
 
 // Handle termination signals
@@ -1211,12 +1219,7 @@ if (process.env.NODE_ENV !== 'test') {
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
           const localOrigin = `https://127.0.0.1:${HTTPS_PORT}`;
           onServerListening(localOrigin).finally(() => {
-            // writeSync: when stdout is a pipe (macOS .app wrapper), Node may block-buffer write().
-            try {
-              fs.writeSync(1, "Server ready\n");
-            } catch {
-              process.stdout.write("Server ready\n");
-            }
+            signalServerReady();
           });
         });
 
@@ -1243,11 +1246,7 @@ if (process.env.NODE_ENV !== 'test') {
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
       onServerListening(localOrigin).finally(() => {
-        try {
-          fs.writeSync(1, "Server ready\n");
-        } catch {
-          process.stdout.write("Server ready\n");
-        }
+        signalServerReady();
       });
     });
     
