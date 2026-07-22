@@ -117,15 +117,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func yieldFrontSoCriticalBounceWorks() {
         guard NSRunningApplication.current.isActive else { return }
-        if let finder = NSWorkspace.shared.runningApplications.first(where: {
+        if #available(macOS 14.0, *) {
+            // Cooperative activation (Sonoma+): yield, then let Finder take front.
+            NSApp.yieldActivation(toApplicationWithBundleIdentifier: "com.apple.finder")
+            if let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first {
+                _ = finder.activate(from: NSRunningApplication.current)
+            }
+        } else if let finder = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == "com.apple.finder"
         }) {
-            if #available(macOS 14.0, *) {
-                // ignoringOtherApps is deprecated and has no effect on macOS 14+.
-                finder.activate(from: NSRunningApplication.current)
-            } else {
-                finder.activate(options: [.activateIgnoringOtherApps])
-            }
+            finder.activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+    
+    private func activateSelf() {
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
     
@@ -161,7 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.dockTile.badgeLabel = nil
         NSApp.dockTile.display()
-        NSApp.activate(ignoringOtherApps: true)
+        activateSelf()
     }
     
     private func endDockBounceAndActivate() {
