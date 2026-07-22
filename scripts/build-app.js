@@ -84,15 +84,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var stdoutBuffer = ""
     private var serverReady = false
     private let readyLock = NSLock()
-    private var attentionRequestId: Int = 0
+    private var readyFlagPath = ""
     
-    /// Server prints "Server ready" only after Sunshine / Moonlight Web / tunnel bootstrap.
+    /// Wait until Node writes the ready flag / "Server ready" (Sunshine, Moonlight, tunnel).
     private let readyTimeoutSeconds: TimeInterval = 600
     
     private func isServerReady() -> Bool {
         readyLock.lock()
         defer { readyLock.unlock() }
-        return serverReady
+        if serverReady { return true }
+        if !readyFlagPath.isEmpty, FileManager.default.fileExists(atPath: readyFlagPath) {
+            serverReady = true
+            return true
+        }
+        return false
     }
     
     private func consumeStdout(_ chunk: String) {
@@ -102,97 +107,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if stdoutBuffer.contains("Server ready") {
             serverReady = true
         }
-        // Keep a small tail so a split "Server ready" across reads still matches.
         if stdoutBuffer.count > 4096 {
             stdoutBuffer = String(stdoutBuffer.suffix(512))
         }
         readyLock.unlock()
     }
     
-    /// macOS ends the Finder launch bounce almost immediately, and
-    /// criticalRequest only bounces while this app is not frontmost.
-    /// Also: cancelUserAttentionRequest often leaves the Dock bouncing until mouse-over —
-    /// so we clear the tile explicitly and re-assert activate/cancel on the next runloop turns.
-    private var lastAttentionRearm = Date.distantPast
-    
-    private func yieldFrontSoCriticalBounceWorks() {
-        guard NSRunningApplication.current.isActive else { return }
-        if #available(macOS 14.0, *) {
-            // Cooperative activation (Sonoma+): yield, then let Finder take front.
-            NSApp.yieldActivation(toApplicationWithBundleIdentifier: "com.apple.finder")
-            if let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first {
-                _ = finder.activate(from: NSRunningApplication.current)
-            }
-        } else if let finder = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == "com.apple.finder"
-        }) {
-            finder.activate(options: [.activateIgnoringOtherApps])
-        }
+    private func beginLoadingDockCue() {
+        NSApp.setActivationPolicy(.regular)
+        // Badge is reliable; criticalRequest is not (stops on hover, ignores cancel).
+        NSApp.dockTile.badgeLabel = "…"
+        NSApp.dockTile.display()
     }
     
-    private func activateSelf() {
+    private func endLoadingDockCue() {
+        NSApp.dockTile.badgeLabel = nil
+        NSApp.dockTile.display()
+        NSApp.setActivationPolicy(.regular)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
-    }
-    
-    private func armCriticalDockBounce() {
-        if attentionRequestId != 0 {
-            NSApp.cancelUserAttentionRequest(attentionRequestId)
-            attentionRequestId = 0
-        }
-        attentionRequestId = NSApp.requestUserAttention(.criticalRequest)
-        lastAttentionRearm = Date()
-    }
-    
-    private func beginDockBounceUntilReady() {
-        NSApp.setActivationPolicy(.regular)
-        // Visible loading cue that does not depend on attention-request quirks.
-        NSApp.dockTile.badgeLabel = "…"
-        NSApp.dockTile.display()
-        yieldFrontSoCriticalBounceWorks()
-        armCriticalDockBounce()
-    }
-    
-    private func rearmDockBounceIfNeeded() {
-        // Do not steal focus every 2s — only re-arm if we became frontmost (bounce dies).
-        guard NSRunningApplication.current.isActive else { return }
-        guard Date().timeIntervalSince(lastAttentionRearm) >= 1.5 else { return }
-        yieldFrontSoCriticalBounceWorks()
-        armCriticalDockBounce()
-    }
-    
-    private func clearDockAttention(_ id: Int) {
-        if id != 0 {
-            NSApp.cancelUserAttentionRequest(id)
-        }
-        NSApp.dockTile.badgeLabel = nil
-        NSApp.dockTile.display()
-        activateSelf()
-    }
-    
-    private func endDockBounceAndActivate() {
-        let id = attentionRequestId
-        attentionRequestId = 0
-        NSApp.setActivationPolicy(.regular)
-        // Activate first — critical bounce is defined to stop when the app becomes active.
-        clearDockAttention(id)
-        // Dock often keeps drawing the bounce until a later UI pass or mouse-over; re-clear.
-        DispatchQueue.main.async { [weak self] in
-            self?.clearDockAttention(id)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.clearDockAttention(id)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.clearDockAttention(id)
-        }
+        // Single bounce when fully ready — not a sticky critical attention request.
+        _ = NSApp.requestUserAttention(.informationalRequest)
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        beginDockBounceUntilReady()
+        beginLoadingDockCue()
         
         // Get the bundle path
         let bundle = Bundle.main
@@ -210,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Could not find server executable at: \\(executablePath)"
             alert.alertStyle = .critical
             alert.runModal()
-            endDockBounceAndActivate()
+            endLoadingDockCue()
             return
         }
         
@@ -220,6 +162,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             print("Warning: Could not set executable permissions: \\(error)")
         }
+        
+        // Ready flag: Node touches this file when Sunshine/Moonlight/tunnel are up.
+        let supportRoot = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Application Support/MyHomeGames")
+        try? fileManager.createDirectory(atPath: supportRoot, withIntermediateDirectories: true)
+        readyFlagPath = (supportRoot as NSString).appendingPathComponent("server-ready.flag")
+        try? fileManager.removeItem(atPath: readyFlagPath)
         
         // Launch the server process
         let process = Process()
@@ -233,6 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         }
+        env["MHG_READY_FLAG"] = readyFlagPath
         process.environment = env
         
         // Set working directory to Resources (where .env file is)
@@ -245,14 +195,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         
-        // Read output asynchronously — look for "Server ready" before stopping Dock bounce
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
             self?.consumeStdout(output)
         }
         
-        // Some runtimes mix logs; still watch stderr for the ready marker.
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard data.count > 0, let output = String(data: data, encoding: .utf8) else { return }
@@ -264,8 +212,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try process.run()
             self.serverProcess = process
             print("Server process started with PID: \\(process.processIdentifier)")
+            print("Waiting for ready flag at: \\(readyFlagPath)")
             
-            // Monitor the process
             process.terminationHandler = { process in
                 print("Server process terminated with status: \\(process.terminationStatus)")
                 DispatchQueue.main.async {
@@ -273,35 +221,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             
-            // Keep Dock bouncing until HTTP API + Sunshine + Moonlight Web (+ tunnel) are up.
             let deadline = Date().addingTimeInterval(readyTimeoutSeconds)
             while !isServerReady() {
                 if !process.isRunning {
-                    print("Server exited before printing Server ready")
+                    print("Server exited before ready flag")
                     break
                 }
                 if Date() >= deadline {
-                    print("Timed out waiting for Server ready after \\(Int(readyTimeoutSeconds))s — activating Dock icon anyway")
+                    print("Timed out waiting for ready after \\(Int(readyTimeoutSeconds))s")
                     break
                 }
-                rearmDockBounceIfNeeded()
                 RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
             }
             
-            endDockBounceAndActivate()
+            endLoadingDockCue()
             if isServerReady() {
-                print("Dock bounce stopped after Server ready")
+                print("Dock loading cue cleared after Server ready")
             }
         } catch {
             print("Error launching server: \\(error)")
-            // Show alert instead of terminating immediately
             let alert = NSAlert()
             alert.messageText = "Error Launching Server"
             alert.informativeText = "Failed to start server: \\(error.localizedDescription)"
             alert.alertStyle = .critical
             alert.runModal()
-            endDockBounceAndActivate()
-            // Keep app running for a moment to see the error
+            endLoadingDockCue()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 NSApplication.shared.terminate(nil)
             }

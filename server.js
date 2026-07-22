@@ -1158,9 +1158,21 @@ async function onServerListening(localOrigin) {
 
 let serverReadySignaled = false;
 
+function resolveReadyFlagPath() {
+  const fromEnv = process.env.MHG_READY_FLAG?.trim();
+  if (fromEnv) return fromEnv;
+  return path.join(METADATA_PATH, "server-ready.flag");
+}
+
 function signalServerReady(reason = "bootstrap") {
-  // Marker read by the macOS .app wrapper to stop Dock bounce (must flush on piped stdout).
-  // Safe to call again when the tunnel connects after a deferred bootstrap.
+  // macOS .app wrapper polls this file (stdout alone is unreliable with pkg pipes).
+  try {
+    const flagPath = resolveReadyFlagPath();
+    fs.mkdirSync(path.dirname(flagPath), { recursive: true });
+    fs.writeFileSync(flagPath, `${new Date().toISOString()} ${reason}\n`, "utf8");
+  } catch (err) {
+    console.warn(`Could not write ready flag: ${err?.message || err}`);
+  }
   try {
     fs.writeSync(1, "Server ready\n");
   } catch {
