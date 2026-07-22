@@ -7,6 +7,8 @@ const {
   pickDesktopApp,
   attachMoonlightStopHook,
   ensureMoonlightEnterFullscreenDefault,
+  shouldUseMoonlightTvProfile,
+  MOONLIGHT_TV_STREAM_SETTINGS,
 } = require("../../utils/moonlightWebEmbed");
 
 describe("moonlightWebEmbed", () => {
@@ -30,6 +32,22 @@ describe("moonlightWebEmbed", () => {
       title: "Other",
     });
     expect(pickDesktopApp([])).toBeNull();
+  });
+
+  it("detects TV profile from mhgProfile or Tizen UA", () => {
+    expect(shouldUseMoonlightTvProfile("?mhgProfile=tv", "")).toBe(true);
+    expect(
+      shouldUseMoonlightTvProfile("", "Mozilla/5.0 (SMART-TV; LINUX; Tizen 8.0)"),
+    ).toBe(true);
+    expect(
+      shouldUseMoonlightTvProfile("", "Mozilla/5.0 (Linux; Android 14; Pixel 9 Pro XL)"),
+    ).toBe(false);
+    expect(MOONLIGHT_TV_STREAM_SETTINGS).toMatchObject({
+      bitrate: 5000,
+      fps: 30,
+      videoSize: "720p",
+      dataTransport: "websocket",
+    });
   });
 
   it("includes ty when patching Moonlight role fullscreen default", async () => {

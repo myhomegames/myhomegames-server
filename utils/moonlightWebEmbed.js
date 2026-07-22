@@ -9,6 +9,51 @@ const { requestJson } = require("./moonlightWebCredentials");
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
 
+/** Lower quality + websocket transport for Tizen / smart TV browsers. */
+const MOONLIGHT_TV_STREAM_SETTINGS = {
+  bitrate: 5000,
+  fps: 30,
+  videoSize: "720p",
+  videoCodec: "h264",
+  dataTransport: "websocket",
+  canvasRenderer: true,
+  forceVideoElementRenderer: false,
+  hdr: false,
+  enterFullscreenOnStreamStart: true,
+};
+
+const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
+
+const MOONLIGHT_SETTINGS_LOAD_STOCK = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+        Object.assign(this.inputConfig, {`;
+
+const MOONLIGHT_SETTINGS_LOAD_TV_PATCHED = `        const settings = getLocalStreamSettings(bootstrapRole.default_settings);
+        // MHG: smart TV / mhgProfile=tv - lower quality + websocket for weak browsers
+        (() => {
+            try {
+                const profile = new URLSearchParams(window.location.search).get("mhgProfile");
+                const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+                const isTv = profile === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+                if (!isTv)
+                    return;
+                Object.assign(settings, ${MOONLIGHT_TV_SETTINGS_JSON});
+                try {
+                    localStorage.setItem("mlSettings", JSON.stringify(settings));
+                }
+                catch (_e) { }
+            }
+            catch (_e) { }
+        })();
+        Object.assign(this.inputConfig, {`;
+
+function shouldUseMoonlightTvProfile(search = "", userAgent = "") {
+  const params = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+  if (params.get("mhgProfile") === "tv") return true;
+  return /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(
+    String(userAgent || "").toLowerCase(),
+  );
+}
+
 function listMoonlightUsers(baseUrl, cookie) {
   return requestJson({
     urlString: `${baseUrl}/api/users`,
@@ -355,6 +400,8 @@ function patchMoonlightStaticFullscreenAssets() {
           "this.autoEnterFullscreenOnStart=settings.enterFullscreenOnStreamStart;",
           "this.autoEnterFullscreenOnStart=true;",
         ],
+        // Smart TV / mhgProfile=tv: cap quality and prefer websocket over flaky WebRTC.
+        [MOONLIGHT_SETTINGS_LOAD_STOCK, MOONLIGHT_SETTINGS_LOAD_TV_PATCHED],
         // Unique block after connection modal.
         // Skip AutoFullscreenModal (OK/Cancel): browsers still need a user gesture, so
         // arm fullscreen on the next tap instead of showing a confirm dialog.
@@ -659,4 +706,6 @@ module.exports = {
   writeDockerMoonlightConfig,
   restartDockerMoonlight,
   patchMoonlightStaticFullscreenAssets,
+  shouldUseMoonlightTvProfile,
+  MOONLIGHT_TV_STREAM_SETTINGS,
 };
