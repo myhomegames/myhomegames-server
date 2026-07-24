@@ -2,6 +2,7 @@ const request = require("supertest");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const http = require("http");
 const AdmZip = require("adm-zip");
 
 describe("skins routes", () => {
@@ -285,5 +286,54 @@ describe("skins routes", () => {
     expect(tweak.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(false);
 
     await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
+  });
+
+  test("POST /skins/install-from-url downloads and installs a zip", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(JSON.stringify({ name: "From URL Theme", version: "9.9.9" }), "utf8")
+    );
+    zip.addFile("bundle.css", Buffer.from("body { --from-url: 1; }", "utf8"));
+    const zipBuf = zip.toBuffer();
+
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, {
+        "Content-Type": "application/zip",
+        "Content-Length": zipBuf.length,
+      });
+      res.end(zipBuf);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const downloadUrl = `http://127.0.0.1:${port}/from-url-theme-9.9.9.mhg-skin.zip`;
+
+    try {
+      const res = await request(app)
+        .post("/skins/install-from-url")
+        .set("X-Auth-Token", token)
+        .send({ url: downloadUrl, displayName: "From URL Theme" });
+
+      expect(res.status).toBe(201);
+      expect(res.body.name).toBe("From URL Theme");
+      expect(res.body.id).toBeDefined();
+
+      const css = await request(app).get(`/skins/${res.body.id}/bundle.css`);
+      expect(css.status).toBe(200);
+      expect(css.text).toContain("--from-url");
+
+      await request(app).delete(`/skins/${res.body.id}`).set("X-Auth-Token", token);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test("POST /skins/install-from-url rejects non-GitHub URLs", async () => {
+    const res = await request(app)
+      .post("/skins/install-from-url")
+      .set("X-Auth-Token", token)
+      .send({ url: "https://evil.example/skin.zip" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("url_not_allowed");
   });
 });

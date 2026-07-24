@@ -4,6 +4,10 @@ const crypto = require("crypto");
 const multer = require("multer");
 const AdmZip = require("adm-zip");
 const { ensureDirectoryExists, readJsonFile } = require("../utils/fileUtils");
+const {
+  isAllowedSkinReleaseDownloadUrl,
+  fetchUrlBuffer,
+} = require("../utils/skinDownload");
 
 const MAX_SKINS = 24;
 const MAX_ZIP_BYTES = 30 * 1024 * 1024;
@@ -199,6 +203,69 @@ function extractZipToDir(buffer, destDir) {
   }
 }
 
+/**
+ * @returns {{ id: string, name: string }}
+ */
+function installSkinFromZipBuffer(skinsDir, buffer, { displayName = "", originalName = "" } = {}) {
+  ensureDirectoryExists(skinsDir);
+
+  const lower = String(originalName || "").toLowerCase();
+  const extractRoot = path.join(skinsDir, `.upload-${crypto.randomUUID()}`);
+  ensureDirectoryExists(extractRoot);
+  try {
+    extractZipToDir(buffer, extractRoot);
+
+    const contentRoot = findSkinContentRoot(extractRoot);
+    if (!contentRoot) {
+      throw new Error("missing_skin_json");
+    }
+
+    const rawMeta = readJsonFile(path.join(contentRoot, "skin.json"), {});
+    const meta =
+      rawMeta && typeof rawMeta === "object" && !Array.isArray(rawMeta) ? { ...rawMeta } : {};
+    const metaName = typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : "";
+    const name =
+      displayName ||
+      metaName ||
+      path.basename(lower, ".zip").replace(/\.mhg-skin$/, "") ||
+      "Skin";
+
+    const cssProbe = readBundleCssFromSkinDir(contentRoot);
+    if (cssProbe == null || !String(cssProbe).trim()) {
+      throw new Error("missing_css");
+    }
+
+    const existingId = findExistingSkinIdByName(skinsDir, name);
+    if (!existingId && countUuidSkinDirs(skinsDir) >= MAX_SKINS) {
+      throw new Error("too_many_skins");
+    }
+
+    const id = existingId || crypto.randomUUID();
+    const finalDir = path.join(skinsDir, id);
+    if (fs.existsSync(finalDir)) {
+      fs.rmSync(finalDir, { recursive: true, force: true });
+    }
+
+    fs.mkdirSync(finalDir, { recursive: true });
+    for (const ent of fs.readdirSync(contentRoot, { withFileTypes: true })) {
+      const src = path.join(contentRoot, ent.name);
+      const dst = path.join(finalDir, ent.name);
+      fs.cpSync(src, dst, { recursive: true });
+    }
+
+    const skinJson = {
+      ...meta,
+      name,
+      id,
+      installedAt: Date.now(),
+    };
+    fs.writeFileSync(path.join(finalDir, "skin.json"), JSON.stringify(skinJson, null, 2), "utf8");
+    return { id, name };
+  } finally {
+    fs.rmSync(extractRoot, { recursive: true, force: true });
+  }
+}
+
 function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
   const root = () => skinsRoot(metadataPath);
   const upload = multer({
@@ -284,6 +351,49 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
     }
   });
 
+  app.post("/skins/install-from-url", optionalToken, async (req, res) => {
+    const downloadUrl =
+      typeof req.body?.url === "string" && req.body.url.trim() ? req.body.url.trim() : "";
+    const displayName =
+      typeof req.body?.displayName === "string" && req.body.displayName.trim()
+        ? req.body.displayName.trim()
+        : "";
+    if (!downloadUrl) {
+      return res.status(400).json({ error: "missing_url" });
+    }
+    if (!isAllowedSkinReleaseDownloadUrl(downloadUrl)) {
+      return res.status(400).json({ error: "url_not_allowed" });
+    }
+
+    try {
+      const buffer = await fetchUrlBuffer(downloadUrl, { maxBytes: MAX_ZIP_BYTES });
+      const originalName = decodeURIComponent(
+        new URL(downloadUrl).pathname.slice(new URL(downloadUrl).pathname.lastIndexOf("/") + 1)
+      );
+      const installed = installSkinFromZipBuffer(root(), buffer, {
+        displayName,
+        originalName,
+      });
+      return res.status(201).json(installed);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (
+        msg === "invalid_zip_path" ||
+        msg === "missing_skin_json" ||
+        msg === "missing_css" ||
+        msg === "too_many_skins" ||
+        msg === "skin_zip_too_large"
+      ) {
+        return res.status(400).json({ error: msg });
+      }
+      if (msg.startsWith("HTTP ")) {
+        return res.status(502).json({ error: "skin_download_failed", detail: msg });
+      }
+      console.error("POST /skins/install-from-url", e);
+      return res.status(500).json({ error: "skin_install_failed" });
+    }
+  });
+
   app.post("/skins", optionalToken, upload.single("archive"), (req, res) => {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: "missing_archive" });
@@ -297,71 +407,22 @@ function registerSkinsRoutes(app, requireToken, optionalToken, metadataPath) {
         ? req.body.displayName.trim()
         : "";
 
-    const dir = root();
     try {
-      ensureDirectoryExists(dir);
-
-      const extractRoot = path.join(dir, `.upload-${crypto.randomUUID()}`);
-      ensureDirectoryExists(extractRoot);
-      try {
-        extractZipToDir(req.file.buffer, extractRoot);
-      } catch (e) {
-        fs.rmSync(extractRoot, { recursive: true, force: true });
-        if (e.message === "invalid_zip_path") {
-          return res.status(400).json({ error: "invalid_zip_path" });
-        }
-        throw e;
-      }
-
-      const contentRoot = findSkinContentRoot(extractRoot);
-      if (!contentRoot) {
-        fs.rmSync(extractRoot, { recursive: true, force: true });
-        return res.status(400).json({ error: "missing_skin_json" });
-      }
-
-      const rawMeta = readJsonFile(path.join(contentRoot, "skin.json"), {});
-      const meta =
-        rawMeta && typeof rawMeta === "object" && !Array.isArray(rawMeta) ? { ...rawMeta } : {};
-      const metaName = typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : "";
-      const name = displayName || metaName || path.basename(lower, ".zip").replace(/\.mhg-skin$/, "") || "Skin";
-
-      const cssProbe = readBundleCssFromSkinDir(contentRoot);
-      if (cssProbe == null || !String(cssProbe).trim()) {
-        fs.rmSync(extractRoot, { recursive: true, force: true });
-        return res.status(400).json({ error: "missing_css" });
-      }
-
-      const existingId = findExistingSkinIdByName(dir, name);
-      if (!existingId && countUuidSkinDirs(dir) >= MAX_SKINS) {
-        fs.rmSync(extractRoot, { recursive: true, force: true });
-        return res.status(400).json({ error: "too_many_skins" });
-      }
-
-      const id = existingId || crypto.randomUUID();
-      const finalDir = path.join(dir, id);
-      if (fs.existsSync(finalDir)) {
-        fs.rmSync(finalDir, { recursive: true, force: true });
-      }
-
-      fs.mkdirSync(finalDir, { recursive: true });
-      for (const ent of fs.readdirSync(contentRoot, { withFileTypes: true })) {
-        const src = path.join(contentRoot, ent.name);
-        const dst = path.join(finalDir, ent.name);
-        fs.cpSync(src, dst, { recursive: true });
-      }
-      fs.rmSync(extractRoot, { recursive: true, force: true });
-
-      const skinJsonPath = path.join(finalDir, "skin.json");
-      const skinJson = {
-        ...meta,
-        name,
-        id,
-        installedAt: Date.now(),
-      };
-      fs.writeFileSync(skinJsonPath, JSON.stringify(skinJson, null, 2), "utf8");
-
-      return res.status(201).json({ id, name });
+      const installed = installSkinFromZipBuffer(root(), req.file.buffer, {
+        displayName,
+        originalName: req.file.originalname || "",
+      });
+      return res.status(201).json(installed);
     } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (
+        msg === "invalid_zip_path" ||
+        msg === "missing_skin_json" ||
+        msg === "missing_css" ||
+        msg === "too_many_skins"
+      ) {
+        return res.status(400).json({ error: msg });
+      }
       console.error("POST /skins", e);
       return res.status(500).json({ error: "skin_install_failed" });
     }
@@ -410,4 +471,5 @@ module.exports = {
   readInstalledSkinWebFlags,
   DEFAULT_SKIN_WEB_MANIFEST,
   SKIN_WEB_KEYS,
+  isAllowedSkinReleaseDownloadUrl,
 };
