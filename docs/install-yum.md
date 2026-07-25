@@ -42,6 +42,8 @@ sudo dnf remove myhomegames-server
 
 The package installs the server under `/opt/myhomegames-server` and provides `/usr/bin/myhomegames-server`.
 
+Package metadata (`dnf info` / `yum info`) describes MyHomeGames as a self-hosted game library backend (catalog and optional remote play), with homepage and Apache-2.0 license.
+
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).

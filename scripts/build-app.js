@@ -869,6 +869,30 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
       fs.writeFileSync(path.join(usrBinDir, 'myhomegames-server'), wrapper);
       fs.chmodSync(path.join(usrBinDir, 'myhomegames-server'), '755');
 
+      const PKG_HOMEPAGE = 'https://github.com/myhomegames/myhomegames-server';
+      const PKG_MAINTAINER = 'MyHomeGames <noreply@myhomegames.dev>';
+      const PKG_SHORT_DESCRIPTION =
+        'Self-hosted game library backend for MyHomeGames (catalog and remote play)';
+      const PKG_LONG_DESCRIPTION_LINES = [
+        'MyHomeGames Server powers the MyHomeGames web app: a self-hosted catalog for',
+        'your game collection (covers, metadata, libraries, and launchers). It is not a',
+        'game store or DRM platform — you keep and run your own games.',
+        '',
+        'Features include a local HTTP API, optional Cloudflare Tunnel for remote access,',
+        'UI skins, and optional Sunshine / Moonlight Web setup for browser remote play.',
+        '',
+        'Installed under /opt/myhomegames-server. Start with: myhomegames-server',
+        '',
+        'Web UI: https://github.com/myhomegames/myhomegames-web',
+        `Docs: ${PKG_HOMEPAGE}`,
+      ];
+      // Deboa prefixes only the first extended-description line with a space; continue lines need one too.
+      const pkgDebExtendedDescription = PKG_LONG_DESCRIPTION_LINES.map((line, idx) => {
+        const body = line === '' ? '.' : line;
+        return idx === 0 ? body : ` ${body}`;
+      }).join('\n');
+      const pkgRpmDescription = PKG_LONG_DESCRIPTION_LINES.join('\n');
+
       // .deb con deboa (npm, cross-platform)
       try {
         const { Deboa } = require('deboa');
@@ -879,8 +903,12 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
           controlFileOptions: {
             packageName: 'myhomegames-server',
             version,
-            shortDescription: 'MyHomeGames server',
-            maintainer: 'MyHomeGames <noreply@myhomegames.local>',
+            shortDescription: PKG_SHORT_DESCRIPTION,
+            extendedDescription: pkgDebExtendedDescription,
+            maintainer: PKG_MAINTAINER,
+            homepage: PKG_HOMEPAGE,
+            section: 'games',
+            priority: 'optional',
             architecture: 'amd64',
           },
           modifyTarHeader: (header) => {
@@ -932,9 +960,13 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
               version,
               release: '1',
               buildArch: 'x86_64',
-              summary: 'MyHomeGames server',
-              description: 'MyHomeGames server',
+              summary: PKG_SHORT_DESCRIPTION,
+              description: pkgRpmDescription,
+              license: 'Apache-2.0',
               vendor: 'MyHomeGames',
+              packager: PKG_MAINTAINER,
+              group: 'Amusements/Games',
+              url: PKG_HOMEPAGE,
               rpmDest: BUILD_DIR,
               tempDir: path.join(BUILD_DIR, 'rpm-work'),
               verbose: false,

@@ -31,6 +31,8 @@ sudo apt remove myhomegames-server
 
 The server is installed under `/opt/myhomegames-server`; the `myhomegames-server` command is available in `/usr/bin`.
 
+Package metadata (`apt-cache show myhomegames-server`) includes a short synopsis, extended description, homepage, and section `games`.
+
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).
