@@ -290,7 +290,7 @@ function ensureWindowsDocker() {
   }
 
   throw new Error(
-    "Docker Desktop is not installed on Windows. Automatic install is not supported yet; install Docker Desktop or set MOONLIGHT_WEB_FORCE_NATIVE=true.",
+    "Docker Desktop is not installed on Windows. Automatic install is not supported yet; install Docker Desktop or use the native Moonlight Web binary (default on Windows/Linux).",
   );
 }
 
