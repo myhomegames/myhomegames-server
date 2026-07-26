@@ -445,9 +445,65 @@ const MOONLIGHT_EXIT_HANDLER_LEGACY_MHG = `this.exitStreamButton.addEventListene
 
 /**
  * Leave hook injected after startApp(): pagehide/popstate + TV remote Back.
- * Prefer clicking Moonlight Exit (runs stream.stop + mhgStop); else fire mhgStop and mhgReturn.
+ * On Tizen, do NOT click Moonlight Exit / window.close / location.replace — that
+ * exits the whole WebApp. Back must only stop Sunshine and history.back() one step.
  */
 const MOONLIGHT_LEAVE_HOOK = `// MHG: stop home game when leaving via browser/TV Back / tab close (not only Exit).
+(() => {
+    const params = new URLSearchParams(window.location.search);
+    const mhgStop = params.get("mhgStop");
+    if (!mhgStop)
+        return;
+    let sent = false;
+    const send = () => {
+        if (sent)
+            return;
+        sent = true;
+        try {
+            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+                navigator.sendBeacon(mhgStop, new Blob([], { type: "text/plain" }));
+            }
+        }
+        catch (_beaconErr) { }
+        try {
+            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
+                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
+            });
+        }
+        catch (_fetchErr) { }
+        try {
+            const msg = { type: "mhg-moonlight-exit" };
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage(msg, "*");
+            }
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, "*");
+            }
+        }
+        catch (_msgErr) { }
+    };
+    const isTvBack = (e) => {
+        const code = e.keyCode || e.which || 0;
+        return (code === 10009 || code === 461 || e.key === "BrowserBack" || e.key === "GoBack" || e.key === "XF86Back");
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+    window.addEventListener("keydown", (e) => {
+        if (!isTvBack(e))
+            return;
+        // Swallow Tizen default (exits the app at root) and avoid Exit/window.close.
+        e.preventDefault();
+        e.stopPropagation();
+        send();
+        try {
+            history.back();
+        }
+        catch (_histErr) { }
+    }, true);
+})();`;
+
+/** Previous leave hook that clicked Exit / used mhgReturn — closes the Tizen app. */
+const MOONLIGHT_LEAVE_HOOK_LEGACY_EXIT_CLICK = `// MHG: stop home game when leaving via browser/TV Back / tab close (not only Exit).
 (() => {
     const params = new URLSearchParams(window.location.search);
     const mhgStop = params.get("mhgStop");
@@ -745,6 +801,8 @@ ${MOONLIGHT_LEAVE_HOOK}`,
           `startApp();
 ${MOONLIGHT_LEAVE_HOOK}`,
         ],
+        // Migrate TV Back hook that clicked Exit / mhgReturn (exits Tizen app).
+        [MOONLIGHT_LEAVE_HOOK_LEGACY_EXIT_CLICK, MOONLIGHT_LEAVE_HOOK],
       ],
     },
     {
@@ -762,15 +820,19 @@ ${MOONLIGHT_LEAVE_HOOK}`,
         // Bust Tizen's aggressive cache of stream.js after MHG patches.
         [
           '<script type="module" src="stream.js" defer></script>',
+          '<script type="module" src="stream.js?mhg=6" defer></script>',
+        ],
+        [
           '<script type="module" src="stream.js?mhg=5" defer></script>',
+          '<script type="module" src="stream.js?mhg=6" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=4" defer></script>',
-          '<script type="module" src="stream.js?mhg=5" defer></script>',
+          '<script type="module" src="stream.js?mhg=6" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=3" defer></script>',
-          '<script type="module" src="stream.js?mhg=5" defer></script>',
+          '<script type="module" src="stream.js?mhg=6" defer></script>',
         ],
         // Seed TV-friendly settings before modules load (overrides stale localStorage).
         [
