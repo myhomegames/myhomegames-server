@@ -443,6 +443,85 @@ const MOONLIGHT_EXIT_HANDLER_LEGACY_MHG = `this.exitStreamButton.addEventListene
             }
         }));`;
 
+/**
+ * Leave hook injected after startApp(): pagehide/popstate + TV remote Back.
+ * Prefer clicking Moonlight Exit (runs stream.stop + mhgStop); else fire mhgStop and mhgReturn.
+ */
+const MOONLIGHT_LEAVE_HOOK = `// MHG: stop home game when leaving via browser/TV Back / tab close (not only Exit).
+(() => {
+    const params = new URLSearchParams(window.location.search);
+    const mhgStop = params.get("mhgStop");
+    const mhgReturn = params.get("mhgReturn");
+    if (!mhgStop && !mhgReturn)
+        return;
+    let sent = false;
+    const send = () => {
+        if (sent || !mhgStop)
+            return;
+        sent = true;
+        try {
+            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+                navigator.sendBeacon(mhgStop, new Blob([], { type: "text/plain" }));
+            }
+        }
+        catch (_beaconErr) { }
+        try {
+            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
+                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
+            });
+        }
+        catch (_fetchErr) { }
+        try {
+            const msg = { type: "mhg-moonlight-exit" };
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage(msg, "*");
+            }
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, "*");
+            }
+        }
+        catch (_msgErr) { }
+    };
+    const isTvBack = (e) => {
+        const code = e.keyCode || e.which || 0;
+        return (code === 10009 || code === 461 || e.key === "BrowserBack" || e.key === "GoBack" || e.key === "XF86Back");
+    };
+    const clickExitIfPossible = () => {
+        const nodes = Array.from(document.querySelectorAll("button, [role='button'], a"));
+        const exitBtn = nodes.find((el) => {
+            const label = ((el.getAttribute("aria-label") || "") + " " + (el.textContent || "")).trim().toLowerCase();
+            return /\\bexit\\b|\\bquit\\b|esci|chiudi/.test(label);
+        });
+        if (exitBtn) {
+            exitBtn.click();
+            return true;
+        }
+        return false;
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+    window.addEventListener("keydown", (e) => {
+        if (!isTvBack(e))
+            return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (clickExitIfPossible())
+            return;
+        send();
+        if (mhgReturn) {
+            try {
+                window.location.replace(mhgReturn);
+                return;
+            }
+            catch (_retErr) { }
+        }
+        try {
+            history.back();
+        }
+        catch (_histErr) { }
+    }, true);
+})();`;
+
 async function listMoonlightRoles(baseUrl, cookie) {
   const response = await requestJson({
     urlString: `${baseUrl}/api/roles`,
@@ -618,45 +697,9 @@ function patchMoonlightStaticFullscreenAssets() {
     window.addEventListener("popstate", send);
 })();`,
           `startApp();
-// MHG: stop home game when leaving via browser Back / tab close (not only Exit).
-(() => {
-    const mhgStop = new URLSearchParams(window.location.search).get("mhgStop");
-    if (!mhgStop)
-        return;
-    let sent = false;
-    const send = () => {
-        if (sent)
-            return;
-        sent = true;
-        try {
-            if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-                navigator.sendBeacon(mhgStop);
-            }
-        }
-        catch (_beaconErr) { }
-        try {
-            fetch(mhgStop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => {
-                fetch(mhgStop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(() => { });
-            });
-        }
-        catch (_fetchErr) { }
-        try {
-            const msg = { type: "mhg-moonlight-exit" };
-            if (window.opener && !window.opener.closed) {
-                window.opener.postMessage(msg, "*");
-            }
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage(msg, "*");
-            }
-        }
-        catch (_msgErr) { }
-    };
-    window.addEventListener("pagehide", send);
-    window.addEventListener("popstate", send);
-})();`,
+${MOONLIGHT_LEAVE_HOOK}`,
         ],
         [
-          `startApp();`,
           `startApp();
 // MHG: stop home game when leaving via browser Back / tab close (not only Exit).
 (() => {
@@ -694,6 +737,13 @@ function patchMoonlightStaticFullscreenAssets() {
     window.addEventListener("pagehide", send);
     window.addEventListener("popstate", send);
 })();`,
+          `startApp();
+${MOONLIGHT_LEAVE_HOOK}`,
+        ],
+        [
+          `startApp();`,
+          `startApp();
+${MOONLIGHT_LEAVE_HOOK}`,
         ],
       ],
     },
@@ -712,11 +762,15 @@ function patchMoonlightStaticFullscreenAssets() {
         // Bust Tizen's aggressive cache of stream.js after MHG patches.
         [
           '<script type="module" src="stream.js" defer></script>',
+          '<script type="module" src="stream.js?mhg=5" defer></script>',
+        ],
+        [
           '<script type="module" src="stream.js?mhg=4" defer></script>',
+          '<script type="module" src="stream.js?mhg=5" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=3" defer></script>',
-          '<script type="module" src="stream.js?mhg=4" defer></script>',
+          '<script type="module" src="stream.js?mhg=5" defer></script>',
         ],
         // Seed TV-friendly settings before modules load (overrides stale localStorage).
         [
