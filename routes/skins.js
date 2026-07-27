@@ -81,15 +81,28 @@ function collectCssFilesRecursive(dir, base = "") {
   return out;
 }
 
+/** Load order: bundle → components/* → pages/* → other .css (sorted within each group). */
+function cssLoadRank(rel) {
+  const n = String(rel || "").replace(/\\/g, "/");
+  if (n === "bundle.css") return [0, n];
+  if (n === "components.css" || n.startsWith("components/")) return [1, n];
+  if (n === "pages.css" || n.startsWith("pages/")) return [2, n];
+  return [3, n];
+}
+
+function compareSkinCssRel(a, b) {
+  const ra = cssLoadRank(a);
+  const rb = cssLoadRank(b);
+  if (ra[0] !== rb[0]) return ra[0] - rb[0];
+  return ra[1].localeCompare(rb[1]);
+}
+
 function readBundleCssFromSkinDir(skinDir) {
-  const bundlePath = path.join(skinDir, "bundle.css");
-  if (fs.existsSync(bundlePath)) {
-    return fs.readFileSync(bundlePath, "utf8");
-  }
   const files = collectCssFilesRecursive(skinDir);
-  files.sort((a, b) => a.rel.localeCompare(b.rel));
   if (files.length === 0) return null;
-  return files.map((f) => fs.readFileSync(f.abs, "utf8")).join("\n\n");
+  files.sort((a, b) => compareSkinCssRel(a.rel, b.rel));
+  const css = files.map((f) => fs.readFileSync(f.abs, "utf8")).join("\n\n");
+  return String(css).trim() ? css : null;
 }
 
 function countUuidSkinDirs(root) {
