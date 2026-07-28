@@ -59,9 +59,58 @@ function dockerCpIntoMoonlight(hostPath, containerPath) {
   });
 }
 
+function moonlightContainerHasIceBindMounts() {
+  try {
+    const raw = execFileSync(
+      "docker",
+      ["inspect", "-f", "{{json .Mounts}}", DOCKER_CONTAINER_NAME],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+      },
+    );
+    const mounts = JSON.parse(String(raw || "[]").trim() || "[]");
+    if (!Array.isArray(mounts)) return false;
+    const destinations = new Set(
+      mounts.map((mount) => String(mount?.Destination || "").trim()).filter(Boolean),
+    );
+    return destinations.has(CONTAINER_SCRIPT_PATH) && destinations.has(CONTAINER_JSON_PATH);
+  } catch {
+    return false;
+  }
+}
+
+function dockerWriteFileViaExec(containerPath, hostPath) {
+  const content = fs.readFileSync(hostPath);
+  execFileSync(
+    "docker",
+    ["exec", "-i", DOCKER_CONTAINER_NAME, "sh", "-c", `cat > '${containerPath.replace(/'/g, `'\\''`)}'`],
+    {
+      input: content,
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 30_000,
+    },
+  );
+}
+
 function dockerCpIceArtifacts(hostScriptPath, hostJsonPath) {
-  dockerCpIntoMoonlight(hostScriptPath, CONTAINER_SCRIPT_PATH);
-  dockerCpIntoMoonlight(hostJsonPath, CONTAINER_JSON_PATH);
+  if (moonlightContainerHasIceBindMounts()) {
+    return { viaBindMount: true };
+  }
+
+  try {
+    dockerCpIntoMoonlight(hostScriptPath, CONTAINER_SCRIPT_PATH);
+    dockerCpIntoMoonlight(hostJsonPath, CONTAINER_JSON_PATH);
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (!message.includes("device or resource busy")) {
+      throw error;
+    }
+    dockerWriteFileViaExec(CONTAINER_SCRIPT_PATH, hostScriptPath);
+    dockerWriteFileViaExec(CONTAINER_JSON_PATH, hostJsonPath);
+  }
+
   try {
     execFileSync(
       "docker",
@@ -71,6 +120,7 @@ function dockerCpIceArtifacts(hostScriptPath, hostJsonPath) {
   } catch {
     // ignore chmod failures on read-only layers; script mode from write may still apply via mount
   }
+  return { viaBindMount: false };
 }
 
 /**
@@ -97,7 +147,16 @@ async function refreshMoonlightTurnIceServers({
   const hostJsonPath = writeMoonlightIceServersJson(installDir, iceServers);
 
   try {
-    dockerCpIceArtifacts(hostScriptPath, hostJsonPath);
+    const copied = dockerCpIceArtifacts(hostScriptPath, hostJsonPath);
+    if (copied?.viaBindMount) {
+      return {
+        applied: true,
+        iceServers,
+        scriptPath: CONTAINER_SCRIPT_PATH,
+        jsonPath: CONTAINER_JSON_PATH,
+        viaBindMount: true,
+      };
+    }
   } catch (error) {
     console.warn(`Could not copy TURN ICE artifacts into Moonlight container: ${error.message || error}`);
     return { applied: false, reason: "docker-cp-failed", iceServers };
@@ -152,7 +211,11 @@ async function ensureMoonlightCloudflareTurnIce({
   writeDockerMoonlightConfig(config);
 
   if (scriptReady && refreshed.applied) {
-    console.log("Moonlight Web Cloudflare TURN ICE servers refreshed.");
+    console.log(
+      refreshed.viaBindMount
+        ? "Moonlight Web Cloudflare TURN ICE servers refreshed (host bind mount)."
+        : "Moonlight Web Cloudflare TURN ICE servers refreshed.",
+    );
     return { applied: true, restarted: false, ...refreshed };
   }
 
@@ -168,6 +231,7 @@ module.exports = {
   JSON_FILENAME,
   writeMoonlightIceServerScript,
   writeMoonlightIceServersJson,
+  moonlightContainerHasIceBindMounts,
   refreshMoonlightTurnIceServers,
   ensureMoonlightCloudflareTurnIce,
   resolveIceScriptHostPath,

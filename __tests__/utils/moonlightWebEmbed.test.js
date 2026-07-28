@@ -1,8 +1,8 @@
 jest.mock("../../utils/moonlightWebCredentials", () => ({
-  requestJson: jest.fn(),
+  requestMoonlightWebJson: jest.fn(),
 }));
 
-const { requestJson } = require("../../utils/moonlightWebCredentials");
+const { requestMoonlightWebJson } = require("../../utils/moonlightWebCredentials");
 const {
   pickDesktopApp,
   attachMoonlightStopHook,
@@ -13,7 +13,7 @@ const {
 
 describe("moonlightWebEmbed", () => {
   beforeEach(() => {
-    requestJson.mockReset();
+    requestMoonlightWebJson.mockReset();
   });
 
   it("prefers Desktop app by title then app_id 0", () => {
@@ -53,7 +53,7 @@ describe("moonlightWebEmbed", () => {
   });
 
   it("includes ty when patching Moonlight role fullscreen default", async () => {
-    requestJson
+    requestMoonlightWebJson
       .mockResolvedValueOnce({
         statusCode: 200,
         body: JSON.stringify({
@@ -72,7 +72,7 @@ describe("moonlightWebEmbed", () => {
       kind: "native",
     });
 
-    const patchCall = requestJson.mock.calls.find((call) => call[0].method === "PATCH");
+    const patchCall = requestMoonlightWebJson.mock.calls.find((call) => call[0].method === "PATCH");
     expect(patchCall?.[0].body).toEqual({
       id: 1,
       ty: "Admin",

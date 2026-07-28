@@ -4,7 +4,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { requestJson } = require("./moonlightWebCredentials");
+const { requestMoonlightWebJson } = require("./moonlightWebCredentials");
 
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
@@ -159,15 +159,14 @@ function shouldUseMoonlightTvProfile(search = "", userAgent = "") {
 }
 
 function listMoonlightUsers(baseUrl, cookie) {
-  return requestJson({
-    urlString: `${baseUrl}/api/users`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  return requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/users`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
   }).then((response) => {
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw new Error(`GET /api/users failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-    }
     const parsed = JSON.parse(response.body || "{}");
     return Array.isArray(parsed.users) ? parsed.users : [];
   });
@@ -261,16 +260,14 @@ async function ensureMoonlightWebDefaultUser({
 }
 
 async function listMoonlightApps(baseUrl, cookie, hostId) {
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/apps?host_id=${encodeURIComponent(hostId)}`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/apps?host_id=${encodeURIComponent(hostId)}`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 60_000,
-  });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`GET /api/apps failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
-  const parsed = JSON.parse(response.body || "{}");
+  });  const parsed = JSON.parse(response.body || "{}");
   return Array.isArray(parsed.apps) ? parsed.apps : [];
 }
 
@@ -281,6 +278,14 @@ function pickDesktopApp(apps) {
   const byId = apps.find((app) => Number(app.app_id) === 0);
   if (byId) return byId;
   return apps[0];
+}
+
+function buildMoonlightDesktopStreamUrl(baseUrl, hostId, appId) {
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const url = new URL(`${normalized}/stream.html`);
+  url.searchParams.set("hostId", String(hostId));
+  url.searchParams.set("appId", String(appId));
+  return url.toString();
 }
 
 /**
@@ -301,11 +306,8 @@ async function resolveMoonlightDesktopStreamUrl({
     throw new Error("Moonlight Web Desktop app not found on Sunshine host");
   }
 
-  const url = new URL(`${normalized}/stream.html`);
-  url.searchParams.set("hostId", String(hostId));
-  url.searchParams.set("appId", String(desktop.app_id));
   return {
-    url: url.toString(),
+    url: buildMoonlightDesktopStreamUrl(normalized, hostId, desktop.app_id),
     hostId: Number(hostId),
     appId: Number(desktop.app_id),
     appTitle: desktop.title || "Desktop",
@@ -579,31 +581,28 @@ const MOONLIGHT_LEAVE_HOOK_LEGACY_EXIT_CLICK = `// MHG: stop home game when leav
 })();`;
 
 async function listMoonlightRoles(baseUrl, cookie) {
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/roles`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/roles`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
   });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`GET /api/roles failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
   const parsed = JSON.parse(response.body || "{}");
   return Array.isArray(parsed.roles) ? parsed.roles : [];
 }
 
 async function getMoonlightRole(baseUrl, cookie, roleId) {
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
   const qs = roleId != null ? `?id=${encodeURIComponent(roleId)}` : "";
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/role${qs}`,
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/role${qs}`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
-  });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`GET /api/role failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
-  const parsed = JSON.parse(response.body || "{}");
+  });  const parsed = JSON.parse(response.body || "{}");
   return parsed.role || parsed;
 }
 
@@ -999,19 +998,14 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
       ...currentDefaults,
       enterFullscreenOnStreamStart: true,
     };
-    const response = await requestJson({
+    const response = await requestMoonlightWebJson({
+      baseUrl: normalized,
       urlString: `${normalized}/api/role`,
       method: "PATCH",
       body: { id: role.id, ty: roleType, default_settings: nextDefaults },
-      headers: cookie ? { Cookie: cookie } : {},
+      cookie,
       timeoutMs: 30_000,
-    });
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw new Error(
-        `PATCH /api/role failed (${response.statusCode}): ${response.body.slice(0, 200)}`,
-      );
-    }
-    result.rolePatched = true;
+    });    result.rolePatched = true;
     console.log("Moonlight Web role default: enterFullscreenOnStreamStart=true");
   }
 
@@ -1025,6 +1019,7 @@ module.exports = {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
   resolveMoonlightDesktopStreamUrl,
+  buildMoonlightDesktopStreamUrl,
   attachMoonlightStopHook,
   listMoonlightApps,
   pickDesktopApp,

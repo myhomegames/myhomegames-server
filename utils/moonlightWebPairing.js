@@ -1,6 +1,6 @@
 "use strict";
 
-const { requestJson, postJson } = require("./moonlightWebCredentials");
+const { requestMoonlightWebJson, postJson } = require("./moonlightWebCredentials");
 const {
   DEFAULT_USERNAME: DEFAULT_SUNSHINE_USERNAME,
   DEFAULT_PASSWORD: DEFAULT_SUNSHINE_PASSWORD,
@@ -81,16 +81,14 @@ function addressesMatch(left, right) {
 }
 
 async function listMoonlightHosts(baseUrl, cookie) {
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/hosts`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/hosts`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
   });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`GET /api/hosts failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
-
   const lines = parseNdjson(response.body);
   const first = lines[0] || {};
   const hosts = Array.isArray(first.hosts) ? first.hosts : [];
@@ -106,43 +104,39 @@ async function listMoonlightHosts(baseUrl, cookie) {
 }
 
 async function getMoonlightHost(baseUrl, cookie, hostId) {
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/host?host_id=${encodeURIComponent(hostId)}`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/host?host_id=${encodeURIComponent(hostId)}`,
     method: "GET",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
-  });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`GET /api/host failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
-  const parsed = JSON.parse(response.body || "{}");
+  });  const parsed = JSON.parse(response.body || "{}");
   return parsed.host || parsed;
 }
 
 async function addMoonlightHost(baseUrl, cookie, { address, httpPort }) {
-  const response = await postJson(
-    `${baseUrl}/api/host`,
-    { address, http_port: httpPort },
-    30_000,
-    { headers: cookie ? { Cookie: cookie } : {} },
-  );
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`POST /api/host failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
-  const parsed = JSON.parse(response.body || "{}");
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const response = await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/host`,
+    method: "POST",
+    body: { address, http_port: httpPort },
+    cookie,
+    timeoutMs: 30_000,
+  });  const parsed = JSON.parse(response.body || "{}");
   return parsed.host || parsed;
 }
 
 async function deleteMoonlightHost(baseUrl, cookie, hostId) {
-  const response = await requestJson({
-    urlString: `${baseUrl}/api/host?host_id=${encodeURIComponent(hostId)}`,
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  await requestMoonlightWebJson({
+    baseUrl: normalized,
+    urlString: `${normalized}/api/host?host_id=${encodeURIComponent(hostId)}`,
     method: "DELETE",
-    headers: cookie ? { Cookie: cookie } : {},
+    cookie,
     timeoutMs: 30_000,
   });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`DELETE /api/host failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
-  }
 }
 
 async function findHostByAddress(baseUrl, cookie, address) {
@@ -193,127 +187,155 @@ async function submitSunshinePin({ pin, name, env = process.env }) {
  * Start Moonlight pairing and feed the PIN into Sunshine automatically.
  * Pair endpoint returns NDJSON: first line Pin, later line Paired/PairError.
  */
-async function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(`${baseUrl}/api/pair`);
-    const lib = url.protocol === "https:" ? require("https") : require("http");
-    const payload = Buffer.from(JSON.stringify({ host_id: hostId }), "utf8");
-    const headers = {
-      Accept: "application/x-ndjson, application/json",
-      "Content-Type": "application/json",
-      "Content-Length": payload.length,
-    };
-    if (cookie) headers.Cookie = cookie;
+function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const cookiesToTry = [];
+  const seen = new Set();
+  for (const value of [cookie || "", ""]) {
+    const key = value || "";
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cookiesToTry.push(value);
+  }
 
-    let buffer = "";
-    let pinSent = false;
-    let settled = false;
-    let pinPromise = Promise.resolve();
-    let pairedPayload = null;
-    const clientName = env.MOONLIGHT_WEB_CLIENT_NAME?.trim() || DEFAULT_CLIENT_NAME;
+  const attemptPair = (sessionCookie) =>
+    new Promise((resolve, reject) => {
+      const url = new URL(`${normalized}/api/pair`);
+      const lib = url.protocol === "https:" ? require("https") : require("http");
+      const payload = Buffer.from(JSON.stringify({ host_id: hostId }), "utf8");
+      const headers = {
+        Accept: "application/x-ndjson, application/json",
+        "Content-Type": "application/json",
+        "Content-Length": payload.length,
+      };
+      if (sessionCookie) headers.Cookie = sessionCookie;
 
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve(value);
-    };
+      let buffer = "";
+      let pinSent = false;
+      let settled = false;
+      let pinPromise = Promise.resolve();
+      let pairedPayload = null;
+      const clientName = env.MOONLIGHT_WEB_CLIENT_NAME?.trim() || DEFAULT_CLIENT_NAME;
 
-    const maybeFinishSuccess = () => {
-      if (!pairedPayload || !pinSent) return;
-      pinPromise
-        .then(() => finish(null, { paired: true, host: pairedPayload }))
-        .catch((error) => finish(error));
-    };
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve(value);
+      };
 
-    const req = lib.request(
-      {
-        protocol: url.protocol,
-        hostname: url.hostname,
-        port: url.port || (url.protocol === "https:" ? 443 : 80),
-        path: `${url.pathname}${url.search}`,
-        method: "POST",
-        headers,
-        rejectUnauthorized: false,
-        timeout: 120_000,
-      },
-      (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          const chunks = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.on("end", () => {
-            finish(
-              new Error(
-                `POST /api/pair failed (${res.statusCode}): ${Buffer.concat(chunks).toString("utf8").slice(0, 200)}`,
-              ),
-            );
-          });
-          return;
-        }
+      const maybeFinishSuccess = () => {
+        if (!pairedPayload || !pinSent) return;
+        pinPromise
+          .then(() => finish(null, { paired: true, host: pairedPayload }))
+          .catch((error) => finish(error));
+      };
 
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          buffer += chunk;
-          let newlineIndex;
-          while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-            const line = buffer.slice(0, newlineIndex).trim();
-            buffer = buffer.slice(newlineIndex + 1);
-            if (!line) continue;
-            let message;
-            try {
-              message = JSON.parse(line);
-            } catch {
-              continue;
-            }
-
-            const pin = extractPin(message);
-            if (pin && !pinSent) {
-              pinSent = true;
-              // Sunshine must see the GameStream pair request before /api/pin is accepted.
-              pinPromise = new Promise((resolveDelay) => setTimeout(resolveDelay, 1500))
-                .then(() => submitSunshinePin({ pin, name: clientName, env }))
-                .then(() => {
-                  console.log(`Sunshine accepted Moonlight Web pairing PIN (${pin}).`);
-                });
-              maybeFinishSuccess();
-              continue;
-            }
-
-            if (message?.Paired || message?.paired) {
-              pairedPayload = message.Paired || message.paired;
-              maybeFinishSuccess();
-              continue;
-            }
-            if (
-              message === "PairError" ||
-              message?.PairError != null ||
-              message?.pairError ||
-              message === "InternalServerError"
-            ) {
-              finish(new Error("Moonlight Web reported PairError"));
-              return;
-            }
-          }
-        });
-        res.on("end", () => {
-          if (settled) return;
-          if (pairedPayload && pinSent) {
-            maybeFinishSuccess();
+      const req = lib.request(
+        {
+          protocol: url.protocol,
+          hostname: url.hostname,
+          port: url.port || (url.protocol === "https:" ? 443 : 80),
+          path: `${url.pathname}${url.search}`,
+          method: "POST",
+          headers,
+          rejectUnauthorized: false,
+          timeout: 120_000,
+        },
+        (res) => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const chunks = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => {
+              finish(
+                new Error(
+                  `POST /api/pair failed (${res.statusCode}): ${Buffer.concat(chunks).toString("utf8").slice(0, 200)}`,
+                ),
+              );
+            });
             return;
           }
-          finish(new Error("Moonlight Web pairing stream ended before confirmation"));
-        });
-      },
-    );
 
-    req.on("error", finish);
-    req.on("timeout", () => {
-      req.destroy();
-      finish(new Error("Timed out pairing Moonlight Web with Sunshine"));
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            buffer += chunk;
+            let newlineIndex;
+            while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, newlineIndex).trim();
+              buffer = buffer.slice(newlineIndex + 1);
+              if (!line) continue;
+              let message;
+              try {
+                message = JSON.parse(line);
+              } catch {
+                continue;
+              }
+
+              const pin = extractPin(message);
+              if (pin && !pinSent) {
+                pinSent = true;
+                pinPromise = new Promise((resolveDelay) => setTimeout(resolveDelay, 1500))
+                  .then(() => submitSunshinePin({ pin, name: clientName, env }))
+                  .then(() => {
+                    console.log(`Sunshine accepted Moonlight Web pairing PIN (${pin}).`);
+                  });
+                maybeFinishSuccess();
+                continue;
+              }
+
+              if (message?.Paired || message?.paired) {
+                pairedPayload = message.Paired || message.paired;
+                maybeFinishSuccess();
+                continue;
+              }
+              if (
+                message === "PairError" ||
+                message?.PairError != null ||
+                message?.pairError ||
+                message === "InternalServerError"
+              ) {
+                finish(new Error("Moonlight Web reported PairError"));
+                return;
+              }
+            }
+          });
+          res.on("end", () => {
+            if (settled) return;
+            if (pairedPayload && pinSent) {
+              maybeFinishSuccess();
+              return;
+            }
+            finish(new Error("Moonlight Web pairing stream ended before confirmation"));
+          });
+        },
+      );
+
+      req.on("error", finish);
+      req.on("timeout", () => {
+        req.destroy();
+        finish(new Error("Timed out pairing Moonlight Web with Sunshine"));
+      });
+      req.write(payload);
+      req.end();
     });
-    req.write(payload);
-    req.end();
-  });
+
+  return (async () => {
+    let lastError = null;
+    for (const sessionCookie of cookiesToTry) {
+      try {
+        return await attemptPair(sessionCookie);
+      } catch (error) {
+        lastError = error;
+        const message = String(error?.message || error);
+        const authFailure =
+          message.includes("(401)") ||
+          message.includes("(400)") ||
+          message.toLowerCase().includes("hex error");
+        if (!authFailure) throw error;
+      }
+    }
+    throw lastError || new Error("Moonlight Web pairing failed");
+  })();
 }
 
 /**
@@ -328,7 +350,6 @@ async function ensureMoonlightWebSunshinePairing({
 } = {}) {
   const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
   if (!normalized) throw new Error("Moonlight Web URL is required for pairing");
-  if (!cookie) throw new Error("Moonlight Web session cookie is required for pairing");
 
   const address = resolveSunshineAddressForMoonlight({ kind, env, lanIp });
   const httpPort = resolveSunshineHttpPort(env);

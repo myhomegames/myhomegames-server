@@ -42,6 +42,10 @@ function readStreamingSettings(settings) {
   return {
     remoteStreamingEnabled,
     moonlightWebUrl,
+    moonlightDesktopHostId:
+      settings?.moonlightDesktopHostId != null ? Number(settings.moonlightDesktopHostId) : null,
+    moonlightDesktopAppId:
+      settings?.moonlightDesktopAppId != null ? Number(settings.moonlightDesktopAppId) : null,
     sunshineHost,
     sunshineHttpsPort,
     sunshineHttpPort,
