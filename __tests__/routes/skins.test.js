@@ -74,6 +74,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       detailBackdropLayout: false,
+      staticInlineTagListOnTvPhone: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });
@@ -168,6 +169,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       detailBackdropLayout: false,
+      staticInlineTagListOnTvPhone: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });
@@ -234,6 +236,7 @@ describe("skins routes", () => {
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
       detailBackdropLayout: false,
+      staticInlineTagListOnTvPhone: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });

@@ -132,6 +132,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   fixedFocalStepSound: false,
   autoShowBackgroundOnSelection: false,
   detailBackdropLayout: false,
+  staticInlineTagListOnTvPhone: false,
   disableTitleTooltips: false,
   collapsibleLibrarySidebar: false,
 });
@@ -163,6 +164,7 @@ function extractWebManifest(meta) {
   out.fixedFocalStepSound = w.fixedFocalStepSound === true;
   out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
   out.detailBackdropLayout = w.detailBackdropLayout === true;
+  out.staticInlineTagListOnTvPhone = w.staticInlineTagListOnTvPhone === true;
   out.disableTitleTooltips = w.disableTitleTooltips === true;
   out.collapsibleLibrarySidebar = w.collapsibleLibrarySidebar === true;
 
