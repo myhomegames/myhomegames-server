@@ -133,6 +133,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   autoShowBackgroundOnSelection: false,
   detailBackdropLayout: false,
   staticInlineTagListOnTvPhone: false,
+  tvSummaryOverlay: false,
   disableTitleTooltips: false,
   collapsibleLibrarySidebar: false,
 });
@@ -165,6 +166,7 @@ function extractWebManifest(meta) {
   out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
   out.detailBackdropLayout = w.detailBackdropLayout === true;
   out.staticInlineTagListOnTvPhone = w.staticInlineTagListOnTvPhone === true;
+  out.tvSummaryOverlay = w.tvSummaryOverlay === true;
   out.disableTitleTooltips = w.disableTitleTooltips === true;
   out.collapsibleLibrarySidebar = w.collapsibleLibrarySidebar === true;
 
