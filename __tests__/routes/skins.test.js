@@ -73,6 +73,7 @@ describe("skins routes", () => {
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
+      detailBackdropLayout: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });
@@ -166,6 +167,7 @@ describe("skins routes", () => {
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
+      detailBackdropLayout: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });
@@ -231,6 +233,7 @@ describe("skins routes", () => {
       verticalCoverAlignment: false,
       fixedFocalStepSound: false,
       autoShowBackgroundOnSelection: false,
+      detailBackdropLayout: false,
       disableTitleTooltips: false,
       collapsibleLibrarySidebar: false,
     });
@@ -284,6 +287,35 @@ describe("skins routes", () => {
     expect(tweak.status).toBe(200);
     expect(tweak.body.settings.skinWeb.verticalCoverAlignment).toBe(true);
     expect(tweak.body.settings.skinWeb.autoShowBackgroundOnSelection).toBe(false);
+
+    await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
+  });
+
+  test("PUT /settings hydrates detailBackdropLayout from skin.json web flags", async () => {
+    const zip = new AdmZip();
+    zip.addFile(
+      "skin.json",
+      Buffer.from(
+        JSON.stringify({
+          name: "Detail Backdrop Theme",
+          web: { detailBackdropLayout: true },
+        }),
+        "utf8"
+      )
+    );
+    zip.addFile("bundle.css", Buffer.from("body {}", "utf8"));
+    const uploaded = await request(app)
+      .post("/skins")
+      .set("X-Auth-Token", token)
+      .attach("archive", zip.toBuffer(), "db.zip");
+    expect(uploaded.status).toBe(201);
+
+    const putRes = await request(app)
+      .put("/settings")
+      .set("X-Auth-Token", token)
+      .send({ activeSkinId: uploaded.body.id });
+    expect(putRes.status).toBe(200);
+    expect(putRes.body.settings.skinWeb.detailBackdropLayout).toBe(true);
 
     await request(app).delete(`/skins/${uploaded.body.id}`).set("X-Auth-Token", token);
   });

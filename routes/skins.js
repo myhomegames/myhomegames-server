@@ -131,6 +131,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   verticalCoverAlignment: false,
   fixedFocalStepSound: false,
   autoShowBackgroundOnSelection: false,
+  detailBackdropLayout: false,
   disableTitleTooltips: false,
   collapsibleLibrarySidebar: false,
 });
@@ -161,6 +162,7 @@ function extractWebManifest(meta) {
   out.verticalCoverAlignment = w.verticalCoverAlignment === true;
   out.fixedFocalStepSound = w.fixedFocalStepSound === true;
   out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
+  out.detailBackdropLayout = w.detailBackdropLayout === true;
   out.disableTitleTooltips = w.disableTitleTooltips === true;
   out.collapsibleLibrarySidebar = w.collapsibleLibrarySidebar === true;
 
