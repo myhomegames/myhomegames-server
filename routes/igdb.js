@@ -1426,7 +1426,7 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
         return res.json({ games: [] });
       }
 
-      const postData = `fields id,name,cover.url,first_release_date; where keywords = (${keywordId}); limit 50;`;
+      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,artworks.image_id,game_type; where keywords = (${keywordId}); limit 50;`;
       const options = {
         hostname: "api.igdb.com",
         path: "/v4/games",
@@ -1472,11 +1472,26 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
         const cover = g.cover && g.cover.url
           ? `https:${g.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
           : null;
+        let background = null;
+        if (g.artworks && g.artworks.length > 0 && g.artworks[0].image_id) {
+          background = `https://images.igdb.com/igdb/image/upload/t_1080p/${g.artworks[0].image_id}.jpg`;
+        }
+        const gameTypeId = coerceToGameTypeId(g.game_type);
         return {
           id: g.id,
           name: g.name || "",
+          summary: typeof g.summary === "string" ? g.summary : "",
           cover,
+          background,
           releaseDate: releaseDateFull?.year ?? null,
+          releaseDateFull: releaseDateFull || null,
+          genres: g.genres ? g.genres.map((x) => x.name || x).filter(Boolean) : [],
+          criticRating: g.rating !== undefined && g.rating !== null ? g.rating : null,
+          userRating:
+            g.aggregated_rating !== undefined && g.aggregated_rating !== null
+              ? g.aggregated_rating
+              : null,
+          ...(gameTypeId != null ? { type: gameTypeId } : {}),
           firstReleaseDate: g.first_release_date,
         };
       });
