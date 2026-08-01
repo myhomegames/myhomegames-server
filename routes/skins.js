@@ -137,6 +137,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   tvStarRatingOverlay: false,
   tvDetailSummaryBeforeActions: false,
   tvRecommendedBrowsePreview: false,
+  phoneDetailBackBesideBackground: false,
   disableTitleTooltips: false,
   collapsibleLibrarySidebar: false,
 });
@@ -173,6 +174,7 @@ function extractWebManifest(meta) {
   out.tvStarRatingOverlay = w.tvStarRatingOverlay === true;
   out.tvDetailSummaryBeforeActions = w.tvDetailSummaryBeforeActions === true;
   out.tvRecommendedBrowsePreview = w.tvRecommendedBrowsePreview === true;
+  out.phoneDetailBackBesideBackground = w.phoneDetailBackBesideBackground === true;
   out.disableTitleTooltips = w.disableTitleTooltips === true;
   out.collapsibleLibrarySidebar = w.collapsibleLibrarySidebar === true;
 
