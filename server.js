@@ -679,6 +679,23 @@ app.get("/backgrounds/:gameId", (req, res) => {
   res.sendFile(backgroundPath);
 });
 
+// Endpoint: serve game logo image (public, no auth required for images)
+app.get("/logos/:gameId", (req, res) => {
+  const gameId = decodeURIComponent(req.params.gameId);
+  const logoPath = path.join(METADATA_PATH, "content", "games", gameId, "logo.webp");
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+
+  if (!fs.existsSync(logoPath)) {
+    res.setHeader('Content-Type', 'image/webp');
+    return res.status(404).end();
+  }
+
+  res.type("image/webp");
+  res.sendFile(logoPath);
+});
+
 // Endpoint: serve collection background image (public, no auth required for images)
 app.get("/collection-backgrounds/:collectionId", (req, res) => {
   const collectionId = decodeURIComponent(req.params.collectionId);

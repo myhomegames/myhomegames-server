@@ -139,6 +139,10 @@ function parseCatalogGamePayload(catalogPayload) {
       catalogPayload.background && typeof catalogPayload.background === "string" && catalogPayload.background.trim()
         ? catalogPayload.background.trim()
         : null,
+    externalLogoUrl:
+      catalogPayload.logo && typeof catalogPayload.logo === "string" && catalogPayload.logo.trim()
+        ? catalogPayload.logo.trim()
+        : null,
     type: storedGameTypeId,
     genres: validGenres,
     themes: validThemes,
@@ -234,6 +238,7 @@ function mergeCatalogGameMetadata(localGame, catalogPayload) {
     "stars",
     "externalCoverUrl",
     "externalBackgroundUrl",
+    "externalLogoUrl",
     "type",
   ];
   for (const key of scalarKeys) {

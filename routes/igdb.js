@@ -10,6 +10,25 @@ const {
   applyTranslatedSummariesToGames,
   translateIgdbSummary,
 } = require("../utils/translateIgdbSummaries");
+const {
+  artworkTypeId,
+  logoUrlFromArtworks,
+  LOGO_TYPE_PRIORITY,
+} = require("../utils/igdbGameLogo");
+
+function isIgdbLogoArtwork(artwork) {
+  const typeId = artworkTypeId(artwork);
+  return Number.isFinite(typeId) && Object.prototype.hasOwnProperty.call(LOGO_TYPE_PRIORITY, typeId);
+}
+
+function backgroundUrlFromArtworks(artworks) {
+  if (!Array.isArray(artworks) || artworks.length === 0) return null;
+  const preferred =
+    artworks.find((a) => a?.image_id && !isIgdbLogoArtwork(a)) ||
+    artworks.find((a) => a?.image_id);
+  if (!preferred?.image_id) return null;
+  return `https://images.igdb.com/igdb/image/upload/t_1080p/${preferred.image_id}.jpg`;
+}
 
 // IGDB Access Token cache (per clientId)
 const igdbTokenCache = new Map();
@@ -1529,7 +1548,7 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
 
-      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name,game_type; where id = ${igdbId};`;
+      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,artworks.artwork_type,artworks.alpha_channel,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name,game_type; where id = ${igdbId};`;
 
       const options = {
         hostname: "api.igdb.com",
@@ -1573,11 +1592,9 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
             const { formatIGDBReleaseDate } = require("../utils/dateUtils");
             const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
             
-            // Build background URL from artworks (use first artwork if available)
-            let backgroundUrl = null;
-            if (game.artworks && game.artworks.length > 0 && game.artworks[0].image_id) {
-              backgroundUrl = `https://images.igdb.com/igdb/image/upload/t_1080p/${game.artworks[0].image_id}.jpg`;
-            }
+            // Background: prefer non-logo artworks; logo goes to dedicated field
+            const backgroundUrl = backgroundUrlFromArtworks(game.artworks);
+            const logoUrl = logoUrlFromArtworks(game.artworks);
             
             // Process age ratings
             // IGDB returns only IDs, so we need to fetch details separately
@@ -1692,6 +1709,7 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
                 ? `https:${game.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
                 : null,
               background: backgroundUrl,
+              logo: logoUrl,
               releaseDate,
               releaseDateFull,
               genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],

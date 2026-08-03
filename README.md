@@ -130,6 +130,7 @@ ${METADATA_PATH}/
     │       ├── metadata.json       # Game metadata (without id field)
     │       ├── cover.webp          # Game cover image
     │       ├── background.webp     # Game background image
+    │       ├── logo.webp           # Game logo (wordmark) image
     │       └── scripts/            # Executable scripts (.sh / .bat)
     │           └── *.sh, *.bat     # Game launcher script(s) (optional)
     ├── collections/

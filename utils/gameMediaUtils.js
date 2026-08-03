@@ -32,7 +32,7 @@ function resolveCompanyRoleMediaFile(metadataPath, resourceType, resourceId, med
  * @param {string} options.metadataPath - Path to metadata directory
  * @param {string|number} options.resourceId - Resource ID (game ID or collection ID)
  * @param {string} options.resourceType - Type of resource: 'games' or 'collections'
- * @param {string} options.mediaType - Type of media: 'cover' or 'background'
+ * @param {string} options.mediaType - Type of media: 'cover', 'background', or 'logo'
  * @param {string} options.urlPrefix - URL prefix (e.g., '/covers', '/backgrounds', '/collection-covers', '/collection-backgrounds')
  * @returns {string|null} - Media path or null if not found
  */
@@ -85,7 +85,7 @@ function getLocalMediaPath({ metadataPath, resourceId, resourceType, mediaType, 
  * @param {string} options.metadataPath - Path to metadata directory
  * @param {string|number} options.resourceId - Resource ID (game ID or collection ID)
  * @param {string} options.resourceType - Type of resource: 'games' or 'collections'
- * @param {string} options.mediaType - Type of media: 'cover' or 'background'
+ * @param {string} options.mediaType - Type of media: 'cover', 'background', or 'logo'
  * @param {string} options.urlPrefix - URL prefix (e.g., '/covers', '/backgrounds', '/collection-covers', '/collection-backgrounds')
  * @param {string|null} options.externalUrl - External URL (e.g., IGDB URL for games, null for collections)
  * @returns {string|null} - Media URL or null
@@ -138,6 +138,22 @@ function getBackgroundPath(metadataPath, gameId) {
 }
 
 /**
+ * Get the local logo path if it exists (for games)
+ * @param {string} metadataPath - Path to metadata directory
+ * @param {number|string} gameId - Game ID
+ * @returns {string|null} - Logo path or null if not found
+ */
+function getLogoPath(metadataPath, gameId) {
+  return getLocalMediaPath({
+    metadataPath,
+    resourceId: gameId,
+    resourceType: 'games',
+    mediaType: 'logo',
+    urlPrefix: '/logos'
+  });
+}
+
+/**
  * External image URLs in metadata.json (fallback when no local cover.webp / background.webp).
  */
 function getExternalCoverUrlFromStoredMetadata(obj) {
@@ -149,6 +165,12 @@ function getExternalCoverUrlFromStoredMetadata(obj) {
 function getExternalBackgroundUrlFromStoredMetadata(obj) {
   if (!obj || typeof obj !== "object") return null;
   const url = obj.externalBackgroundUrl;
+  return typeof url === "string" && url.trim() ? url.trim() : null;
+}
+
+function getExternalLogoUrlFromStoredMetadata(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const url = obj.externalLogoUrl;
   return typeof url === "string" && url.trim() ? url.trim() : null;
 }
 
@@ -187,12 +209,29 @@ function getBackgroundUrl(game, metadataPath) {
 }
 
 /**
+ * Get logo URL (local if exists, otherwise external URL from metadata)
+ * @param {object} game - Game object with id and externalLogoUrl
+ * @param {string} metadataPath - Path to metadata directory
+ * @returns {string|null} - Logo URL or null
+ */
+function getLogoUrl(game, metadataPath) {
+  return getMediaUrl({
+    metadataPath,
+    resourceId: game.id,
+    resourceType: 'games',
+    mediaType: 'logo',
+    urlPrefix: '/logos',
+    externalUrl: getExternalLogoUrlFromStoredMetadata(game)
+  });
+}
+
+/**
  * Delete a media file (cover or background) for a resource (game or collection)
  * @param {Object} options - Configuration object
  * @param {string} options.metadataPath - Path to metadata directory
  * @param {string|number} options.resourceId - Resource ID (game ID or collection ID)
  * @param {string} options.resourceType - Type of resource: 'games' or 'collections'
- * @param {string} options.mediaType - Type of media: 'cover' or 'background'
+ * @param {string} options.mediaType - Type of media: 'cover', 'background', or 'logo'
  * @returns {boolean} - True if file was deleted, false if it didn't exist
  * @throws {Error} - If deletion fails
  */
@@ -252,8 +291,11 @@ module.exports = {
   // Convenience functions for games
   getCoverPath,
   getBackgroundPath,
+  getLogoPath,
   getCoverUrl,
   getBackgroundUrl,
+  getLogoUrl,
   getExternalCoverUrlFromStoredMetadata,
   getExternalBackgroundUrlFromStoredMetadata,
+  getExternalLogoUrlFromStoredMetadata,
 };
