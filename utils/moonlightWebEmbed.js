@@ -606,6 +606,277 @@ async function getMoonlightRole(baseUrl, cookie, roleId) {
   return parsed.role || parsed;
 }
 
+const MOONLIGHT_FOCUS_INPUT_STOCK = `    focusInput() {
+        if (this.stream.getInput().getCurrentPredictedTouchAction() != "screenKeyboard" && !this.sidebar.getScreenKeyboard().isVisible()) {
+            const inputElement = document.getElementById("input");
+            inputElement.focus();
+        }
+    }`;
+
+/** First TV patch: only skipped focusInput while connecting modal was open. */
+const MOONLIGHT_FOCUS_INPUT_PATCHED_LEGACY_MODAL_ONLY = `    focusInput() {
+        // MHG: while the connecting modal is open, keep D-pad focus on Show logs / Close (Tizen).
+        if (typeof document !== "undefined" && document.querySelector(".modal-video-connect"))
+            return;
+        if (this.stream.getInput().getCurrentPredictedTouchAction() != "screenKeyboard" && !this.sidebar.getScreenKeyboard().isVisible()) {
+            const inputElement = document.getElementById("input");
+            inputElement.focus();
+        }
+    }`;
+
+const MOONLIGHT_FOCUS_INPUT_PATCHED = `    focusInput() {
+        // MHG: keep D-pad on connecting modal / sidebar chrome (Tizen).
+        if (typeof document !== "undefined") {
+            if (document.querySelector(".modal-video-connect"))
+                return;
+            const ae = document.activeElement;
+            if (ae && (ae.id === "sidebar-button" || ae.closest("#sidebar-root") || ae.classList.contains("mhg-tv-focus")))
+                return;
+            if (document.querySelector("#sidebar-root.sidebar-show"))
+                return;
+        }
+        if (this.stream.getInput().getCurrentPredictedTouchAction() != "screenKeyboard" && !this.sidebar.getScreenKeyboard().isVisible()) {
+            const inputElement = document.getElementById("input");
+            inputElement.focus();
+        }
+    }`;
+
+/**
+ * Smart TV D-pad: connecting modal (Show logs / Close) + sidebar arrow (→) + open sidebar actions.
+ * Stock Moonlight keeps focus on #input and eats arrow keys for the stream.
+ */
+const MOONLIGHT_TV_MODAL_FOCUS_HOOK = `// MHG: D-pad focus for Moonlight chrome (modal + sidebar) on smart TV.
+(() => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+        const isTv = params.get("mhgProfile") === "tv" || window.__MHG_TV__ === true
+            || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+        if (!isTv)
+            return;
+        const style = document.createElement("style");
+        style.setAttribute("data-mhg", "tv-modal-focus");
+        style.textContent = ".modal-video-connect button,#sidebar-button,.sidebar-stream button,.sidebar-stream-buttons button{"
+            + "outline:3px solid transparent;outline-offset:4px;}"
+            + ".modal-video-connect button:focus,.modal-video-connect button.mhg-tv-focus,"
+            + "#sidebar-button:focus,#sidebar-button.mhg-tv-focus,"
+            + ".sidebar-stream button:focus,.sidebar-stream button.mhg-tv-focus,"
+            + ".sidebar-stream-buttons button:focus,.sidebar-stream-buttons button.mhg-tv-focus{"
+            + "outline-color:#4ea1ff;}";
+        document.head.appendChild(style);
+        const clearFocusClass = () => {
+            document.querySelectorAll(".mhg-tv-focus").forEach((el) => el.classList.remove("mhg-tv-focus"));
+        };
+        const focusBtn = (btn) => {
+            if (!btn)
+                return;
+            clearFocusClass();
+            btn.classList.add("mhg-tv-focus");
+            btn.tabIndex = 0;
+            try {
+                btn.focus({ preventScroll: true });
+            }
+            catch (_e) {
+                try {
+                    btn.focus();
+                }
+                catch (_e2) { }
+            }
+        };
+        const collectChromeButtons = () => {
+            const list = [];
+            const sidebarBtn = document.getElementById("sidebar-button");
+            const sidebarRoot = document.getElementById("sidebar-root");
+            const sidebarOpen = !!(sidebarRoot && sidebarRoot.classList.contains("sidebar-show"));
+            // Left-edge arrow first (spatial: left of the connecting modal).
+            if (sidebarBtn && sidebarRoot && sidebarRoot.style.visibility !== "hidden")
+                list.push(sidebarBtn);
+            if (sidebarOpen && sidebarRoot) {
+                sidebarRoot.querySelectorAll("#sidebar-parent button, .sidebar-stream-buttons button").forEach((b) => {
+                    if (b !== sidebarBtn && !list.includes(b))
+                        list.push(b);
+                });
+            }
+            const modal = document.querySelector(".modal-video-connect");
+            if (modal) {
+                modal.querySelectorAll("button").forEach((b) => {
+                    if (!list.includes(b))
+                        list.push(b);
+                });
+            }
+            return list;
+        };
+        const chromeActive = () => {
+            if (document.querySelector(".modal-video-connect"))
+                return true;
+            if (document.querySelector("#sidebar-root.sidebar-show"))
+                return true;
+            const ae = document.activeElement;
+            if (ae && (ae.id === "sidebar-button" || ae.classList.contains("mhg-tv-focus") || ae.closest("#sidebar-root")))
+                return true;
+            return false;
+        };
+        const syncChrome = () => {
+            const buttons = collectChromeButtons();
+            buttons.forEach((b) => {
+                b.tabIndex = 0;
+            });
+            if (!buttons.length)
+                return;
+            // While connecting, always keep a chrome target focused (incl. sidebar arrow).
+            if (!document.querySelector(".modal-video-connect") && !document.querySelector("#sidebar-root.sidebar-show"))
+                return;
+            if (!buttons.some((b) => b === document.activeElement || b.classList.contains("mhg-tv-focus")))
+                focusBtn(buttons[0]);
+        };
+        window.addEventListener("keydown", (e) => {
+            const code = e.keyCode || e.which || 0;
+            if (code === 10009 || code === 461 || e.key === "BrowserBack" || e.key === "GoBack" || e.key === "XF86Back")
+                return;
+            const left = code === 37 || code === 4 || e.key === "ArrowLeft";
+            const right = code === 39 || code === 5 || e.key === "ArrowRight";
+            const up = code === 38 || code === 29460 || e.key === "ArrowUp";
+            const down = code === 40 || code === 29461 || e.key === "ArrowDown";
+            const ok = code === 13 || code === 29443 || e.key === "Enter" || e.key === " ";
+            // From stream input: Left jumps to the Moonlight sidebar arrow.
+            if (!chromeActive()) {
+                const sidebarBtn = document.getElementById("sidebar-button");
+                const sidebarRoot = document.getElementById("sidebar-root");
+                if (sidebarBtn && sidebarRoot && sidebarRoot.style.visibility !== "hidden" && left) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    focusBtn(sidebarBtn);
+                }
+                return;
+            }
+            const buttons = collectChromeButtons();
+            if (!buttons.length)
+                return;
+            let idx = buttons.findIndex((b) => b === document.activeElement || b.classList.contains("mhg-tv-focus"));
+            if (idx < 0)
+                idx = 0;
+            if (left || up) {
+                e.preventDefault();
+                e.stopPropagation();
+                focusBtn(buttons[Math.max(0, idx - 1)]);
+            }
+            else if (right || down) {
+                e.preventDefault();
+                e.stopPropagation();
+                focusBtn(buttons[Math.min(buttons.length - 1, idx + 1)]);
+            }
+            else if (ok) {
+                e.preventDefault();
+                e.stopPropagation();
+                const target = buttons[idx];
+                target.click();
+                // After opening the sidebar, move focus onto its first action button.
+                window.setTimeout(() => {
+                    const next = collectChromeButtons();
+                    if (target.id === "sidebar-button" && next.length > 1)
+                        focusBtn(next[1]);
+                    else
+                        syncChrome();
+                }, 50);
+            }
+        }, true);
+        const mo = new MutationObserver(() => syncChrome());
+        mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+        window.setInterval(syncChrome, 800);
+        syncChrome();
+    }
+    catch (_mhgTvFocusErr) { }
+})();`;
+
+/** Previous TV focus hook that only covered the connecting modal buttons. */
+const MOONLIGHT_TV_MODAL_FOCUS_HOOK_LEGACY_MODAL_ONLY = `// MHG: D-pad focus for Moonlight connecting modal (Show logs / Close) on smart TV.
+(() => {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const ua = String((typeof navigator !== "undefined" && navigator.userAgent) || "").toLowerCase();
+        const isTv = params.get("mhgProfile") === "tv" || window.__MHG_TV__ === true
+            || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+        if (!isTv)
+            return;
+        const style = document.createElement("style");
+        style.setAttribute("data-mhg", "tv-modal-focus");
+        style.textContent = ".modal-video-connect button{outline:3px solid transparent;outline-offset:4px;}"
+            + ".modal-video-connect button:focus,.modal-video-connect button.mhg-tv-focus{"
+            + "outline-color:#4ea1ff;}";
+        document.head.appendChild(style);
+        const buttonsIn = (root) => Array.from(root.querySelectorAll("button"));
+        const focusBtn = (btn) => {
+            const root = btn.closest(".modal-video-connect");
+            if (!root)
+                return;
+            buttonsIn(root).forEach((b) => b.classList.remove("mhg-tv-focus"));
+            btn.classList.add("mhg-tv-focus");
+            try {
+                btn.focus({ preventScroll: true });
+            }
+            catch (_e) {
+                try {
+                    btn.focus();
+                }
+                catch (_e2) { }
+            }
+        };
+        const syncModal = () => {
+            const modal = document.querySelector(".modal-video-connect");
+            if (!modal)
+                return;
+            const buttons = buttonsIn(modal);
+            buttons.forEach((b) => {
+                b.tabIndex = 0;
+            });
+            if (!buttons.length)
+                return;
+            if (!buttons.some((b) => b === document.activeElement || b.classList.contains("mhg-tv-focus")))
+                focusBtn(buttons[0]);
+        };
+        window.addEventListener("keydown", (e) => {
+            const modal = document.querySelector(".modal-video-connect");
+            if (!modal || !document.body.contains(modal))
+                return;
+            // Let Back be handled by the leave hook.
+            const code = e.keyCode || e.which || 0;
+            if (code === 10009 || code === 461 || e.key === "BrowserBack" || e.key === "GoBack" || e.key === "XF86Back")
+                return;
+            const buttons = buttonsIn(modal);
+            if (!buttons.length)
+                return;
+            let idx = buttons.findIndex((b) => b === document.activeElement || b.classList.contains("mhg-tv-focus"));
+            if (idx < 0)
+                idx = 0;
+            const left = code === 37 || code === 4 || e.key === "ArrowLeft";
+            const right = code === 39 || code === 5 || e.key === "ArrowRight";
+            const up = code === 38 || code === 29460 || e.key === "ArrowUp";
+            const down = code === 40 || code === 29461 || e.key === "ArrowDown";
+            const ok = code === 13 || code === 29443 || e.key === "Enter" || e.key === " ";
+            if (left || up) {
+                e.preventDefault();
+                e.stopPropagation();
+                focusBtn(buttons[Math.max(0, idx - 1)]);
+            }
+            else if (right || down) {
+                e.preventDefault();
+                e.stopPropagation();
+                focusBtn(buttons[Math.min(buttons.length - 1, idx + 1)]);
+            }
+            else if (ok) {
+                e.preventDefault();
+                e.stopPropagation();
+                buttons[idx].click();
+            }
+        }, true);
+        const mo = new MutationObserver(() => syncModal());
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+        window.setInterval(syncModal, 800);
+        syncModal();
+    }
+    catch (_mhgTvFocusErr) { }
+})();`;
+
 /**
  * Force Moonlight Web to enable enterFullscreenOnStreamStart.
  * Role defaults alone are not enough: browser localStorage can override them, and
@@ -656,6 +927,9 @@ function patchMoonlightStaticFullscreenAssets() {
         // TV remote: key / gamepad must unmute audio and request fullscreen (stock = mouse/touch only).
         [MOONLIGHT_KEYDOWN_STOCK, MOONLIGHT_KEYDOWN_PATCHED],
         [MOONLIGHT_GAMEPAD_UPDATE_STOCK, MOONLIGHT_GAMEPAD_UPDATE_PATCHED],
+        // Keep D-pad on Show logs / Close / sidebar arrow while connecting (don't steal focus to #input).
+        [MOONLIGHT_FOCUS_INPUT_STOCK, MOONLIGHT_FOCUS_INPUT_PATCHED],
+        [MOONLIGHT_FOCUS_INPUT_PATCHED_LEGACY_MODAL_ONLY, MOONLIGHT_FOCUS_INPUT_PATCHED],
         // Unique block after connection modal.
         // Skip AutoFullscreenModal (OK/Cancel): browsers still need a user gesture, so
         // arm fullscreen on the next tap instead of showing a confirm dialog.
@@ -752,7 +1026,8 @@ function patchMoonlightStaticFullscreenAssets() {
     window.addEventListener("popstate", send);
 })();`,
           `startApp();
-${MOONLIGHT_LEAVE_HOOK}`,
+${MOONLIGHT_LEAVE_HOOK}
+${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
         ],
         [
           `startApp();
@@ -793,13 +1068,24 @@ ${MOONLIGHT_LEAVE_HOOK}`,
     window.addEventListener("popstate", send);
 })();`,
           `startApp();
+${MOONLIGHT_LEAVE_HOOK}
+${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
+        ],
+        [
+          `startApp();
 ${MOONLIGHT_LEAVE_HOOK}`,
+          `startApp();
+${MOONLIGHT_LEAVE_HOOK}
+${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
         ],
         [
           `startApp();`,
           `startApp();
-${MOONLIGHT_LEAVE_HOOK}`,
+${MOONLIGHT_LEAVE_HOOK}
+${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
         ],
+        // Migrate TV focus hook that only covered Show logs / Close (no sidebar arrow).
+        [MOONLIGHT_TV_MODAL_FOCUS_HOOK_LEGACY_MODAL_ONLY, MOONLIGHT_TV_MODAL_FOCUS_HOOK],
         // Migrate TV Back hook that clicked Exit / mhgReturn (exits Tizen app).
         [MOONLIGHT_LEAVE_HOOK_LEGACY_EXIT_CLICK, MOONLIGHT_LEAVE_HOOK],
       ],
@@ -819,19 +1105,39 @@ ${MOONLIGHT_LEAVE_HOOK}`,
         // Bust Tizen's aggressive cache of stream.js after MHG patches.
         [
           '<script type="module" src="stream.js" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=14" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=13" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=12" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
+        ],
+        [
+          '<script type="module" src="stream.js?mhg=11" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
+        ],
+        [
           '<script type="module" src="stream.js?mhg=6" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=5" defer></script>',
-          '<script type="module" src="stream.js?mhg=6" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=4" defer></script>',
-          '<script type="module" src="stream.js?mhg=6" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
         ],
         [
           '<script type="module" src="stream.js?mhg=3" defer></script>',
-          '<script type="module" src="stream.js?mhg=6" defer></script>',
+          '<script type="module" src="stream.js?mhg=15" defer></script>',
         ],
         // Seed TV-friendly settings before modules load (overrides stale localStorage).
         [
