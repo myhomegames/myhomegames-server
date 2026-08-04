@@ -1084,47 +1084,56 @@ const { ensureMoonlightWebRunning, stopManagedMoonlightWeb } = require("./utils/
 let httpServer = null;
 let httpsServer = null;
 
-function closeHttpServersAndExit() {
-  const servers = [];
-  if (httpServer) servers.push(httpServer);
-  if (httpsServer) servers.push(httpsServer);
+let shuttingDown = false;
 
-  if (servers.length === 0) {
-    process.exit(0);
-    return;
-  }
-
-  let closedCount = 0;
-  servers.forEach((server) => {
-    server.close(() => {
-      closedCount++;
-      if (closedCount === servers.length) {
-        console.log("All servers closed. Exiting...");
-        process.exit(0);
-      }
-    });
-  });
-
-  setTimeout(() => {
-    console.error("Forced shutdown after timeout");
-    process.exit(1);
-  }, 10000);
-}
-
-// Graceful shutdown handler
+/**
+ * Ctrl+C with `npm run` / nodemon: the parent often prints a shell prompt while
+ * this process is still finishing async `server.close()`. Exit synchronously so
+ * all shutdown logs appear before the process dies (no leftover "press Enter").
+ */
 function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
-  stopManagedSunshine();
-  stopManagedMoonlightWeb();
-
-  if (cloudflareTunnel) {
-    stopCloudflareTunnel(cloudflareTunnel);
-    cloudflareTunnel.once("exit", () => closeHttpServersAndExit());
-    setTimeout(closeHttpServersAndExit, 3000);
-    return;
+  try {
+    stopManagedSunshine();
+  } catch (error) {
+    console.error("Error stopping Sunshine:", error.message || error);
   }
-
-  closeHttpServersAndExit();
+  try {
+    stopManagedMoonlightWeb();
+  } catch (error) {
+    console.error("Error stopping Moonlight Web:", error.message || error);
+  }
+  if (cloudflareTunnel) {
+    try {
+      stopCloudflareTunnel(cloudflareTunnel);
+    } catch (error) {
+      console.error("Error stopping Cloudflare Tunnel:", error.message || error);
+    }
+  }
+  try {
+    httpServer?.closeAllConnections?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpsServer?.closeAllConnections?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpServer?.close?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpsServer?.close?.();
+  } catch {
+    // ignore
+  }
+  console.log("All servers closed. Exiting...");
+  process.exit(0);
 }
 
 async function maybeStartCloudflareTunnel(localOrigin) {

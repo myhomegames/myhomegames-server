@@ -448,9 +448,15 @@ function stopManagedMoonlightWeb() {
 
   console.log("Stopping Moonlight Web...");
 
-  if (managedKind === "docker" || dockerContainerExists(DOCKER_CONTAINER_NAME)) {
+  // Do not block Ctrl+C on `docker stop` / `docker inspect`.
+  if (managedKind === "docker") {
     try {
-      execFileSync("docker", ["stop", DOCKER_CONTAINER_NAME], { stdio: "pipe", timeout: 60_000 });
+      const child = spawn("docker", ["kill", DOCKER_CONTAINER_NAME], {
+        stdio: "ignore",
+        detached: true,
+      });
+      child.on("error", () => {});
+      child.unref();
     } catch {
       // ignore
     }
@@ -460,7 +466,12 @@ function stopManagedMoonlightWeb() {
     try {
       if (process.platform === "win32") {
         if (managedChild.pid) {
-          execFileSync("taskkill", ["/PID", String(managedChild.pid), "/T", "/F"], { stdio: "ignore" });
+          const child = spawn(
+            "taskkill",
+            ["/PID", String(managedChild.pid), "/T", "/F"],
+            { stdio: "ignore", detached: true, windowsHide: true },
+          );
+          child.unref();
         }
       } else if (managedChild.pid) {
         try {
@@ -469,14 +480,6 @@ function stopManagedMoonlightWeb() {
           managedChild.kill("SIGTERM");
         }
       }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (managedExecutable) {
-    try {
-      execFileSync("pkill", ["-TERM", "-f", managedExecutable], { stdio: "ignore" });
     } catch {
       // ignore
     }
