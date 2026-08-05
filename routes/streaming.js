@@ -206,7 +206,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       } else {
         console.warn("[streaming/launch] could not resolve public API base for mhgStop");
       }
-      if (moonlightWebUrl && !moonlightWebUrl.includes("/stream.html")) {
+      if (moonlightWebUrl && !/\/stream(?:\.mhg\d+)?\.html(\?|$)/i.test(moonlightWebUrl)) {
         console.warn(
           `[streaming/launch] moonlightWebUrl is not a direct Desktop stream link: ${moonlightWebUrl}`,
         );
