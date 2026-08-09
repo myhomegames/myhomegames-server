@@ -15,8 +15,9 @@ const {
   readStreamingSettings,
   defaultManagedMoonlightWebUrl,
 } = require("./streaming");
-const { ensureMoonlightWebAdminCredentials } = require("./moonlightWebCredentials");
+const { ensureMoonlightWebAdminCredentials, resolveMoonlightWebApiCookie } = require("./moonlightWebCredentials");
 const { ensureMoonlightWebSunshinePairing } = require("./moonlightWebPairing");
+const { ensureMoonlightDesktopStreamReady } = require("./moonlightWebLaunch");
 const {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
@@ -208,7 +209,13 @@ async function waitForMoonlightWeb(url, timeoutMs = 120_000) {
 /**
  * Persist URL + enable remote streaming so the user does not need settings UI.
  */
-function persistManagedStreamingSettings({ readSettings, writeSettings, url, forceUrl = false }) {
+function persistManagedStreamingSettings({
+  readSettings,
+  writeSettings,
+  url,
+  forceUrl = false,
+  desktopStream = null,
+}) {
   if (typeof readSettings !== "function" || typeof writeSettings !== "function" || !url) {
     return;
   }
@@ -223,9 +230,15 @@ function persistManagedStreamingSettings({ readSettings, writeSettings, url, for
       moonlightWebUrl: nextUrl,
       remoteStreamingEnabled: true,
     };
+    if (desktopStream?.hostId != null && desktopStream?.appId != null) {
+      next.moonlightDesktopHostId = Number(desktopStream.hostId);
+      next.moonlightDesktopAppId = Number(desktopStream.appId);
+    }
     const changed =
       next.moonlightWebUrl !== settings.moonlightWebUrl ||
-      next.remoteStreamingEnabled !== settings.remoteStreamingEnabled;
+      next.remoteStreamingEnabled !== settings.remoteStreamingEnabled ||
+      next.moonlightDesktopHostId !== settings.moonlightDesktopHostId ||
+      next.moonlightDesktopAppId !== settings.moonlightDesktopAppId;
     if (!changed) return;
     writeSettings(next);
     console.log(`Remote streaming configured automatically (${next.moonlightWebUrl})`);
@@ -234,10 +247,14 @@ function persistManagedStreamingSettings({ readSettings, writeSettings, url, for
   }
 }
 
-async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = process.env, installDir = null } = {}) {
+async function bootstrapMoonlightWebAdminAndPair(
+  url,
+  { kind = null, env = process.env, installDir = null, readSettings = null, writeSettings = null } = {},
+) {
   try {
     const auth = await ensureMoonlightWebAdminCredentials(url, env);
     const effectiveKind = kind || managedKind;
+    let defaultUserId = null;
     try {
       const defaultUser = await ensureMoonlightWebDefaultUser({
         baseUrl: url,
@@ -246,21 +263,27 @@ async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = proce
         kind: effectiveKind,
         env,
       });
+      defaultUserId = defaultUser.userId || null;
       if (defaultUser.restarted) {
         const ready = await waitForMoonlightWeb(url, 120_000);
         if (!ready) {
           console.warn("Moonlight Web did not become ready after default_user_id restart.");
         }
-        const refreshed = await ensureMoonlightWebAdminCredentials(url, env);
-        auth.cookie = refreshed.cookie;
       }
     } catch (error) {
       console.warn(`Could not configure Moonlight Web default user: ${error.message || error}`);
     }
+
+    let apiCookie = resolveMoonlightWebApiCookie({
+      kind: effectiveKind,
+      defaultUserId,
+      sessionCookie: auth.cookie,
+    });
+
     try {
       await ensureMoonlightEnterFullscreenDefault({
         baseUrl: url,
-        cookie: auth.cookie,
+        cookie: apiCookie,
         kind: effectiveKind,
       });
     } catch (error) {
@@ -277,7 +300,15 @@ async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = proce
         env,
       });
       if (turn.restarted) {
-        await waitForMoonlightWeb(url, 120_000);
+        const ready = await waitForMoonlightWeb(url, 120_000);
+        if (!ready) {
+          console.warn("Moonlight Web did not become ready after TURN restart.");
+        }
+        apiCookie = resolveMoonlightWebApiCookie({
+          kind: effectiveKind,
+          defaultUserId,
+          sessionCookie: "",
+        });
       }
     } catch (error) {
       console.warn(`Could not configure Cloudflare TURN for Moonlight Web: ${error.message || error}`);
@@ -285,13 +316,39 @@ async function bootstrapMoonlightWebAdminAndPair(url, { kind = null, env = proce
     try {
       await ensureMoonlightWebSunshinePairing({
         baseUrl: url,
-        cookie: auth.cookie,
+        cookie: apiCookie,
         kind: effectiveKind,
         env,
         lanIp: resolveLanIpHint(),
       });
     } catch (error) {
       console.warn(`Could not auto-pair Moonlight Web with Sunshine: ${error.message || error}`);
+    }
+    try {
+      const settings = typeof readSettings === "function" ? readSettings() || {} : {};
+      const streaming = readStreamingSettings(settings);
+      const desktopStream = await ensureMoonlightDesktopStreamReady({
+        baseUrl: url,
+        kind: effectiveKind,
+        env,
+        lanIp: resolveLanIpHint(),
+        cachedHostId: streaming.moonlightDesktopHostId,
+        cachedAppId: streaming.moonlightDesktopAppId,
+        skipPairing: true,
+      });
+      const publicFromTunnel = moonlightWebPublicUrlFromApiBase(env.API_BASE || "");
+      persistManagedStreamingSettings({
+        readSettings,
+        writeSettings,
+        url: publicFromTunnel || url,
+        forceUrl: Boolean(publicFromTunnel),
+        desktopStream,
+      });
+      console.log(
+        `Moonlight Desktop stream ready (host ${desktopStream.hostId}, app ${desktopStream.appId}).`,
+      );
+    } catch (error) {
+      console.warn(`Could not resolve Moonlight Desktop stream URL: ${error.message || error}`);
     }
   } catch (error) {
     console.warn(`Could not bootstrap Moonlight Web admin: ${error.message || error}`);
@@ -331,6 +388,8 @@ async function ensureMoonlightWebRunning({
       kind: managedKind,
       env,
       installDir,
+      readSettings,
+      writeSettings,
     });
     return { started: false, reason: "already-running", url: persistUrl };
   }
@@ -365,6 +424,8 @@ async function ensureMoonlightWebRunning({
       kind: installed.kind,
       env,
       installDir: installed.installDir,
+      readSettings,
+      writeSettings,
     });
     console.log(`Moonlight Web is ready at ${managedUrl}`);
     return { started: true, url: persistUrl, kind: installed.kind, ready: true };
@@ -387,9 +448,15 @@ function stopManagedMoonlightWeb() {
 
   console.log("Stopping Moonlight Web...");
 
-  if (managedKind === "docker" || dockerContainerExists(DOCKER_CONTAINER_NAME)) {
+  // Do not block Ctrl+C on `docker stop` / `docker inspect`.
+  if (managedKind === "docker") {
     try {
-      execFileSync("docker", ["stop", DOCKER_CONTAINER_NAME], { stdio: "pipe", timeout: 60_000 });
+      const child = spawn("docker", ["kill", DOCKER_CONTAINER_NAME], {
+        stdio: "ignore",
+        detached: true,
+      });
+      child.on("error", () => {});
+      child.unref();
     } catch {
       // ignore
     }
@@ -399,7 +466,12 @@ function stopManagedMoonlightWeb() {
     try {
       if (process.platform === "win32") {
         if (managedChild.pid) {
-          execFileSync("taskkill", ["/PID", String(managedChild.pid), "/T", "/F"], { stdio: "ignore" });
+          const child = spawn(
+            "taskkill",
+            ["/PID", String(managedChild.pid), "/T", "/F"],
+            { stdio: "ignore", detached: true, windowsHide: true },
+          );
+          child.unref();
         }
       } else if (managedChild.pid) {
         try {
@@ -408,14 +480,6 @@ function stopManagedMoonlightWeb() {
           managedChild.kill("SIGTERM");
         }
       }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (managedExecutable) {
-    try {
-      execFileSync("pkill", ["-TERM", "-f", managedExecutable], { stdio: "ignore" });
     } catch {
       // ignore
     }
@@ -431,6 +495,7 @@ module.exports = {
   DOCKER_CONTAINER_NAME,
   isMoonlightWebEnabled,
   resolveMoonlightWebPort,
+  resolveLanIpHint,
   ensureMoonlightWebRunning,
   stopManagedMoonlightWeb,
   findMoonlightWebExecutable,

@@ -1,19 +1,21 @@
 jest.mock("../../utils/moonlightWebCredentials", () => ({
-  requestJson: jest.fn(),
+  requestMoonlightWebJson: jest.fn(),
 }));
 
-const { requestJson } = require("../../utils/moonlightWebCredentials");
+const { requestMoonlightWebJson } = require("../../utils/moonlightWebCredentials");
 const {
   pickDesktopApp,
   attachMoonlightStopHook,
+  buildMoonlightDesktopStreamUrl,
   ensureMoonlightEnterFullscreenDefault,
   shouldUseMoonlightTvProfile,
   MOONLIGHT_TV_STREAM_SETTINGS,
+  MOONLIGHT_STREAM_HTML_PATH,
 } = require("../../utils/moonlightWebEmbed");
 
 describe("moonlightWebEmbed", () => {
   beforeEach(() => {
-    requestJson.mockReset();
+    requestMoonlightWebJson.mockReset();
   });
 
   it("prefers Desktop app by title then app_id 0", () => {
@@ -53,7 +55,7 @@ describe("moonlightWebEmbed", () => {
   });
 
   it("includes ty when patching Moonlight role fullscreen default", async () => {
-    requestJson
+    requestMoonlightWebJson
       .mockResolvedValueOnce({
         statusCode: 200,
         body: JSON.stringify({
@@ -72,7 +74,7 @@ describe("moonlightWebEmbed", () => {
       kind: "native",
     });
 
-    const patchCall = requestJson.mock.calls.find((call) => call[0].method === "PATCH");
+    const patchCall = requestMoonlightWebJson.mock.calls.find((call) => call[0].method === "PATCH");
     expect(patchCall?.[0].body).toEqual({
       id: 1,
       ty: "Admin",
@@ -89,11 +91,18 @@ describe("moonlightWebEmbed", () => {
       returnUrl: "https://app.example/app/game/42",
     });
     const parsed = new URL(url);
+    expect(parsed.pathname).toBe(`/${MOONLIGHT_STREAM_HTML_PATH}`);
     expect(parsed.searchParams.get("mhgReturn")).toBe("https://app.example/app/game/42");
     const stop = new URL(parsed.searchParams.get("mhgStop"));
     expect(stop.origin).toBe("https://home.example");
     expect(stop.pathname).toBe("/streaming/stop");
     expect(stop.searchParams.get("gameId")).toBe("42");
     expect(stop.searchParams.get("hostId")).toBe("7");
+  });
+
+  it("builds Desktop stream URL under versioned folder ending with stream.html", () => {
+    const url = buildMoonlightDesktopStreamUrl("https://ml.example", 9, 1);
+    expect(url).toBe(`https://ml.example/${MOONLIGHT_STREAM_HTML_PATH}?hostId=9&appId=1`);
+    expect(new URL(url).pathname.endsWith("stream.html")).toBe(true);
   });
 });

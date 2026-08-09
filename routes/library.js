@@ -95,7 +95,7 @@ const {
   collectResourceIdsForGameWithMapFallback,
 } = require("../utils/gameDeleteUtils");
 const { pruneOrphanRoleItems, loadRoleItems } = require("../utils/companyStorage");
-const { getCoverUrl, getBackgroundUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
+const { getCoverUrl, getBackgroundUrl, getLogoUrl, deleteMediaFile } = require("../utils/gameMediaUtils");
 const { readJsonFile, ensureDirectoryExists, writeJsonFile, removeDirectoryIfEmpty } = require("../utils/fileUtils");
 const { getTitleForSort } = require("../utils/sortUtils");
 const { coerceToGameTypeId } = require("../utils/gameType");
@@ -417,8 +417,15 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
       : null;
   gameData.externalCoverUrl = extCover;
   gameData.externalBackgroundUrl = extBg;
+  const extLogo =
+    game.externalLogoUrl != null && typeof game.externalLogoUrl === "string" && game.externalLogoUrl.trim()
+      ? game.externalLogoUrl.trim()
+      : null;
+  gameData.externalLogoUrl = extLogo;
   const backgroundUrl = getBackgroundUrl(game, metadataPath);
   if (backgroundUrl) gameData.background = backgroundUrl;
+  const logoUrl = getLogoUrl(game, metadataPath);
+  if (logoUrl) gameData.logo = logoUrl;
   return gameData;
 }
 
@@ -855,6 +862,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       "similarGames",
       "externalCoverUrl",
       "externalBackgroundUrl",
+      "externalLogoUrl",
       "type",
     ];
     
@@ -941,6 +949,18 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       } else {
         const t = v.trim();
         filteredUpdates.externalBackgroundUrl = t.length > 0 ? t : null;
+      }
+    }
+
+    if ("externalLogoUrl" in filteredUpdates) {
+      const v = filteredUpdates.externalLogoUrl;
+      if (v == null || v === "") {
+        filteredUpdates.externalLogoUrl = null;
+      } else if (typeof v !== "string") {
+        return res.status(400).json({ error: "externalLogoUrl must be a string or null" });
+      } else {
+        const t = v.trim();
+        filteredUpdates.externalLogoUrl = t.length > 0 ? t : null;
       }
     }
     // Critic/user ratings: 0-100 from client, convert to 0-10 for storage
@@ -1722,6 +1742,36 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
+  // Endpoint: upload logo image for a game
+  app.post("/games/:gameId/upload-logo", requireToken, upload.single('file'), (req, res) => {
+    const gameId = Number(req.params.gameId);
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    if (!file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ error: "File must be an image" });
+    }
+
+    const game = allGames[gameId];
+    if (!game) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+
+    try {
+      const gameContentDir = path.join(metadataPath, "content", "games", String(gameId));
+      ensureDirectoryExists(gameContentDir);
+      const logoPath = path.join(gameContentDir, "logo.webp");
+      fs.writeFileSync(logoPath, file.buffer);
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
+    } catch (error) {
+      console.error(`Failed to save logo for game ${gameId}:`, error);
+      res.status(500).json({ error: "Failed to save logo image" });
+    }
+  });
+
   // Endpoint: upload screenshot image for a game
   app.post("/games/:gameId/upload-screenshot", requireToken, upload.single("file"), (req, res) => {
     const gameId = Number(req.params.gameId);
@@ -1853,6 +1903,53 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     }
   });
 
+  // Endpoint: delete logo image for a game
+  app.delete("/games/:gameId/delete-logo", requireToken, (req, res) => {
+    const gameId = Number(req.params.gameId);
+
+    if (isNaN(gameId)) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+
+    let game = allGames[gameId];
+    if (!game) {
+      const gameMetadataPath = getGameMetadataPath(metadataPath, gameId);
+      if (!fs.existsSync(gameMetadataPath)) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      game = loadGame(metadataPath, gameId);
+      if (game) {
+        game.id = gameId;
+        Object.assign(game, getGameTagIdsFromBlocks(metadataPath, gameId));
+        allGames[gameId] = game;
+        invalidateLibraryGamesResponseCache();
+      } else {
+        return res.status(404).json({ error: "Game not found" });
+      }
+    }
+
+    const gameMetadataPath = getGameMetadataPath(metadataPath, gameId);
+    if (!fs.existsSync(gameMetadataPath)) {
+      delete allGames[gameId];
+      invalidateLibraryGamesResponseCache();
+      return res.status(404).json({ error: "Game not found" });
+    }
+
+    try {
+      deleteMediaFile({
+        metadataPath,
+        resourceId: gameId,
+        resourceType: 'games',
+        mediaType: 'logo'
+      });
+
+      res.json({ status: "success", game: localizedGameResponse(req, game, null, null, allGames) });
+    } catch (error) {
+      console.error(`Failed to delete logo for game ${gameId}:`, error);
+      res.status(500).json({ error: "Failed to delete logo image" });
+    }
+  });
+
   // Endpoint: upload executable file for a game
   app.post("/games/:gameId/upload-executable", requireToken, upload.single('file'), (req, res) => {
     const gameId = Number(req.params.gameId);
@@ -1959,6 +2056,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       summaryEn,
       cover,
       background,
+      logo,
       releaseDate,
       genres,
       criticRating,
@@ -2200,6 +2298,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           : null,
         externalCoverUrl: cover && typeof cover === "string" && cover.trim() ? cover.trim() : null,
         externalBackgroundUrl: background && typeof background === "string" && background.trim() ? background.trim() : null,
+        externalLogoUrl: logo && typeof logo === "string" && logo.trim() ? logo.trim() : null,
         showTitle: true,
         ...(storedGameTypeId != null ? { type: storedGameTypeId } : {}),
       };

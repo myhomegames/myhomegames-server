@@ -273,10 +273,40 @@ function findSkinContentRoot(extractRoot) {
   return null;
 }
 
+function collectCssFilesRecursive(dir, base = "") {
+  /** @type {{ abs: string; rel: string }[]} */
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (ent.name.startsWith(".")) continue;
+    const abs = path.join(dir, ent.name);
+    const rel = base ? `${base}/${ent.name}` : ent.name;
+    if (ent.isDirectory()) out.push(...collectCssFilesRecursive(abs, rel));
+    else if (ent.isFile() && ent.name.toLowerCase().endsWith(".css")) out.push({ abs, rel });
+  }
+  return out;
+}
+
+function cssLoadRank(rel) {
+  const n = String(rel || "").replace(/\\/g, "/");
+  if (n === "bundle.css") return [0, n];
+  if (n === "components.css" || n.startsWith("components/")) return [1, n];
+  if (n === "pages.css" || n.startsWith("pages/")) return [2, n];
+  return [3, n];
+}
+
+function compareSkinCssRel(a, b) {
+  const ra = cssLoadRank(a);
+  const rb = cssLoadRank(b);
+  if (ra[0] !== rb[0]) return ra[0] - rb[0];
+  return ra[1].localeCompare(rb[1]);
+}
+
 function readBundleCssFromSkinDir(skinDir) {
-  const bundlePath = path.join(skinDir, "bundle.css");
-  if (!fs.existsSync(bundlePath)) return null;
-  const css = fs.readFileSync(bundlePath, "utf8");
+  const files = collectCssFilesRecursive(skinDir);
+  if (files.length === 0) return null;
+  files.sort((a, b) => compareSkinCssRel(a.rel, b.rel));
+  const css = files.map((f) => fs.readFileSync(f.abs, "utf8")).join("\n\n");
   return String(css).trim() ? css : null;
 }
 
@@ -647,6 +677,23 @@ app.get("/backgrounds/:gameId", (req, res) => {
   // Set appropriate content type for webp
   res.type("image/webp");
   res.sendFile(backgroundPath);
+});
+
+// Endpoint: serve game logo image (public, no auth required for images)
+app.get("/logos/:gameId", (req, res) => {
+  const gameId = decodeURIComponent(req.params.gameId);
+  const logoPath = path.join(METADATA_PATH, "content", "games", gameId, "logo.webp");
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+
+  if (!fs.existsSync(logoPath)) {
+    res.setHeader('Content-Type', 'image/webp');
+    return res.status(404).end();
+  }
+
+  res.type("image/webp");
+  res.sendFile(logoPath);
 });
 
 // Endpoint: serve collection background image (public, no auth required for images)
@@ -1037,47 +1084,56 @@ const { ensureMoonlightWebRunning, stopManagedMoonlightWeb } = require("./utils/
 let httpServer = null;
 let httpsServer = null;
 
-function closeHttpServersAndExit() {
-  const servers = [];
-  if (httpServer) servers.push(httpServer);
-  if (httpsServer) servers.push(httpsServer);
+let shuttingDown = false;
 
-  if (servers.length === 0) {
-    process.exit(0);
-    return;
-  }
-
-  let closedCount = 0;
-  servers.forEach((server) => {
-    server.close(() => {
-      closedCount++;
-      if (closedCount === servers.length) {
-        console.log("All servers closed. Exiting...");
-        process.exit(0);
-      }
-    });
-  });
-
-  setTimeout(() => {
-    console.error("Forced shutdown after timeout");
-    process.exit(1);
-  }, 10000);
-}
-
-// Graceful shutdown handler
+/**
+ * Ctrl+C with `npm run` / nodemon: the parent often prints a shell prompt while
+ * this process is still finishing async `server.close()`. Exit synchronously so
+ * all shutdown logs appear before the process dies (no leftover "press Enter").
+ */
 function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
-  stopManagedSunshine();
-  stopManagedMoonlightWeb();
-
-  if (cloudflareTunnel) {
-    stopCloudflareTunnel(cloudflareTunnel);
-    cloudflareTunnel.once("exit", () => closeHttpServersAndExit());
-    setTimeout(closeHttpServersAndExit, 3000);
-    return;
+  try {
+    stopManagedSunshine();
+  } catch (error) {
+    console.error("Error stopping Sunshine:", error.message || error);
   }
-
-  closeHttpServersAndExit();
+  try {
+    stopManagedMoonlightWeb();
+  } catch (error) {
+    console.error("Error stopping Moonlight Web:", error.message || error);
+  }
+  if (cloudflareTunnel) {
+    try {
+      stopCloudflareTunnel(cloudflareTunnel);
+    } catch (error) {
+      console.error("Error stopping Cloudflare Tunnel:", error.message || error);
+    }
+  }
+  try {
+    httpServer?.closeAllConnections?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpsServer?.closeAllConnections?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpServer?.close?.();
+  } catch {
+    // ignore
+  }
+  try {
+    httpsServer?.close?.();
+  } catch {
+    // ignore
+  }
+  console.log("All servers closed. Exiting...");
+  process.exit(0);
 }
 
 async function maybeStartCloudflareTunnel(localOrigin) {

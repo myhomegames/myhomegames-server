@@ -104,7 +104,16 @@ function killProcessTree(pid) {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+      try {
+        const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          detached: true,
+          windowsHide: true,
+        });
+        child.unref();
+      } catch {
+        // ignore
+      }
       return;
     }
     try {
@@ -120,35 +129,32 @@ function killProcessTree(pid) {
 function killSunshineByPath(executable) {
   if (!executable) return;
 
+  // Never block Ctrl+C on killall/pkill — execFileSync freezes the event loop and
+  // lets `npm run` print a shell prompt while we are still shutting down.
   if (process.platform === "win32") {
     try {
-      execFileSync("taskkill", ["/IM", "sunshine.exe", "/F", "/T"], { stdio: "ignore" });
+      const child = spawn("taskkill", ["/IM", "sunshine.exe", "/F", "/T"], {
+        stdio: "ignore",
+        detached: true,
+        windowsHide: true,
+      });
+      child.unref();
     } catch {
-      // ignore — process may already be gone
+      // ignore
     }
     return;
   }
 
-  const patterns = new Set([executable]);
-  const appBundle = resolveMacAppBundle(executable);
-  if (appBundle) {
-    patterns.add(appBundle);
-    patterns.add(path.join(appBundle, "Contents", "MacOS", "Sunshine"));
-    patterns.add(path.join(appBundle, "Contents", "MacOS", "sunshine"));
-  }
-
-  for (const pattern of patterns) {
+  for (const args of [
+    ["-TERM", "Sunshine"],
+    ["-TERM", "sunshine"],
+    ["-KILL", "Sunshine"],
+    ["-KILL", "sunshine"],
+  ]) {
     try {
-      execFileSync("pkill", ["-TERM", "-f", pattern], { stdio: "ignore" });
-    } catch {
-      // pkill exits 1 when no process matched
-    }
-  }
-
-  // Give processes a moment, then force-kill leftovers matching our install.
-  if (appBundle) {
-    try {
-      execFileSync("pkill", ["-KILL", "-f", appBundle], { stdio: "ignore" });
+      const child = spawn("killall", args, { stdio: "ignore", detached: true });
+      child.on("error", () => {});
+      child.unref();
     } catch {
       // ignore
     }

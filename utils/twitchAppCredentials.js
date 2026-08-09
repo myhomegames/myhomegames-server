@@ -27,8 +27,8 @@ function catalogApiCredentialsError() {
  * Tunnel disabled: headers, then tokens/twitch-app-credentials.json, then TWITCH_CLIENT_* env vars.
  */
 function resolveTwitchAppCredentials(req) {
-  const headerClientId = String(req.header("X-Twitch-Client-Id") || "").trim();
-  const headerClientSecret = String(req.header("X-Twitch-Client-Secret") || "").trim();
+  const headerClientId = String(req?.header?.("X-Twitch-Client-Id") || "").trim();
+  const headerClientSecret = String(req?.header?.("X-Twitch-Client-Secret") || "").trim();
 
   if (isCloudflareTunnelEnabled()) {
     return { clientId: headerClientId, clientSecret: headerClientSecret };

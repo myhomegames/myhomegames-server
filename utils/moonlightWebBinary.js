@@ -36,22 +36,8 @@ function isDockerAvailable() {
   return isDockerDaemonReady();
 }
 
-/**
- * Prefer Docker on every platform (auto-installed via Colima/Docker Engine when missing).
- * Native GitHub archives remain a fallback on Windows/Linux when Docker cannot be provisioned
- * or MOONLIGHT_WEB_FORCE_NATIVE=true.
- */
-function detectInstallStrategy(env = process.env) {
-  const forceNative = env.MOONLIGHT_WEB_FORCE_NATIVE === "true";
-  if (!forceNative) {
-    return { kind: "docker", assetPattern: null, image: null };
-  }
-
-  if (process.platform === "darwin") {
-    // No official macOS binary — Docker remains required even if "force native".
-    return { kind: "docker", assetPattern: null, image: null, dockerRequired: true };
-  }
-
+/** Official GitHub release archives (Windows / Linux only — no macOS binary). */
+function detectNativeInstallStrategy() {
   if (process.platform === "win32") {
     return {
       kind: "zip",
@@ -76,6 +62,27 @@ function detectInstallStrategy(env = process.env) {
   }
 
   return null;
+}
+
+/**
+ * Prefer native GitHub archives on Windows/Linux. Docker is used on macOS (no official
+ * native binary), when MOONLIGHT_WEB_FORCE_DOCKER=true, or if native install fails.
+ * MOONLIGHT_WEB_FORCE_NATIVE=true skips the Docker fallback after a native failure.
+ */
+function detectInstallStrategy(env = process.env) {
+  if (env.MOONLIGHT_WEB_FORCE_DOCKER === "true") {
+    return { kind: "docker", assetPattern: null, image: null };
+  }
+
+  if (process.platform === "darwin") {
+    // No official macOS binary — Docker required.
+    return { kind: "docker", assetPattern: null, image: null, dockerRequired: true };
+  }
+
+  const native = detectNativeInstallStrategy();
+  if (native) return native;
+
+  return { kind: "docker", assetPattern: null, image: null };
 }
 
 function fetchJson(url) {
@@ -273,6 +280,35 @@ function pullDockerImage(image) {
   });
 }
 
+async function installViaDockerMoonlightWeb({ metadataPath, installDir, env = process.env }) {
+  await ensureDockerRuntime({ metadataPath, env });
+
+  if (!isDockerDaemonReady()) {
+    throw new Error(
+      "Docker runtime was provisioned but the daemon is not reachable yet. Retry in a minute.",
+    );
+  }
+
+  const image = resolveDockerImage(env);
+  const version = env.MOONLIGHT_WEB_VERSION?.trim() || "latest";
+  const manifest = readInstallManifest(installDir);
+  if (manifest?.kind === "docker" && manifest?.image === image) {
+    return { installDir, executable: null, version: manifest.version || version, kind: "docker", image };
+  }
+
+  pullDockerImage(image);
+  writeInstallManifest(installDir, {
+    version,
+    kind: "docker",
+    image,
+    installedAt: new Date().toISOString(),
+    platform: process.platform,
+    arch: process.arch,
+  });
+  console.log(`Moonlight Web Docker image ready: ${image}`);
+  return { installDir, executable: null, version, kind: "docker", image };
+}
+
 async function ensureMoonlightWebBinary({ metadataPath, env = process.env } = {}) {
   if (env.MOONLIGHT_WEB_SKIP_INSTALL === "true") {
     const installDir = resolveMoonlightWebInstallDir(metadataPath);
@@ -296,50 +332,21 @@ async function ensureMoonlightWebBinary({ metadataPath, env = process.env } = {}
   }
 
   if (strategy.kind === "docker") {
-    try {
-      await ensureDockerRuntime({ metadataPath, env });
-    } catch (error) {
-      if (process.platform !== "darwin" && env.MOONLIGHT_WEB_FORCE_DOCKER !== "true") {
-        console.warn(
-          `Docker auto-install failed (${error.message || error}). Falling back to native Moonlight Web binary.`,
-        );
-        const nativeStrategy = detectInstallStrategy({ ...env, MOONLIGHT_WEB_FORCE_NATIVE: "true" });
-        if (nativeStrategy?.kind && nativeStrategy.kind !== "docker") {
-          const asset = await resolveLatestNativeAsset(nativeStrategy, env);
-          return installNativeMoonlightWeb({ asset, installDir, env });
-        }
-      }
-      throw error;
-    }
-
-    if (!isDockerDaemonReady()) {
-      throw new Error(
-        "Docker runtime was provisioned but the daemon is not reachable yet. Retry in a minute.",
-      );
-    }
-
-    const image = resolveDockerImage(env);
-    const version = env.MOONLIGHT_WEB_VERSION?.trim() || "latest";
-    const manifest = readInstallManifest(installDir);
-    if (manifest?.kind === "docker" && manifest?.image === image) {
-      return { installDir, executable: null, version: manifest.version || version, kind: "docker", image };
-    }
-
-    pullDockerImage(image);
-    writeInstallManifest(installDir, {
-      version,
-      kind: "docker",
-      image,
-      installedAt: new Date().toISOString(),
-      platform: process.platform,
-      arch: process.arch,
-    });
-    console.log(`Moonlight Web Docker image ready: ${image}`);
-    return { installDir, executable: null, version, kind: "docker", image };
+    return installViaDockerMoonlightWeb({ metadataPath, installDir, env });
   }
 
-  const asset = await resolveLatestNativeAsset(strategy, env);
-  return installNativeMoonlightWeb({ asset, installDir, env });
+  try {
+    const asset = await resolveLatestNativeAsset(strategy, env);
+    return await installNativeMoonlightWeb({ asset, installDir, env });
+  } catch (error) {
+    if (env.MOONLIGHT_WEB_FORCE_NATIVE === "true") {
+      throw error;
+    }
+    console.warn(
+      `Native Moonlight Web install failed (${error.message || error}). Falling back to Docker.`,
+    );
+    return installViaDockerMoonlightWeb({ metadataPath, installDir, env });
+  }
 }
 
 async function installNativeMoonlightWeb({ asset, installDir }) {

@@ -102,6 +102,135 @@ function postJson(urlString, body, timeoutMs = 15_000, options = {}) {
   });
 }
 
+function isMoonlightWebAuthError(statusCode, body) {
+  if (statusCode === 401) return true;
+  const text = String(body || "").toLowerCase();
+  return statusCode === 400 && text.includes("hex error");
+}
+
+function moonlightWebRequestLabel(urlString, method) {
+  try {
+    const path = new URL(urlString).pathname || urlString;
+    return `${method} ${path}`;
+  } catch {
+    return `${method} ${urlString}`;
+  }
+}
+
+function buildMoonlightWebHeaders(headers, cookie) {
+  const next = { ...headers };
+  if (cookie) next.Cookie = cookie;
+  else delete next.Cookie;
+  return next;
+}
+
+/**
+ * Call Moonlight Web API with automatic auth recovery.
+ * Stale mlSession cookies after a Docker restart return 401; default_user_id allows
+ * unauthenticated calls as the configured admin user.
+ */
+async function requestMoonlightWebJson({
+  urlString,
+  method = "GET",
+  body = null,
+  cookie = "",
+  headers = {},
+  timeoutMs = 30_000,
+  auth = null,
+  env = process.env,
+  baseUrl = null,
+} = {}) {
+  const label = moonlightWebRequestLabel(urlString, method);
+  const normalizedBase =
+    String(baseUrl || "").trim().replace(/\/$/, "") ||
+    (() => {
+      try {
+        const url = new URL(urlString);
+        return `${url.protocol}//${url.host}`;
+      } catch {
+        return "";
+      }
+    })();
+
+  const attempts = [];
+  const seen = new Set();
+  const pushAttempt = (value) => {
+    const key = value || "";
+    if (seen.has(key)) return;
+    seen.add(key);
+    attempts.push(value);
+  };
+
+  pushAttempt(cookie || "");
+  pushAttempt("");
+
+  let lastResponse = null;
+  for (const attemptCookie of attempts) {
+    const response = await requestJson({
+      urlString,
+      method,
+      body,
+      timeoutMs,
+      auth,
+      headers: buildMoonlightWebHeaders(headers, attemptCookie),
+    });
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response;
+    }
+    lastResponse = response;
+    if (!isMoonlightWebAuthError(response.statusCode, response.body)) {
+      break;
+    }
+  }
+
+  if (normalizedBase) {
+    try {
+      const refreshed = await ensureMoonlightWebAdminCredentials(normalizedBase, env);
+      const response = await requestJson({
+        urlString,
+        method,
+        body,
+        timeoutMs,
+        auth,
+        headers: buildMoonlightWebHeaders(headers, refreshed.cookie || ""),
+      });
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return response;
+      }
+      lastResponse = response;
+      if (isMoonlightWebAuthError(response.statusCode, response.body)) {
+        const anonymous = await requestJson({
+          urlString,
+          method,
+          body,
+          timeoutMs,
+          auth,
+          headers: buildMoonlightWebHeaders(headers, ""),
+        });
+        if (anonymous.statusCode >= 200 && anonymous.statusCode < 300) {
+          return anonymous;
+        }
+        lastResponse = anonymous;
+      }
+    } catch {
+      // fall through to final error
+    }
+  }
+
+  const failed = lastResponse || { statusCode: 0, body: "" };
+  throw new Error(`${label} failed (${failed.statusCode}): ${failed.body.slice(0, 200)}`);
+}
+
+/**
+ * Prefer anonymous API access for Docker (default_user_id) to avoid stale mlSession cookies
+ * after container restarts. Native installs keep the login session when no default user is set.
+ */
+function resolveMoonlightWebApiCookie({ kind, defaultUserId, sessionCookie } = {}) {
+  if (kind === "docker") return "";
+  if (defaultUserId) return "";
+  return sessionCookie || "";
+}
+
 /**
  * Moonlight Web creates the first admin on POST /api/login when no users exist yet.
  * Returns session cookie for authenticated follow-up API calls.
@@ -137,6 +266,9 @@ module.exports = {
   DEFAULT_PASSWORD,
   resolveBootstrapCredentials,
   ensureMoonlightWebAdminCredentials,
+  isMoonlightWebAuthError,
+  requestMoonlightWebJson,
+  resolveMoonlightWebApiCookie,
   postJson,
   requestJson,
   cookieHeaderFromSetCookie,

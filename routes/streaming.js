@@ -16,10 +16,13 @@ const {
   resolveMoonlightWebInstallDir,
 } = require("../utils/moonlightWebBinary");
 const { isSunshineEnabled } = require("../utils/sunshineService");
-const { isMoonlightWebEnabled, resolveMoonlightWebPort } = require("../utils/moonlightWebService");
-const { listMoonlightHosts, hostLooksPaired } = require("../utils/moonlightWebPairing");
-const { resolveMoonlightDesktopStreamUrl, attachMoonlightStopHook } = require("../utils/moonlightWebEmbed");
-const { ensureMoonlightWebAdminCredentials } = require("../utils/moonlightWebCredentials");
+const {
+  isMoonlightWebEnabled,
+  resolveMoonlightWebPort,
+  resolveLanIpHint,
+} = require("../utils/moonlightWebService");
+const { attachMoonlightStopHook } = require("../utils/moonlightWebEmbed");
+const { ensureMoonlightDesktopStreamReady } = require("../utils/moonlightWebLaunch");
 const {
   isCloudflareTurnConfigured,
   generateCloudflareTurnIceServers,
@@ -127,6 +130,28 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
             ? req.query.executableName
             : undefined;
 
+      const moonlightInstallDir = resolveMoonlightWebInstallDir(metadataPath);
+      const moonlightKind = readMoonlightWebManifest(moonlightInstallDir)?.kind || null;
+      const moonlightKindForApi = moonlightKind === "docker" ? "docker" : null;
+
+      let moonlightWebUrl = streaming.moonlightWebUrl;
+      let moonlightStream = null;
+      try {
+        moonlightStream = await ensureMoonlightDesktopStreamReady({
+          baseUrl: streaming.moonlightWebUrl,
+          kind: moonlightKindForApi,
+          env: process.env,
+          lanIp: resolveLanIpHint(),
+          cachedHostId: streaming.moonlightDesktopHostId,
+          cachedAppId: streaming.moonlightDesktopAppId,
+        });
+        moonlightWebUrl = moonlightStream.url;
+      } catch (error) {
+        console.warn(
+          `Could not resolve Moonlight Desktop stream URL: ${error.message || error}`,
+        );
+      }
+
       const launched = await launchGame(getAllGames(), metadataPath, gameId, executableName);
       rememberStreamingLaunch({
         pid: launched.pid,
@@ -137,8 +162,6 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const sunshineReachable = await probeSunshineReachable(streaming);
 
       try {
-        const moonlightInstallDir = resolveMoonlightWebInstallDir(metadataPath);
-        const moonlightKind = readMoonlightWebManifest(moonlightInstallDir)?.kind || null;
         if (moonlightKind === "docker" || moonlightKind == null) {
           await refreshMoonlightTurnIceServers({
             installDir: moonlightInstallDir,
@@ -149,33 +172,23 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         console.warn(`Could not refresh Cloudflare TURN ICE servers: ${error.message || error}`);
       }
 
-      let moonlightWebUrl = streaming.moonlightWebUrl;
-      let moonlightStream = null;
-      try {
-        let cookie = "";
+      if (!moonlightStream) {
         try {
-          const auth = await ensureMoonlightWebAdminCredentials(streaming.moonlightWebUrl);
-          cookie = auth.cookie || "";
-        } catch {
-          // default_user_id may allow unauthenticated API access
-        }
-        const hosts = await listMoonlightHosts(streaming.moonlightWebUrl, cookie);
-        const host =
-          hosts.find((item) => hostLooksPaired(item)) ||
-          hosts[0] ||
-          null;
-        if (host?.host_id != null) {
-          moonlightStream = await resolveMoonlightDesktopStreamUrl({
+          moonlightStream = await ensureMoonlightDesktopStreamReady({
             baseUrl: streaming.moonlightWebUrl,
-            cookie,
-            hostId: host.host_id,
+            kind: moonlightKindForApi,
+            env: process.env,
+            lanIp: resolveLanIpHint(),
+            cachedHostId: streaming.moonlightDesktopHostId,
+            cachedAppId: streaming.moonlightDesktopAppId,
+            maxAttempts: 2,
           });
           moonlightWebUrl = moonlightStream.url;
+        } catch (error) {
+          console.warn(
+            `Could not resolve Moonlight Desktop stream URL after launch: ${error.message || error}`,
+          );
         }
-      } catch (error) {
-        console.warn(
-          `Could not resolve Moonlight Desktop stream URL: ${error.message || error}`,
-        );
       }
 
       const publicApiBase = resolvePublicApiBaseForStop(req, moonlightWebUrl);
@@ -192,6 +205,13 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         console.log(`[streaming/launch] mhgStop attached via ${publicApiBase}`);
       } else {
         console.warn("[streaming/launch] could not resolve public API base for mhgStop");
+      }
+      if (moonlightWebUrl && !/\/stream(?:\.mhg\d+)?\.html(\?|$)/i.test(moonlightWebUrl)) {
+        console.warn(
+          `[streaming/launch] moonlightWebUrl is not a direct Desktop stream link: ${moonlightWebUrl}`,
+        );
+      } else if (moonlightWebUrl) {
+        console.log(`[streaming/launch] opening Moonlight Desktop stream`);
       }
 
       res.json({
