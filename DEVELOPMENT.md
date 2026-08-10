@@ -315,6 +315,8 @@ Build behavior (`scripts/build-app.js` Step 6):
 
 Keep at least `AppIcon.icns` (ideally both files) committed so release builds stay reproducible without ImageMagick.
 
+**Dock / Finder PATH:** The Swift (and bash fallback) app wrapper prepends `/opt/homebrew/bin`, `/usr/local/bin`, and `/Applications/Docker.app/Contents/Resources/bin` to `PATH` before launching the server. GUI launches otherwise miss the Docker/Homebrew CLI that Terminal sessions inherit from the shell.
+
 **Windows releases (unsigned binaries):** End users may see **SmartScreen** (e.g. *Consenti sull'app* / Run anyway) or **Defender** prompts on first run. This is expected for unsigned `.exe` files; **`scripts/README-WINDOWS.txt`** explains **Allow on device** / **Run anyway** so users can proceed safely when installing from official releases.
 
 **Windows tray script (`windows-tray-launcher.ps1`):** Saved as **UTF-8 with BOM** so **Windows PowerShell 5.1** parses strings correctly. Prefer **ASCII** in quoted strings (e.g. `-` not em dash `—`) to avoid parser errors if the BOM is ever stripped.

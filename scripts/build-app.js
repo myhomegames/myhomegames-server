@@ -175,12 +175,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = []
         
-        // Set up environment - preserve current environment and add PATH
+        // GUI launches (Dock/Finder) get a minimal PATH — include Homebrew + Docker CLI
+        // so docker / colima work the same as when started from Terminal.
         var env = ProcessInfo.processInfo.environment
-        if let currentPath = env["PATH"] {
-            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\\(currentPath)"
+        let pathPrefix = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/Applications/Docker.app/Contents/Resources/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ].joined(separator: ":")
+        if let currentPath = env["PATH"], !currentPath.isEmpty {
+            env["PATH"] = "\\(pathPrefix):\\(currentPath)"
         } else {
-            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            env["PATH"] = pathPrefix
         }
         env["MHG_READY_FLAG"] = readyFlagPath
         process.environment = env
@@ -418,6 +428,7 @@ try {
   const dollar = '$';
   const bashWrapperScript = `#!/bin/bash
 # Wrapper script for MyHomeGames server
+export PATH="/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin:${dollar}{PATH}"
 SCRIPT_DIR="${dollar}( cd "${dollar}( dirname "${dollar}{BASH_SOURCE[0]}" )" && pwd )"
 EXECUTABLE="${dollar}{SCRIPT_DIR}/${APP_NAME}_original"
 trap 'if [ ! -z "${dollar}PID" ]; then kill -TERM ${dollar}PID 2>/dev/null; wait ${dollar}PID 2>/dev/null; fi; exit 0' SIGTERM SIGINT
