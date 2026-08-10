@@ -291,11 +291,29 @@ npm run publish:repos
 
 The full build (`npm run build`) produces packages for multiple platforms. Requirements:
 
-- **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper). The script builds both x64 and arm64 `.pkg` installers.
+- **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper, and for `sips` / `iconutil` when regenerating the app icon). The script builds both x64 and arm64 `.pkg` installers.
 - **Linux (.tar.gz):** No extra tools; Node and npm only.
 - **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
 - **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
 - **Windows:** Node and npm; **`npm run build:win-unified`** and the full **`npm run build`** need **Go 1.21+** on `PATH`. The Windows release artifact is **`MyHomeGames-<ver>-win-x64.zip`**, a zip containing **`MyHomeGames-<ver>-win-x64.exe`**: a single executable that **embeds** the `pkg` server binary, tray PowerShell script, `.env`, `server-info.json`, optional `MyHomeGames-Tray.png`, and `README-WINDOWS.txt`. On first run it extracts to `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\` and starts the tray. **`npm run build:win-unified`** runs **`pkg`** if the Windows server exe is missing from `build/`. Full **`npm run build`** produces the `.exe` and `.zip` after the macOS icon step so `MyHomeGames-Tray.png` can be included in the embedded payload when the icon is generated.
+
+#### macOS app icon (Dock / Finder)
+
+Packaging assets live under **`scripts/assets/`** (next to `build-app.js`; they are **not** runtime server code):
+
+| File | Role |
+|------|------|
+| `AppIcon.icns` | Preferred. Copied into `MyHomeGames.app/Contents/Resources/` for Dock and Finder. |
+| `app-icon-1024.png` | Source PNG for regenerating `.icns` and for the Windows tray `MyHomeGames-Tray.png`. |
+
+Build behavior (`scripts/build-app.js` Step 6):
+
+1. If `scripts/assets/AppIcon.icns` exists → copy it into the `.app` bundle (no ImageMagick needed).
+2. Else if `app-icon-1024.png` exists → build a valid Apple iconset with `sips`, then `iconutil` → `AppIcon.icns` in the bundle only (does **not** rewrite files under `scripts/assets/`).
+3. Else → generate a yellow “MY” 1024×1024 PNG with **ImageMagick** (`magick` / `convert`, including Homebrew paths), then same as step 2. Install with `brew install imagemagick` only for this fallback.
+4. If none of the above succeed → Step 6 fails (`process.exitCode = 1`); the `.app` would otherwise ship without a Dock icon while `Info.plist` still references `AppIcon`.
+
+Keep at least `AppIcon.icns` (ideally both files) committed so release builds stay reproducible without ImageMagick.
 
 **Windows releases (unsigned binaries):** End users may see **SmartScreen** (e.g. *Consenti sull'app* / Run anyway) or **Defender** prompts on first run. This is expected for unsigned `.exe` files; **`scripts/README-WINDOWS.txt`** explains **Allow on device** / **Run anyway** so users can proceed safely when installing from official releases.
 

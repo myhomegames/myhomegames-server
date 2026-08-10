@@ -495,177 +495,109 @@ fs.writeFileSync(path.join(RESOURCES_PATH, '.env'), envContent);
 fs.writeFileSync(path.join(RESOURCES_PATH, SERVER_INFO_FILENAME), serverInfoJson);
 console.log('✅ .env file created with default configuration');
 
-// Step 6: Create icon from favicon design
+// Step 6: App icon (Dock / Finder)
 console.log('Step 6: Creating app icon...');
-try {
-  // Create icon.iconset directory structure
-  const iconSetPath = path.join(BUILD_DIR, 'icon.iconset');
+const ASSETS_DIR = path.join(__dirname, 'assets');
+const BUNDLED_ICNS = path.join(ASSETS_DIR, 'AppIcon.icns');
+const BUNDLED_PNG = path.join(ASSETS_DIR, 'app-icon-1024.png');
+const RETINA_SUFFIX = '@' + '2x.png';
+
+function findMagickBin() {
+  const candidates = [
+    process.env.MAGICK_BIN,
+    '/opt/homebrew/bin/magick',
+    '/usr/local/bin/magick',
+    '/opt/homebrew/bin/convert',
+    '/usr/local/bin/convert',
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  try {
+    const which = execSync('which magick || which convert', { encoding: 'utf8' }).trim().split('\n')[0];
+    if (which) return which;
+  } catch (_) {}
+  return null;
+}
+
+function writeIconsetFromPng(basePng, iconSetPath) {
+  // Apple iconset only: icon_NxN.png (N px) and icon_NxN + RETINA_SUFFIX (2N px).
+  // Do not include bare icon_64x64.png or icon_1024x1024.png (iconutil rejects them).
+  const entries = [
+    [16, 16], [16, 32], [32, 32], [32, 64],
+    [128, 128], [128, 256], [256, 256], [256, 512],
+    [512, 512], [512, 1024],
+  ];
   if (fs.existsSync(iconSetPath)) {
     fs.rmSync(iconSetPath, { recursive: true, force: true });
   }
   fs.mkdirSync(iconSetPath, { recursive: true });
-  
+  for (const [logical, px] of entries) {
+    const name = px === logical
+      ? `icon_${logical}x${logical}.png`
+      : `icon_${logical}x${logical}` + RETINA_SUFFIX;
+    const dest = path.join(iconSetPath, name);
+    const tmp = path.join(BUILD_DIR, `_icon_resize_${px}.png`);
+    execSync(`sips -z ${px} ${px} "${basePng}" --out "${tmp}"`, { stdio: 'pipe' });
+    fs.copyFileSync(tmp, dest);
+    fs.unlinkSync(tmp);
+  }
+}
+
+try {
+  const iconSetPath = path.join(BUILD_DIR, 'icon.iconset');
+  const icnsPath = path.join(RESOURCES_PATH, 'AppIcon.icns');
   let iconCreated = false;
-  const baseIconPath = path.join(BUILD_DIR, 'icon_base.png');
-  
-  // Try ImageMagick first (if available)
-  try {
-    execSync(`which convert`, { stdio: 'ignore' });
-    
-    const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" fill="#FFD700" rx="128"/>
-  <text x="512" y="512" font-family="Arial, sans-serif" font-size="600" font-weight="bold" fill="black" text-anchor="middle" dominant-baseline="middle">MY</text>
-</svg>`;
-    const svgPath = path.join(BUILD_DIR, 'icon.svg');
-    fs.writeFileSync(svgPath, svgIcon);
-    
-    const sizes = [16, 32, 64, 128, 256, 512, 1024];
-    for (const size of sizes) {
-      const pngPath = path.join(iconSetPath, `icon_${size}x${size}.png`);
-      execSync(`convert -background none -size ${size}x${size} "${svgPath}" "${pngPath}"`, { stdio: 'ignore' });
-      
-      if (size <= 512) {
-        const size2x = size * 2;
-        const pngPath2x = path.join(iconSetPath, `icon_${size}x${size}@2x.png`);
-        execSync(`convert -background none -size ${size2x}x${size2x} "${svgPath}" "${pngPath2x}"`, { stdio: 'ignore' });
-      }
-    }
-    
-    if (fs.existsSync(svgPath)) {
-      fs.unlinkSync(svgPath);
-    }
+  let basePng = fs.existsSync(BUNDLED_PNG) ? BUNDLED_PNG : null;
+
+  if (fs.existsSync(BUNDLED_ICNS)) {
+    fs.copyFileSync(BUNDLED_ICNS, icnsPath);
+    console.log('✅ AppIcon.icns copied from scripts/assets');
     iconCreated = true;
-  } catch (e) {
-    // ImageMagick not available, try Python (built-in on macOS)
-    try {
-      // Create a base PNG using Python PIL/Pillow
-      const pythonScript = `
-from PIL import Image, ImageDraw, ImageFont
-import sys
-
-size = 1024
-img = Image.new('RGB', (size, size), color='#FFD700')
-draw = ImageDraw.Draw(img)
-
-# Try to use a system font
-try:
-    font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', 600)
-except:
-    try:
-        font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial Bold.ttf', 600)
-    except:
-        font = ImageFont.load_default()
-
-# Draw "MY" text centered
-text = "MY"
-bbox = draw.textbbox((0, 0), text, font=font)
-text_width = bbox[2] - bbox[0]
-text_height = bbox[3] - bbox[1]
-position = ((size - text_width) // 2, (size - text_height) // 2 - bbox[1])
-draw.text(position, text, fill='black', font=font)
-
-img.save(sys.argv[1], 'PNG')
-`;
-      const pythonScriptPath = path.join(BUILD_DIR, 'create_icon.py');
-      fs.writeFileSync(pythonScriptPath, pythonScript);
-      
-      execSync(`python3 "${pythonScriptPath}" "${baseIconPath}"`, { stdio: 'ignore' });
-      
-      if (fs.existsSync(pythonScriptPath)) {
-        fs.unlinkSync(pythonScriptPath);
-      }
-      
-      if (fs.existsSync(baseIconPath)) {
-        // Use sips (built-in macOS) to resize to all required sizes
-        const sizes = [16, 32, 64, 128, 256, 512, 1024];
-        for (const size of sizes) {
-          const pngPath = path.join(iconSetPath, `icon_${size}x${size}.png`);
-          execSync(`sips -z ${size} ${size} "${baseIconPath}" --out "${pngPath}"`, { stdio: 'ignore' });
-          
-          if (size <= 512) {
-            const size2x = size * 2;
-            const pngPath2x = path.join(iconSetPath, `icon_${size}x${size}@2x.png`);
-            execSync(`sips -z ${size2x} ${size2x} "${baseIconPath}" --out "${pngPath2x}"`, { stdio: 'ignore' });
-          }
-        }
-        
-        fs.unlinkSync(baseIconPath);
-        iconCreated = true;
-      }
-    } catch (pyError) {
-      // Python/PIL not available, create minimal icon using sips with a solid color
-      console.log('⚠️  ImageMagick and Python PIL not found. Creating minimal icon...');
-      // Create a simple colored square using sips (it can create solid color images)
-      try {
-        // Create a 1x1 PNG with yellow color, then resize it
-        const onePixelScript = `
-from PIL import Image
-import sys
-img = Image.new('RGB', (1, 1), color='#FFD700')
-img.save(sys.argv[1], 'PNG')
-`;
-        const onePixelScriptPath = path.join(BUILD_DIR, 'create_pixel.py');
-        fs.writeFileSync(onePixelScriptPath, onePixelScript);
-        const onePixelPath = path.join(BUILD_DIR, 'one_pixel.png');
-        execSync(`python3 "${onePixelScriptPath}" "${onePixelPath}"`, { stdio: 'ignore' });
-        fs.unlinkSync(onePixelScriptPath);
-        
-        if (fs.existsSync(onePixelPath)) {
-          // Resize to 1024x1024
-          execSync(`sips -z 1024 1024 "${onePixelPath}" --out "${baseIconPath}"`, { stdio: 'ignore' });
-          fs.unlinkSync(onePixelPath);
-          
-          // Create all sizes
-          const sizes = [16, 32, 64, 128, 256, 512, 1024];
-          for (const size of sizes) {
-            const pngPath = path.join(iconSetPath, `icon_${size}x${size}.png`);
-            execSync(`sips -z ${size} ${size} "${baseIconPath}" --out "${pngPath}"`, { stdio: 'ignore' });
-            
-            if (size <= 512) {
-              const size2x = size * 2;
-              const pngPath2x = path.join(iconSetPath, `icon_${size}x${size}@2x.png`);
-              execSync(`sips -z ${size2x} ${size2x} "${baseIconPath}" --out "${pngPath2x}"`, { stdio: 'ignore' });
-            }
-          }
-          
-          if (fs.existsSync(baseIconPath)) {
-            fs.unlinkSync(baseIconPath);
-          }
-          iconCreated = true;
-        }
-      } catch (e) {
-        console.log('⚠️  Could not create icon. App will work but may not display an icon.');
-      }
-    }
-  }
-  
-  // PNG for Windows tray launcher — same pixels as macOS AppIcon (from iconset)
-  if (iconCreated) {
-    const trayDest = path.join(BUILD_DIR, 'MyHomeGames-Tray.png');
-    const traySrc =
-      ['icon_32x32.png', 'icon_64x64.png', 'icon_16x16.png']
-        .map((name) => path.join(iconSetPath, name))
-        .find((p) => fs.existsSync(p));
-    if (traySrc) {
-      fs.copyFileSync(traySrc, trayDest);
-      console.log('✅ Windows tray icon: MyHomeGames-Tray.png (same asset as macOS AppIcon)');
-    }
   }
 
-  // Convert iconset to .icns if icon was created
-  if (iconCreated) {
-    const icnsPath = path.join(RESOURCES_PATH, 'AppIcon.icns');
+  if (!iconCreated) {
+    if (!basePng) {
+      const magick = findMagickBin();
+      if (!magick) {
+        throw new Error('No bundled AppIcon.icns/app-icon-1024.png and ImageMagick not found');
+      }
+      basePng = path.join(BUILD_DIR, 'app-icon-1024.png');
+      const font = '/System/Library/Fonts/Supplemental/Arial Bold.ttf';
+      const fontArg = fs.existsSync(font) ? `-font "${font}"` : '';
+      execSync(
+        `"${magick}" -size 1024x1024 xc:'#FFD700' ${fontArg} -gravity center ` +
+          `-pointsize 520 -fill black -annotate 0 'MY' "${basePng}"`,
+        { stdio: 'pipe' }
+      );
+      console.log('✅ Generated app-icon-1024.png via ImageMagick');
+    }
+
+    writeIconsetFromPng(basePng, iconSetPath);
     execSync(`iconutil -c icns "${iconSetPath}" -o "${icnsPath}"`, { stdio: 'inherit' });
-    console.log('✅ Icon created successfully');
+    iconCreated = true;
+    console.log('✅ AppIcon.icns created via iconutil');
   }
-  
-  // Clean up iconset
+
+  // Windows tray PNG
+  const trayDest = path.join(BUILD_DIR, 'MyHomeGames-Tray.png');
+  const traySource = basePng || (fs.existsSync(BUNDLED_PNG) ? BUNDLED_PNG : null);
+  if (traySource) {
+    execSync(`sips -z 32 32 "${traySource}" --out "${trayDest}"`, { stdio: 'pipe' });
+    console.log('✅ Windows tray icon: MyHomeGames-Tray.png');
+  }
+
+  if (!fs.existsSync(icnsPath)) {
+    throw new Error('AppIcon.icns missing after Step 6');
+  }
+
   if (fs.existsSync(iconSetPath)) {
     fs.rmSync(iconSetPath, { recursive: true, force: true });
   }
 } catch (error) {
-  console.log('⚠️  Could not create icon:', error.message);
-  console.log('   The app will work but may not display an icon.');
+  console.error('❌ Could not create app icon:', error.message);
+  console.error('   Add scripts/assets/AppIcon.icns (or app-icon-1024.png) or install ImageMagick.');
+  process.exitCode = 1;
 }
 
 // Step 7: Create .pkg installers (mac-x64 and mac-arm64)
