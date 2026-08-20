@@ -275,7 +275,7 @@ Example (add to `.env.local`, not committed):
 export CLOUDSMITH_API_KEY=cs_api_xxxxxxxx
 export CLOUDSMITH_OWNER=myhomegames
 export CLOUDSMITH_REPO=myhomegames-server
-export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
 ```
 
 See [docs/install-cloudsmith.md](docs/install-cloudsmith.md) for Cloudsmith setup.

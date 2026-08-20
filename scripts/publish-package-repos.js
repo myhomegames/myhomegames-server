@@ -13,7 +13,7 @@
  *   CLOUDSMITH_RPM_VERSION    default: 9
  *
  * Env (Homebrew tap):
- *   HOMEBREW_TAP_REPO         e.g. git@github.com:myhomegames/myhomegames-homebrewtap.git
+ *   HOMEBREW_TAP_REPO         e.g. git@github.com:myhomegames/homebrew-tap.git
  *   GITHUB_RELEASE_BASE       default: https://github.com/myhomegames/myhomegames-server/releases/download
  *
  * Loads `.env` and `.env.local` (if present) from the project root.

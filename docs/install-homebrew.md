@@ -7,10 +7,11 @@ MyHomeGames Server for macOS is distributed as a **Cask** that downloads the off
 ### 1. Add the tap
 
 ```bash
-brew tap myhomegames/myhomegames-homebrewtap
+brew tap myhomegames/tap
+brew trust myhomegames/tap
 ```
 
-Tap repository: [github.com/myhomegames/myhomegames-homebrewtap](https://github.com/myhomegames/myhomegames-homebrewtap)
+Tap repository: [github.com/myhomegames/homebrew-tap](https://github.com/myhomegames/homebrew-tap)
 
 ### 2. Install
 
@@ -52,10 +53,10 @@ On each `npm run release`:
 
 ### Tap repository
 
-Separate repo, e.g. `myhomegames/myhomegames-homebrewtap`:
+Separate repo: `myhomegames/homebrew-tap` (Homebrew tap name: `myhomegames/tap`):
 
 ```
-myhomegames-homebrewtap/
+homebrew-tap/
 └── Casks/
     └── myhomegames-server.rb
 ```
@@ -63,7 +64,7 @@ myhomegames-homebrewtap/
 ### Environment variables
 
 ```bash
-export HOMEBREW_TAP_REPO=git@github.com:myhomegames/myhomegames-homebrewtap.git
+export HOMEBREW_TAP_REPO=git@github.com:myhomegames/homebrew-tap.git
 export GITHUB_RELEASE_BASE=https://github.com/myhomegames/myhomegames-server/releases/download
 ```
 
