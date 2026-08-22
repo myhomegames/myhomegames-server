@@ -133,7 +133,7 @@ const igdbRoutes = require("./routes/igdb");
 const { registerTunnelRoutes } = require("./routes/tunnel");
 const { registerStreamingRoutes } = require("./routes/streaming");
 const { launchGame } = require("./utils/gameLauncher");
-const { validateStreamingSettingsPatch } = require("./utils/streaming");
+const { validateStreamingSettingsPatch, syncMoonlightWebUrlFromApiBase } = require("./utils/streaming");
 const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
 const { isCloudflareTunnelEnabled } = require("./utils/cloudflareTunnel");
 const { setTwitchCredentialsMetadataPath } = require("./utils/twitchAppCredentials");
@@ -1276,6 +1276,10 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   validateEnvironment();
+
+  if (!isCloudflareTunnelEnabled()) {
+    syncMoonlightWebUrlFromApiBase({ readSettings, writeSettings });
+  }
 
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
   

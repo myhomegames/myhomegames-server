@@ -14,6 +14,8 @@ const {
   probeMoonlightWebReachable,
   readStreamingSettings,
   defaultManagedMoonlightWebUrl,
+  syncMoonlightWebUrlFromApiBase,
+  shouldSyncMoonlightWebUrlFromApiBase,
 } = require("./streaming");
 const { ensureMoonlightWebAdminCredentials, resolveMoonlightWebApiCookie } = require("./moonlightWebCredentials");
 const { ensureMoonlightWebSunshinePairing } = require("./moonlightWebPairing");
@@ -215,8 +217,19 @@ function persistManagedStreamingSettings({
   url,
   forceUrl = false,
   hostId = null,
+  env = process.env,
 }) {
   if (typeof readSettings !== "function" || typeof writeSettings !== "function" || !url) {
+    return;
+  }
+  if (shouldSyncMoonlightWebUrlFromApiBase(env)) {
+    syncMoonlightWebUrlFromApiBase({
+      readSettings,
+      writeSettings,
+      apiBase: env.API_BASE,
+      env,
+      hostId,
+    });
     return;
   }
   try {
@@ -362,6 +375,7 @@ async function ensureMoonlightWebRunning({
     return { started: false, reason: "disabled" };
   }
 
+  syncMoonlightWebUrlFromApiBase({ readSettings, writeSettings, env });
   const settings = typeof readSettings === "function" ? readSettings() : {};
   const streaming = readStreamingSettings(settings);
   const port = resolveMoonlightWebPort(env);
