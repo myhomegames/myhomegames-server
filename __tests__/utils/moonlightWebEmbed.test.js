@@ -5,6 +5,7 @@ jest.mock("../../utils/moonlightWebCredentials", () => ({
 const { requestMoonlightWebJson } = require("../../utils/moonlightWebCredentials");
 const {
   pickDesktopApp,
+  pickMoonlightApp,
   attachMoonlightStopHook,
   buildMoonlightDesktopStreamUrl,
   ensureMoonlightEnterFullscreenDefault,
@@ -34,6 +35,21 @@ describe("moonlightWebEmbed", () => {
       title: "Other",
     });
     expect(pickDesktopApp([])).toBeNull();
+  });
+
+  it("pickMoonlightApp ignores Desktop and prefers MHG entries", () => {
+    expect(
+      pickMoonlightApp(
+        [
+          { app_id: 0, title: "Desktop" },
+          { app_id: 2, title: "MHG: Hollow Knight" },
+        ],
+        { appTitle: "MHG: Hollow Knight" },
+      ),
+    ).toEqual({ app_id: 2, title: "MHG: Hollow Knight" });
+    expect(
+      pickMoonlightApp([{ app_id: 0, title: "Desktop" }], { appTitle: "MHG: Game" }),
+    ).toBeNull();
   });
 
   it("detects TV profile from mhgProfile or Tizen UA", () => {

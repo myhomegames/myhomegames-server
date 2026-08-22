@@ -5,66 +5,74 @@ jest.mock("../../utils/moonlightWebPairing", () => ({
 }));
 
 jest.mock("../../utils/moonlightWebEmbed", () => ({
-  resolveMoonlightDesktopStreamUrl: jest.fn(),
-  buildMoonlightDesktopStreamUrl: jest.fn(
+  resolveMoonlightAppStreamUrl: jest.fn(),
+  buildMoonlightAppStreamUrl: jest.fn(
     (baseUrl, hostId, appId) => `${baseUrl}/stream.html?hostId=${hostId}&appId=${appId}`,
   ),
   listMoonlightApps: jest.fn(),
-  pickDesktopApp: jest.fn(),
+  pickMoonlightApp: jest.fn(),
 }));
 
 const { listMoonlightHosts } = require("../../utils/moonlightWebPairing");
 const {
-  resolveMoonlightDesktopStreamUrl,
-  buildMoonlightDesktopStreamUrl,
+  resolveMoonlightAppStreamUrl,
+  buildMoonlightAppStreamUrl,
 } = require("../../utils/moonlightWebEmbed");
-const { ensureMoonlightDesktopStreamReady } = require("../../utils/moonlightWebLaunch");
+const { ensureMoonlightAppStreamReady } = require("../../utils/moonlightWebLaunch");
 
 describe("moonlightWebLaunch", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("resolves Desktop stream from paired host", async () => {
+  it("resolves application stream from paired host", async () => {
     listMoonlightHosts.mockResolvedValue([
       { host_id: 9, paired: "Paired", name: "Home" },
     ]);
-    resolveMoonlightDesktopStreamUrl.mockResolvedValue({
-      url: "http://127.0.0.1:8080/stream.html?hostId=9&appId=1",
+    resolveMoonlightAppStreamUrl.mockResolvedValue({
+      url: "http://127.0.0.1:8080/stream.html?hostId=9&appId=3",
       hostId: 9,
-      appId: 1,
-      appTitle: "Desktop",
+      appId: 3,
+      appTitle: "MHG: Game",
     });
 
-    const result = await ensureMoonlightDesktopStreamReady({
+    const result = await ensureMoonlightAppStreamReady({
       baseUrl: "http://127.0.0.1:8080",
       kind: "docker",
       env: {},
+      appTitle: "MHG: Game",
     });
 
     expect(result.url).toContain("/stream.html");
     expect(result.hostId).toBe(9);
-    expect(result.appId).toBe(1);
+    expect(result.appId).toBe(3);
   });
 
   it("falls back to cached host/app ids when live lookup fails", async () => {
     listMoonlightHosts.mockRejectedValue(new Error("busy"));
-    resolveMoonlightDesktopStreamUrl.mockRejectedValue(new Error("busy"));
+    resolveMoonlightAppStreamUrl.mockRejectedValue(new Error("busy"));
 
-    const result = await ensureMoonlightDesktopStreamReady({
+    const { listMoonlightApps, pickMoonlightApp } = require("../../utils/moonlightWebEmbed");
+    listMoonlightApps.mockResolvedValue([
+      { app_id: 3, title: "MHG: Cached" },
+    ]);
+    pickMoonlightApp.mockReturnValue({ app_id: 3, title: "MHG: Cached" });
+
+    const result = await ensureMoonlightAppStreamReady({
       baseUrl: "http://127.0.0.1:8080",
       kind: "docker",
       env: {},
+      appTitle: "MHG: Cached",
       cachedHostId: 9,
-      cachedAppId: 1,
+      appId: 3,
       maxAttempts: 1,
     });
 
-    expect(buildMoonlightDesktopStreamUrl).toHaveBeenCalledWith(
+    expect(buildMoonlightAppStreamUrl).toHaveBeenCalledWith(
       "http://127.0.0.1:8080",
       9,
-      1,
+      3,
     );
-    expect(result.url).toBe("http://127.0.0.1:8080/stream.html?hostId=9&appId=1");
+    expect(result.url).toBe("http://127.0.0.1:8080/stream.html?hostId=9&appId=3");
   });
 });
