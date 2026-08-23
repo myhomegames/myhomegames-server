@@ -8,6 +8,21 @@ const {
   resolveKeyword,
 } = require("../utils/metadataLocale");
 
+/** Stable section id for the fixed “Continue playing” rail (not a keyword hash). */
+const CONTINUE_PLAYING_SECTION_ID = "continue-playing";
+const CONTINUE_PLAYING_LIMIT = 20;
+
+const CONTINUE_PLAYING_TITLES = {
+  en: "Continue playing",
+  it: "Continua a giocare",
+  de: "Weiterspielen",
+  es: "Seguir jugando",
+  fr: "Continuer à jouer",
+  ja: "プレイを続ける",
+  pt: "Continuar a jogar",
+  zh: "继续游戏",
+};
+
 /** Stable section id for the fixed “Recently added” rail (not a keyword hash). */
 const RECENTLY_ADDED_SECTION_ID = "recently-added";
 const RECENTLY_ADDED_LIMIT = 20;
@@ -406,6 +421,10 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
         g.dateInstalled != null && Number.isFinite(Number(g.dateInstalled))
           ? Number(g.dateInstalled)
           : null,
+      datePlayed:
+        g.datePlayed != null && Number.isFinite(Number(g.datePlayed))
+          ? Number(g.datePlayed)
+          : null,
     };
     const background = getBackgroundUrl(g, metadataPath);
     if (background) {
@@ -468,6 +487,33 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
     return Math.max(resolveGameDateAdded(game), resolveGameDateInstalled(game));
   }
 
+  function resolveGameDatePlayed(game) {
+    if (game.datePlayed != null && Number.isFinite(Number(game.datePlayed))) {
+      return Number(game.datePlayed);
+    }
+    return 0;
+  }
+
+  function buildContinuePlayingSection(locale) {
+    const ranked = Object.values(allGames || {})
+      .filter((g) => g && g.id != null)
+      .map((g) => ({ game: g, datePlayed: resolveGameDatePlayed(g) }))
+      .filter((entry) => entry.datePlayed > 0)
+      .sort((a, b) => b.datePlayed - a.datePlayed)
+      .slice(0, CONTINUE_PLAYING_LIMIT);
+
+    if (ranked.length === 0) return null;
+
+    const title =
+      CONTINUE_PLAYING_TITLES[locale] || CONTINUE_PLAYING_TITLES.en || "Continue playing";
+
+    return {
+      id: CONTINUE_PLAYING_SECTION_ID,
+      title,
+      games: ranked.map(({ game }) => mapRecommendedGame(game, locale)),
+    };
+  }
+
   function buildRecentlyAddedSection(locale) {
     const ranked = Object.values(allGames || {})
       .filter((g) => g && g.id != null)
@@ -524,9 +570,11 @@ function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
       };
     });
 
+    const continuePlaying = buildContinuePlayingSection(locale);
     const recentlyAdded = buildRecentlyAddedSection(locale);
-    const sectionsWithGames = recentlyAdded
-      ? [recentlyAdded, ...keywordSections]
+    const fixedSections = [continuePlaying, recentlyAdded].filter(Boolean);
+    const sectionsWithGames = fixedSections.length > 0
+      ? [...fixedSections, ...keywordSections]
       : keywordSections;
 
     res.json({
@@ -541,5 +589,6 @@ module.exports = {
   removeGameFromRecommended,
   ensureRecommendedSectionsComplete,
   RECENTLY_ADDED_SECTION_ID,
+  CONTINUE_PLAYING_SECTION_ID,
 };
 

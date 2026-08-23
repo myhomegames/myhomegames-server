@@ -1,4 +1,5 @@
 const { launchGame, resolveGameLaunch } = require("../utils/gameLauncher");
+const { recordGamePlayed } = require("./library");
 const {
   readStreamingSettings,
   probeSunshineReachable,
@@ -244,6 +245,8 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         );
       }
 
+      const datePlayed = recordGamePlayed(metadataPath, getAllGames(), gameId);
+
       res.json({
         status: "stream-ready",
         executableName: resolved.executableName,
@@ -252,6 +255,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         moonlightWebUrl,
         moonlightStream,
         sunshineReachable,
+        ...(datePlayed != null ? { datePlayed } : {}),
       });
     } catch (err) {
       if (err?.payload && err?.status) {

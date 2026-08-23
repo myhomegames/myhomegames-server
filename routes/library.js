@@ -393,6 +393,10 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
       game.dateInstalled != null && Number.isFinite(Number(game.dateInstalled))
         ? Number(game.dateInstalled)
         : null,
+    datePlayed:
+      game.datePlayed != null && Number.isFinite(Number(game.datePlayed))
+        ? Number(game.datePlayed)
+        : null,
     executables: executables.length > 0 ? executables : null,
     executableFileNames: executableFileNames.length > 0 ? executableFileNames : null,
     themes: game.themes && game.themes.length ? game.themes : null,
@@ -2550,9 +2554,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   });
 }
 
+/** Persist last-play timestamp when the user launches a game. */
+function recordGamePlayed(metadataPath, allGames, gameId) {
+  const id = Number(gameId);
+  if (!Number.isFinite(id)) return null;
+  const game = allGames[id];
+  if (!game) return null;
+  const now = Date.now();
+  game.datePlayed = now;
+  saveGame(metadataPath, game);
+  return now;
+}
+
 module.exports = {
   loadLibraryGames,
   registerLibraryRoutes,
+  recordGamePlayed,
 };
 
 

@@ -123,6 +123,16 @@ describe('GET /launcher', () => {
     // Should either succeed (if executable exists), fail with 500 (spawn error), or 400 (no executable/script not found)
     // 400 can happen if game doesn't have executables field or script file doesn't exist
     expect([200, 400, 404, 500]).toContain(response.status);
+
+    if (response.status === 200) {
+      expect(response.body).toHaveProperty('datePlayed');
+      expect(typeof response.body.datePlayed).toBe('number');
+      const gameResponse = await request(app)
+        .get('/games/1')
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      expect(gameResponse.body).toHaveProperty('datePlayed', response.body.datePlayed);
+    }
   });
 
   test('should accept executableName parameter', async () => {

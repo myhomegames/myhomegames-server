@@ -727,7 +727,11 @@ app.get("/launcher", optionalLauncherToken, async (req, res) => {
 
   try {
     const result = await launchGame(allGames, METADATA_PATH, gameId, requestedExecutableName);
-    return res.json(result);
+    const datePlayed = libraryRoutes.recordGamePlayed(METADATA_PATH, allGames, gameId);
+    return res.json({
+      ...result,
+      ...(datePlayed != null ? { datePlayed } : {}),
+    });
   } catch (err) {
     if (err?.payload && err?.status) {
       return res.status(err.status).json(err.payload);
