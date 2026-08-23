@@ -8,6 +8,21 @@ const {
   resolveKeyword,
 } = require("../utils/metadataLocale");
 
+/** Stable section id for the fixed “Recently added” rail (not a keyword hash). */
+const RECENTLY_ADDED_SECTION_ID = "recently-added";
+const RECENTLY_ADDED_LIMIT = 20;
+
+const RECENTLY_ADDED_TITLES = {
+  en: "Recently added",
+  it: "Aggiunti di recente",
+  de: "Zuletzt hinzugefügt",
+  es: "Añadidos recientemente",
+  fr: "Ajoutés récemment",
+  ja: "最近追加したゲーム",
+  pt: "Adicionados recentemente",
+  zh: "最近添加",
+};
+
 /**
  * Recommended routes module
  * Handles the recommended games endpoint
@@ -371,54 +386,149 @@ function removeGameFromRecommended(metadataPath, gameId) {
 }
 
 function registerRecommendedRoutes(app, requireToken, metadataPath, allGames) {
+  function mapRecommendedGame(g, locale) {
+    const gameData = {
+      id: g.id,
+      title: g.title,
+      summary: resolveSummary(g.summary, locale),
+      cover: getCoverUrl(g, metadataPath),
+      day: g.day || null,
+      month: g.month || null,
+      year: g.year || null,
+      stars: g.stars || null,
+      genre: g.genre || null,
+      executables: g.executables || null,
+      dateAdded:
+        g.dateAdded != null && Number.isFinite(Number(g.dateAdded))
+          ? Number(g.dateAdded)
+          : null,
+      dateInstalled:
+        g.dateInstalled != null && Number.isFinite(Number(g.dateInstalled))
+          ? Number(g.dateInstalled)
+          : null,
+    };
+    const background = getBackgroundUrl(g, metadataPath);
+    if (background) {
+      gameData.background = background;
+    }
+    return gameData;
+  }
+
+  /** Prefer stored dateAdded; fall back to metadata.json mtime for older games. */
+  function resolveGameDateAdded(game) {
+    if (game.dateAdded != null && Number.isFinite(Number(game.dateAdded))) {
+      return Number(game.dateAdded);
+    }
+    try {
+      const metaPath = path.join(
+        metadataPath,
+        "content",
+        "games",
+        String(game.id),
+        "metadata.json",
+      );
+      const st = fs.statSync(metaPath);
+      const ts = Number(st.birthtimeMs) || Number(st.mtimeMs) || 0;
+      return Number.isFinite(ts) ? ts : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Prefer stored dateInstalled; fall back to newest script file mtime when executables exist. */
+  function resolveGameDateInstalled(game) {
+    if (game.dateInstalled != null && Number.isFinite(Number(game.dateInstalled))) {
+      return Number(game.dateInstalled);
+    }
+    try {
+      const scriptsDir = path.join(
+        metadataPath,
+        "content",
+        "games",
+        String(game.id),
+        "scripts",
+      );
+      if (!fs.existsSync(scriptsDir)) return 0;
+      const files = fs.readdirSync(scriptsDir).filter((f) => /\.(sh|bat)$/i.test(f));
+      if (files.length === 0) return 0;
+      let newest = 0;
+      for (const fileName of files) {
+        const st = fs.statSync(path.join(scriptsDir, fileName));
+        const ts = Number(st.mtimeMs) || 0;
+        if (ts > newest) newest = ts;
+      }
+      return newest;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Most recent library activity: added to catalog or last executable install. */
+  function resolveGameRecentActivityDate(game) {
+    return Math.max(resolveGameDateAdded(game), resolveGameDateInstalled(game));
+  }
+
+  function buildRecentlyAddedSection(locale) {
+    const ranked = Object.values(allGames || {})
+      .filter((g) => g && g.id != null)
+      .map((g) => ({ game: g, recentDate: resolveGameRecentActivityDate(g) }))
+      .filter((entry) => entry.recentDate > 0)
+      .sort((a, b) => b.recentDate - a.recentDate)
+      .slice(0, RECENTLY_ADDED_LIMIT);
+
+    if (ranked.length === 0) return null;
+
+    const title =
+      RECENTLY_ADDED_TITLES[locale] || RECENTLY_ADDED_TITLES.en || "Recently added";
+
+    return {
+      id: RECENTLY_ADDED_SECTION_ID,
+      title,
+      games: ranked.map(({ game }) => {
+        const mapped = mapRecommendedGame(game, locale);
+        const resolvedAdded = resolveGameDateAdded(game);
+        const resolvedInstalled = resolveGameDateInstalled(game);
+        if (mapped.dateAdded == null && resolvedAdded > 0) mapped.dateAdded = resolvedAdded;
+        if (mapped.dateInstalled == null && resolvedInstalled > 0) mapped.dateInstalled = resolvedInstalled;
+        return mapped;
+      }),
+    };
+  }
+
   // Endpoint: get recommended games sections
   app.get("/recommended", requireToken, (req, res) => {
     const locale = resolveRequestLocale(req, metadataPath);
     const allSections = loadRecommendedSections(metadataPath);
-    
-    // Select 9 random sections from all available sections
+
+    // Select up to 9 random keyword sections
     const selectedSections = [];
     const availableSections = [...allSections];
     const maxSections = Math.min(9, availableSections.length);
-    
+
     for (let i = 0; i < maxSections; i++) {
       const randomIndex = Math.floor(Math.random() * availableSections.length);
       selectedSections.push(availableSections[randomIndex]);
       availableSections.splice(randomIndex, 1);
     }
-    
-    const sectionsWithGames = selectedSections.map((section) => {
-      // Get full game data from allGames
+
+    const keywordSections = selectedSections.map((section) => {
       const games = section.games
         .map((id) => allGames[id])
-        .filter((game) => game != null) // Filter out any missing games
-        .map((g) => {
-          const gameData = {
-            id: g.id,
-            title: g.title,
-            summary: resolveSummary(g.summary, locale),
-            cover: getCoverUrl(g, metadataPath),
-            day: g.day || null,
-            month: g.month || null,
-            year: g.year || null,
-            stars: g.stars || null,
-            genre: g.genre || null,
-            executables: g.executables || null,
-          };
-          const background = getBackgroundUrl(g, metadataPath);
-          if (background) {
-            gameData.background = background;
-          }
-          return gameData;
-        });
-      
+        .filter((game) => game != null)
+        .map((g) => mapRecommendedGame(g, locale));
+
       return {
         id: section.title, // Return canonical keyword as id (for client compatibility)
         title: resolveKeyword(section.title, locale, metadataPath),
         games: games,
       };
     });
-    
+
+    const recentlyAdded = buildRecentlyAddedSection(locale);
+    const sectionsWithGames = recentlyAdded
+      ? [recentlyAdded, ...keywordSections]
+      : keywordSections;
+
     res.json({
       sections: sectionsWithGames,
     });
@@ -430,5 +540,6 @@ module.exports = {
   registerRecommendedRoutes,
   removeGameFromRecommended,
   ensureRecommendedSectionsComplete,
+  RECENTLY_ADDED_SECTION_ID,
 };
 

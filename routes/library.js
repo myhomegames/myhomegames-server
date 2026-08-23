@@ -385,6 +385,14 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     genre: game.genre && game.genre.length ? game.genre : null,
     criticratings: game.criticratings || null,
     userratings: game.userratings || null,
+    dateAdded:
+      game.dateAdded != null && Number.isFinite(Number(game.dateAdded))
+        ? Number(game.dateAdded)
+        : null,
+    dateInstalled:
+      game.dateInstalled != null && Number.isFinite(Number(game.dateInstalled))
+        ? Number(game.dateInstalled)
+        : null,
     executables: executables.length > 0 ? executables : null,
     executableFileNames: executableFileNames.length > 0 ? executableFileNames : null,
     themes: game.themes && game.themes.length ? game.themes : null,
@@ -2038,6 +2046,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
 
+      const isNewExecutable = !replaceFileNameRaw;
+      if (isNewExecutable) {
+        allGames[gameId].dateInstalled = Date.now();
+        saveGame(metadataPath, allGames[gameId]);
+        invalidateLibraryGamesResponseCache();
+      }
+
       res.json({
         status: "success",
         game: localizedGameResponse(req, allGames[gameId], null, null, allGames),
@@ -2272,6 +2287,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         year: year,
         month: month || null,
         day: day || null,
+        dateAdded: Date.now(),
         genre: genreIds,
         criticratings: criticRating !== undefined && criticRating !== null ? criticRating / 10 : null,
         userratings: userRating !== undefined && userRating !== null ? userRating / 10 : null,
@@ -2361,6 +2377,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         year: null,
         month: null,
         day: null,
+        dateAdded: Date.now(),
         genre: null,
         criticratings: null,
         userratings: null,

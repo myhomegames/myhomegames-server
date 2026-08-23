@@ -779,6 +779,9 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(response.body).toHaveProperty('game');
       expect(response.body.game).toHaveProperty('executables', ['script']);
       expect(response.body.game).toHaveProperty('id', gameId);
+      expect(response.body.game).toHaveProperty('dateInstalled');
+      expect(typeof response.body.game.dateInstalled).toBe('number');
+      expect(response.body.game.dateInstalled).toBeGreaterThan(0);
       
       // Verify the file was saved
       const { testMetadataPath } = require('../setup');
@@ -871,6 +874,47 @@ describe('POST /games/:gameId/upload-executable', () => {
       expect(names.some((f) => /^02-.*Play.*99/.test(f))).toBe(false);
       try {
         fs.unlinkSync(path.join(scriptsDir, '01-Play-99.sh'));
+      } catch (_) {}
+    }
+  });
+
+  test('should not update dateInstalled when replacing an existing script', async () => {
+    const libraryResponse = await request(app)
+      .get('/libraries/library/games')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    if (libraryResponse.body.games.length > 0) {
+      const gameId = libraryResponse.body.games[0].id;
+      const beforeGame = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+      const beforeInstalled = beforeGame.body.dateInstalled ?? null;
+
+      const { testMetadataPath } = require('../setup');
+      const fs = require('fs');
+      const path = require('path');
+      const scriptsDir = path.join(testMetadataPath, 'content', 'games', String(gameId), 'scripts');
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      fs.writeFileSync(path.join(scriptsDir, '01-ReplaceMe-1.sh'), Buffer.from('#!/bin/bash\necho old'));
+
+      await request(app)
+        .post(`/games/${gameId}/upload-executable`)
+        .set('X-Auth-Token', 'test-token')
+        .field('replaceFileName', '01-ReplaceMe-1.sh')
+        .attach('file', Buffer.from('#!/bin/bash\necho new'), 'replacement.sh')
+        .expect(200);
+
+      const afterGame = await request(app)
+        .get(`/games/${gameId}`)
+        .set('X-Auth-Token', 'test-token')
+        .expect(200);
+
+      expect(afterGame.body.dateInstalled ?? null).toBe(beforeInstalled);
+
+      try {
+        fs.unlinkSync(path.join(scriptsDir, '01-ReplaceMe-1.sh'));
       } catch (_) {}
     }
   });
