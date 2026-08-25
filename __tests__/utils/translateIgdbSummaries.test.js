@@ -1,9 +1,15 @@
 jest.mock("../../utils/googleTranslate", () => ({
   googleTranslateText: jest.fn(async (text, targetLang) => `[${targetLang}] ${text}`),
+  googleTranslateTexts: jest.fn(async (texts, targetLang) =>
+    texts.map((text) => `[${targetLang}] ${text}`),
+  ),
   normalizeLangCode: jest.requireActual("../../utils/googleTranslate").normalizeLangCode,
 }));
 
-const { googleTranslateText } = require("../../utils/googleTranslate");
+const {
+  googleTranslateText,
+  googleTranslateTexts,
+} = require("../../utils/googleTranslate");
 const {
   applyTranslatedSummariesToGames,
   translateIgdbSummary,
@@ -20,32 +26,27 @@ describe("translateIgdbSummaries", () => {
     const result = await applyTranslatedSummariesToGames(games, "en");
     expect(result).toEqual([{ id: 1, summary: "English summary", summaryEn: "English summary" }]);
     expect(googleTranslateText).not.toHaveBeenCalled();
+    expect(googleTranslateTexts).not.toHaveBeenCalled();
   });
 
   it("batch-translates search summaries in one call when possible", async () => {
-    googleTranslateText.mockImplementationOnce(async (text, targetLang) => {
-      const parts = String(text).split("\u001e");
-      return parts.map((part) => `[${targetLang}] ${part}`).join("\u001e");
-    });
-
     const games = [
       { id: 1, summary: "First summary" },
       { id: 2, summary: "Second summary" },
     ];
     const result = await applyTranslatedSummariesToGames(games, "it");
-    expect(googleTranslateText).toHaveBeenCalledTimes(1);
+    expect(googleTranslateTexts).toHaveBeenCalledTimes(1);
+    expect(googleTranslateTexts).toHaveBeenCalledWith(
+      ["First summary", "Second summary"],
+      "it",
+    );
     expect(result[0].summaryEn).toBe("First summary");
     expect(result[0].summary).toBe("[it] First summary");
     expect(result[1].summaryEn).toBe("Second summary");
     expect(result[1].summary).toBe("[it] Second summary");
   });
 
-  it("splits batch output when delimiter is preserved", async () => {
-    googleTranslateText.mockImplementationOnce(async (text, targetLang) => {
-      const parts = String(text).split("\u001e");
-      return parts.map((part) => `[${targetLang}] ${part}`).join("\u001e");
-    });
-
+  it("preserves newlines inside summaries during batch translate", async () => {
     const result = await applyTranslatedSummariesToGames(
       [
         { id: 1, summary: "Line one.\n\nLine two." },
@@ -63,14 +64,15 @@ describe("translateIgdbSummaries", () => {
     expect(summary).toBe("[it] Hello world");
   });
 
-  it("falls back to per-text translation when batch split fails", async () => {
+  it("falls back to per-text translation when batch fails", async () => {
+    googleTranslateTexts.mockResolvedValueOnce(null);
     googleTranslateText
-      .mockResolvedValueOnce("broken batch output")
       .mockResolvedValueOnce("[it] First")
       .mockResolvedValueOnce("[it] Second");
 
     const translated = await translateUniqueTexts(["First", "Second"], "it");
-    expect(googleTranslateText).toHaveBeenCalledTimes(3);
+    expect(googleTranslateTexts).toHaveBeenCalledTimes(1);
+    expect(googleTranslateText).toHaveBeenCalledTimes(2);
     expect(translated).toEqual(["[it] First", "[it] Second"]);
   });
 });
