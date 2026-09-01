@@ -133,7 +133,7 @@ const igdbRoutes = require("./routes/igdb");
 const { registerTunnelRoutes } = require("./routes/tunnel");
 const { registerStreamingRoutes } = require("./routes/streaming");
 const { launchGame } = require("./utils/gameLauncher");
-const { validateStreamingSettingsPatch } = require("./utils/streaming");
+const { validateStreamingSettingsPatch, syncMoonlightWebUrlFromApiBase } = require("./utils/streaming");
 const { loadStoredTunnelCredentials } = require("./utils/cloudflareTunnelStore");
 const { isCloudflareTunnelEnabled } = require("./utils/cloudflareTunnel");
 const { setTwitchCredentialsMetadataPath } = require("./utils/twitchAppCredentials");
@@ -727,7 +727,11 @@ app.get("/launcher", optionalLauncherToken, async (req, res) => {
 
   try {
     const result = await launchGame(allGames, METADATA_PATH, gameId, requestedExecutableName);
-    return res.json(result);
+    const datePlayed = libraryRoutes.recordGamePlayed(METADATA_PATH, allGames, gameId);
+    return res.json({
+      ...result,
+      ...(datePlayed != null ? { datePlayed } : {}),
+    });
   } catch (err) {
     if (err?.payload && err?.status) {
       return res.status(err.status).json(err.payload);
@@ -1276,6 +1280,10 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   validateEnvironment();
+
+  if (!isCloudflareTunnelEnabled()) {
+    syncMoonlightWebUrlFromApiBase({ readSettings, writeSettings });
+  }
 
   const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
   

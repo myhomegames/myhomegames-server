@@ -2,6 +2,8 @@
 
 const https = require("https");
 const http = require("http");
+const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
+const { moonlightWebPublicUrlFromApiBase } = require("./tunnelHostname");
 
 const DEFAULT_SUNSHINE_HOST = "127.0.0.1";
 const DEFAULT_SUNSHINE_HTTPS_PORT = 47990;
@@ -23,6 +25,69 @@ function normalizeMoonlightWebUrl(value) {
 function defaultManagedMoonlightWebUrl(port = DEFAULT_MOONLIGHT_WEB_PORT) {
   const safePort = Number(port) > 0 ? Number(port) : DEFAULT_MOONLIGHT_WEB_PORT;
   return `http://127.0.0.1:${safePort}`;
+}
+
+/**
+ * Map API_BASE to the Moonlight Web base URL for settings.json.
+ * Per-user tunnel API host → public Moonlight host; otherwise managed local Moonlight.
+ */
+function resolveMoonlightWebUrlFromApiBase(apiBase, env = process.env) {
+  const publicMoonlight = moonlightWebPublicUrlFromApiBase(String(apiBase || "").trim());
+  if (publicMoonlight) {
+    return normalizeMoonlightWebUrl(publicMoonlight);
+  }
+  const moonlightPort = Number(env.MOONLIGHT_WEB_PORT || DEFAULT_MOONLIGHT_WEB_PORT);
+  return defaultManagedMoonlightWebUrl(moonlightPort);
+}
+
+/** When Cloudflare Tunnel is off, settings.moonlightWebUrl follows API_BASE (local dev / tests). */
+function shouldSyncMoonlightWebUrlFromApiBase(env = process.env) {
+  return !isCloudflareTunnelEnabled(env);
+}
+
+/**
+ * @returns {boolean} true if settings were written
+ */
+function syncMoonlightWebUrlFromApiBase({
+  readSettings,
+  writeSettings,
+  apiBase,
+  env = process.env,
+  hostId = undefined,
+} = {}) {
+  if (!shouldSyncMoonlightWebUrlFromApiBase(env)) {
+    return false;
+  }
+  if (typeof readSettings !== "function" || typeof writeSettings !== "function") {
+    return false;
+  }
+  const resolvedApiBase = String(apiBase ?? env.API_BASE ?? "").trim();
+  const nextUrl = resolveMoonlightWebUrlFromApiBase(resolvedApiBase, env);
+  if (!nextUrl) return false;
+
+  const settings = readSettings() || {};
+  const next = {
+    ...settings,
+    moonlightWebUrl: nextUrl,
+    remoteStreamingEnabled: true,
+  };
+  if (hostId !== undefined) {
+    if (hostId != null && Number.isFinite(Number(hostId))) {
+      next.moonlightDesktopHostId = Number(hostId);
+      next.moonlightDesktopAppId = null;
+    }
+  }
+  const changed =
+    next.moonlightWebUrl !== settings.moonlightWebUrl ||
+    next.remoteStreamingEnabled !== settings.remoteStreamingEnabled ||
+    (hostId !== undefined &&
+      (next.moonlightDesktopHostId !== settings.moonlightDesktopHostId ||
+        next.moonlightDesktopAppId !== settings.moonlightDesktopAppId));
+  if (!changed) return false;
+
+  writeSettings(next);
+  console.log(`Moonlight Web URL synced from API_BASE (${nextUrl})`);
+  return true;
 }
 
 function readStreamingSettings(settings) {
@@ -139,5 +204,8 @@ module.exports = {
   normalizeMoonlightWebUrl,
   validateStreamingSettingsPatch,
   defaultManagedMoonlightWebUrl,
+  resolveMoonlightWebUrlFromApiBase,
+  shouldSyncMoonlightWebUrlFromApiBase,
+  syncMoonlightWebUrlFromApiBase,
   DEFAULT_MOONLIGHT_WEB_PORT,
 };

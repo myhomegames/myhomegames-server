@@ -5,6 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { requestMoonlightWebJson } = require("./moonlightWebCredentials");
+const { MHG_SUNSHINE_APP_PREFIX } = require("./sunshineApps");
 
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
@@ -696,7 +697,37 @@ function pickDesktopApp(apps) {
   return apps[0];
 }
 
-function buildMoonlightDesktopStreamUrl(baseUrl, hostId, appId) {
+function isDesktopMoonlightApp(app) {
+  const title = String(app?.title || "").trim().toLowerCase();
+  return title === "desktop" || Number(app?.app_id) === 0;
+}
+
+/** Pick a non-Desktop Moonlight app (MyHomeGames registers one Sunshine app per launch). */
+function pickMoonlightApp(apps, { appTitle, appId } = {}) {
+  if (!Array.isArray(apps) || apps.length === 0) return null;
+  if (appId != null && Number.isFinite(Number(appId))) {
+    const byId = apps.find(
+      (app) => Number(app.app_id) === Number(appId) && !isDesktopMoonlightApp(app),
+    );
+    if (byId) return byId;
+  }
+  if (appTitle) {
+    const want = String(appTitle).trim();
+    const byTitle = apps.find(
+      (app) => String(app.title || "").trim() === want && !isDesktopMoonlightApp(app),
+    );
+    if (byTitle) return byTitle;
+  }
+  return (
+    apps.find(
+      (app) =>
+        String(app.title || "").startsWith(MHG_SUNSHINE_APP_PREFIX) &&
+        !isDesktopMoonlightApp(app),
+    ) || null
+  );
+}
+
+function buildMoonlightAppStreamUrl(baseUrl, hostId, appId) {
   const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
   // Versioned folder busts Tizen HTML cache; pathname still ends with stream.html
   // so released MHG web accepts it (stream.mhg26.html was rejected).
@@ -729,30 +760,44 @@ function rewriteMoonlightStreamHtmlPath(streamUrl) {
 }
 
 /**
- * Build a Moonlight Web URL that opens the Sunshine Desktop stream directly.
+ * Build a Moonlight Web URL that opens a Sunshine application stream directly.
  */
-async function resolveMoonlightDesktopStreamUrl({
+async function resolveMoonlightAppStreamUrl({
   baseUrl,
   cookie,
   hostId,
+  appTitle,
+  appId,
 } = {}) {
   const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
   if (!normalized) throw new Error("Moonlight Web URL is required");
   if (hostId == null) throw new Error("Moonlight host_id is required");
 
   const apps = await listMoonlightApps(normalized, cookie, hostId);
-  const desktop = pickDesktopApp(apps);
-  if (!desktop || desktop.app_id == null) {
-    throw new Error("Moonlight Web Desktop app not found on Sunshine host");
+  const app = pickMoonlightApp(apps, { appTitle, appId });
+  if (!app || app.app_id == null) {
+    throw new Error(
+      appTitle
+        ? `Moonlight Web app not found on Sunshine host: ${appTitle}`
+        : "Moonlight Web application stream not found on Sunshine host",
+    );
   }
 
   return {
-    url: buildMoonlightDesktopStreamUrl(normalized, hostId, desktop.app_id),
+    url: buildMoonlightAppStreamUrl(normalized, hostId, app.app_id),
     hostId: Number(hostId),
-    appId: Number(desktop.app_id),
-    appTitle: desktop.title || "Desktop",
+    appId: Number(app.app_id),
+    appTitle: app.title || appTitle || "Game",
   };
 }
+
+/** @deprecated Desktop streaming was removed — use resolveMoonlightAppStreamUrl */
+async function resolveMoonlightDesktopStreamUrl() {
+  throw new Error("Desktop streaming is no longer supported; use resolveMoonlightAppStreamUrl");
+}
+
+/** Alias kept for callers/tests. */
+const buildMoonlightDesktopStreamUrl = buildMoonlightAppStreamUrl;
 
 /**
  * Attach mhgStop / mhgReturn so Moonlight Exit can stop the home game and leave Moonlight.
@@ -2778,12 +2823,16 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
 module.exports = {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
+  resolveMoonlightAppStreamUrl,
   resolveMoonlightDesktopStreamUrl,
+  buildMoonlightAppStreamUrl,
   buildMoonlightDesktopStreamUrl,
   rewriteMoonlightStreamHtmlPath,
   attachMoonlightStopHook,
   listMoonlightApps,
+  pickMoonlightApp,
   pickDesktopApp,
+  isDesktopMoonlightApp,
   listMoonlightUsers,
   readDockerMoonlightConfig,
   writeDockerMoonlightConfig,

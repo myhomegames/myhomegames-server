@@ -132,6 +132,7 @@ const DEFAULT_SKIN_WEB_MANIFEST = Object.freeze({
   fixedFocalStepSound: false,
   autoShowBackgroundOnSelection: false,
   detailBackdropLayout: false,
+  tvDetailBackdropAmbient: false,
   staticInlineTagListOnTvPhone: false,
   tvSummaryOverlay: false,
   tvStarRatingOverlay: false,
@@ -170,6 +171,11 @@ function extractWebManifest(meta) {
   out.fixedFocalStepSound = w.fixedFocalStepSound === true;
   out.autoShowBackgroundOnSelection = w.autoShowBackgroundOnSelection === true;
   out.detailBackdropLayout = w.detailBackdropLayout === true;
+  if ("tvDetailBackdropAmbient" in w) {
+    out.tvDetailBackdropAmbient = w.tvDetailBackdropAmbient === true;
+  } else if (out.detailBackdropLayout) {
+    out.tvDetailBackdropAmbient = true;
+  }
   out.staticInlineTagListOnTvPhone = w.staticInlineTagListOnTvPhone === true;
   out.tvSummaryOverlay = w.tvSummaryOverlay === true;
   out.tvStarRatingOverlay = w.tvStarRatingOverlay === true;

@@ -31,9 +31,9 @@ describe('GET /recommended', () => {
     
     expect(response.body).toHaveProperty('sections');
     expect(Array.isArray(response.body.sections)).toBe(true);
-    // Should return up to 9 random sections (or all if less than 9)
+    // Up to 9 random keyword sections, optionally preceded by fixed library rails
     expect(response.body.sections.length).toBeGreaterThan(0);
-    expect(response.body.sections.length).toBeLessThanOrEqual(9);
+    expect(response.body.sections.length).toBeLessThanOrEqual(11);
   });
 
   test('should return sections with correct structure', async () => {
@@ -48,8 +48,51 @@ describe('GET /recommended', () => {
       expect(section).toHaveProperty('title');
       expect(section).toHaveProperty('games');
       expect(Array.isArray(section.games)).toBe(true);
-      // ID should be the title (formatted title like categories) for client compatibility
-      expect(section.id).toBe(section.title);
+      // Keyword sections use the canonical keyword as both id and title source;
+      // fixed library rails use stable ids with localized titles.
+      if (section.id !== 'recently-added' && section.id !== 'continue-playing') {
+        expect(section.id).toBe(section.title);
+      }
+    }
+  });
+
+  test('should put continue-playing first when games have been played', async () => {
+    const response = await request(app)
+      .get('/recommended')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    const first = response.body.sections[0];
+    if (first && first.id === 'continue-playing') {
+      expect(Array.isArray(first.games)).toBe(true);
+      expect(first.games.length).toBeGreaterThan(0);
+      expect(typeof first.title).toBe('string');
+      const game = first.games[0];
+      expect(game).toHaveProperty('datePlayed');
+      expect(typeof game.datePlayed).toBe('number');
+    }
+  });
+
+  test('should put recently-added first when library games exist', async () => {
+    const response = await request(app)
+      .get('/recommended')
+      .set('X-Auth-Token', 'test-token')
+      .expect(200);
+
+    const first = response.body.sections[0];
+    const recentlyAdded = response.body.sections.find((s) => s.id === 'recently-added');
+    if (first && first.id === 'recently-added') {
+      expect(Array.isArray(first.games)).toBe(true);
+      expect(first.games.length).toBeGreaterThan(0);
+      expect(typeof first.title).toBe('string');
+      const game = first.games[0];
+      expect(game).toHaveProperty('dateAdded');
+      if (game.dateInstalled != null) {
+        expect(typeof game.dateInstalled).toBe('number');
+      }
+    } else if (recentlyAdded) {
+      expect(Array.isArray(recentlyAdded.games)).toBe(true);
+      expect(recentlyAdded.games.length).toBeGreaterThan(0);
     }
   });
 

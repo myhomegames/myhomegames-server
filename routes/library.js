@@ -385,6 +385,18 @@ function buildGameResponse(metadataPath, game, developersList = null, publishers
     genre: game.genre && game.genre.length ? game.genre : null,
     criticratings: game.criticratings || null,
     userratings: game.userratings || null,
+    dateAdded:
+      game.dateAdded != null && Number.isFinite(Number(game.dateAdded))
+        ? Number(game.dateAdded)
+        : null,
+    dateInstalled:
+      game.dateInstalled != null && Number.isFinite(Number(game.dateInstalled))
+        ? Number(game.dateInstalled)
+        : null,
+    datePlayed:
+      game.datePlayed != null && Number.isFinite(Number(game.datePlayed))
+        ? Number(game.datePlayed)
+        : null,
     executables: executables.length > 0 ? executables : null,
     executableFileNames: executableFileNames.length > 0 ? executableFileNames : null,
     themes: game.themes && game.themes.length ? game.themes : null,
@@ -2038,6 +2050,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
       allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
 
+      const isNewExecutable = !replaceFileNameRaw;
+      if (isNewExecutable) {
+        allGames[gameId].dateInstalled = Date.now();
+        saveGame(metadataPath, allGames[gameId]);
+        invalidateLibraryGamesResponseCache();
+      }
+
       res.json({
         status: "success",
         game: localizedGameResponse(req, allGames[gameId], null, null, allGames),
@@ -2272,6 +2291,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         year: year,
         month: month || null,
         day: day || null,
+        dateAdded: Date.now(),
         genre: genreIds,
         criticratings: criticRating !== undefined && criticRating !== null ? criticRating / 10 : null,
         userratings: userRating !== undefined && userRating !== null ? userRating / 10 : null,
@@ -2361,6 +2381,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         year: null,
         month: null,
         day: null,
+        dateAdded: Date.now(),
         genre: null,
         criticratings: null,
         userratings: null,
@@ -2533,9 +2554,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   });
 }
 
+/** Persist last-play timestamp when the user launches a game. */
+function recordGamePlayed(metadataPath, allGames, gameId) {
+  const id = Number(gameId);
+  if (!Number.isFinite(id)) return null;
+  const game = allGames[id];
+  if (!game) return null;
+  const now = Date.now();
+  game.datePlayed = now;
+  saveGame(metadataPath, game);
+  return now;
+}
+
 module.exports = {
   loadLibraryGames,
   registerLibraryRoutes,
+  recordGamePlayed,
 };
 
 

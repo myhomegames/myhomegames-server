@@ -14,10 +14,12 @@ const {
   probeMoonlightWebReachable,
   readStreamingSettings,
   defaultManagedMoonlightWebUrl,
+  syncMoonlightWebUrlFromApiBase,
+  shouldSyncMoonlightWebUrlFromApiBase,
 } = require("./streaming");
 const { ensureMoonlightWebAdminCredentials, resolveMoonlightWebApiCookie } = require("./moonlightWebCredentials");
 const { ensureMoonlightWebSunshinePairing } = require("./moonlightWebPairing");
-const { ensureMoonlightDesktopStreamReady } = require("./moonlightWebLaunch");
+const { listMoonlightHosts, hostLooksPaired } = require("./moonlightWebPairing");
 const {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
@@ -214,9 +216,20 @@ function persistManagedStreamingSettings({
   writeSettings,
   url,
   forceUrl = false,
-  desktopStream = null,
+  hostId = null,
+  env = process.env,
 }) {
   if (typeof readSettings !== "function" || typeof writeSettings !== "function" || !url) {
+    return;
+  }
+  if (shouldSyncMoonlightWebUrlFromApiBase(env)) {
+    syncMoonlightWebUrlFromApiBase({
+      readSettings,
+      writeSettings,
+      apiBase: env.API_BASE,
+      env,
+      hostId,
+    });
     return;
   }
   try {
@@ -230,9 +243,10 @@ function persistManagedStreamingSettings({
       moonlightWebUrl: nextUrl,
       remoteStreamingEnabled: true,
     };
-    if (desktopStream?.hostId != null && desktopStream?.appId != null) {
-      next.moonlightDesktopHostId = Number(desktopStream.hostId);
-      next.moonlightDesktopAppId = Number(desktopStream.appId);
+    if (hostId != null && Number.isFinite(Number(hostId))) {
+      next.moonlightDesktopHostId = Number(hostId);
+      // Application stream id is resolved per launch — do not cache Desktop app id.
+      next.moonlightDesktopAppId = null;
     }
     const changed =
       next.moonlightWebUrl !== settings.moonlightWebUrl ||
@@ -327,28 +341,24 @@ async function bootstrapMoonlightWebAdminAndPair(
     try {
       const settings = typeof readSettings === "function" ? readSettings() || {} : {};
       const streaming = readStreamingSettings(settings);
-      const desktopStream = await ensureMoonlightDesktopStreamReady({
-        baseUrl: url,
-        kind: effectiveKind,
-        env,
-        lanIp: resolveLanIpHint(),
-        cachedHostId: streaming.moonlightDesktopHostId,
-        cachedAppId: streaming.moonlightDesktopAppId,
-        skipPairing: true,
-      });
+      const hosts = await listMoonlightHosts(url, apiCookie);
+      const host =
+        hosts.find((item) => hostLooksPaired(item)) ||
+        hosts[0] ||
+        null;
       const publicFromTunnel = moonlightWebPublicUrlFromApiBase(env.API_BASE || "");
       persistManagedStreamingSettings({
         readSettings,
         writeSettings,
         url: publicFromTunnel || url,
         forceUrl: Boolean(publicFromTunnel),
-        desktopStream,
+        hostId: host?.host_id ?? streaming.moonlightDesktopHostId ?? null,
       });
-      console.log(
-        `Moonlight Desktop stream ready (host ${desktopStream.hostId}, app ${desktopStream.appId}).`,
-      );
+      if (host?.host_id != null) {
+        console.log(`Moonlight host ready (host ${host.host_id}); application streams are registered per game.`);
+      }
     } catch (error) {
-      console.warn(`Could not resolve Moonlight Desktop stream URL: ${error.message || error}`);
+      console.warn(`Could not cache Moonlight host id: ${error.message || error}`);
     }
   } catch (error) {
     console.warn(`Could not bootstrap Moonlight Web admin: ${error.message || error}`);
@@ -365,6 +375,7 @@ async function ensureMoonlightWebRunning({
     return { started: false, reason: "disabled" };
   }
 
+  syncMoonlightWebUrlFromApiBase({ readSettings, writeSettings, env });
   const settings = typeof readSettings === "function" ? readSettings() : {};
   const streaming = readStreamingSettings(settings);
   const port = resolveMoonlightWebPort(env);

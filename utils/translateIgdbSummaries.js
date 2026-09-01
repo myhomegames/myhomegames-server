@@ -1,8 +1,5 @@
-const { googleTranslateText, normalizeLangCode } = require("./googleTranslate");
+const { googleTranslateText, googleTranslateTexts, normalizeLangCode } = require("./googleTranslate");
 const { normalizeLocale } = require("./metadataLocale");
-
-/** Summaries may contain `\n`; do not use it as a batch delimiter. */
-const BATCH_SEP = "\u001e";
 
 async function translateText(text, targetLang, sourceLang = "en") {
   const trimmed = String(text || "").trim();
@@ -20,11 +17,12 @@ async function translateUniqueTexts(uniqueTexts, targetLang) {
     return [await translateText(uniqueTexts[0], targetLang)];
   }
 
-  const combined = uniqueTexts.join(BATCH_SEP);
-  const translated = await translateText(combined, targetLang);
-  if (translated) {
-    const parts = translated.split(BATCH_SEP).map((part) => part.trim());
-    if (parts.length === uniqueTexts.length) return parts;
+  const batched = await googleTranslateTexts(uniqueTexts, targetLang);
+  if (Array.isArray(batched) && batched.length === uniqueTexts.length) {
+    return batched.map((part, i) => {
+      const t = String(part || "").trim();
+      return t || uniqueTexts[i];
+    });
   }
 
   return Promise.all(uniqueTexts.map((text) => translateText(text, targetLang)));

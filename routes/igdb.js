@@ -1521,8 +1521,19 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
         return aTs - bTs;
       });
 
+      let localizedGames = formatted;
+      try {
+        const locale = resolveRequestLocale(req, metadataPath);
+        localizedGames = await applyTranslatedSummariesToGames(formatted, locale);
+      } catch (translateErr) {
+        console.warn(
+          "IGDB games-by-keyword summary translation failed:",
+          translateErr?.message || translateErr,
+        );
+      }
+
       res.setHeader("Content-Type", "application/json");
-      res.json({ games: formatted });
+      res.json({ games: localizedGames });
     } catch (err) {
       console.error("IGDB games-by-keyword error:", err);
       res.setHeader("Content-Type", "application/json");

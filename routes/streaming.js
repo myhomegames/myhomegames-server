@@ -1,4 +1,5 @@
-const { launchGame } = require("../utils/gameLauncher");
+const { launchGame, resolveGameLaunch } = require("../utils/gameLauncher");
+const { recordGamePlayed } = require("./library");
 const {
   readStreamingSettings,
   probeSunshineReachable,
@@ -22,7 +23,8 @@ const {
   resolveLanIpHint,
 } = require("../utils/moonlightWebService");
 const { attachMoonlightStopHook } = require("../utils/moonlightWebEmbed");
-const { ensureMoonlightDesktopStreamReady } = require("../utils/moonlightWebLaunch");
+const { ensureMoonlightAppStreamReady } = require("../utils/moonlightWebLaunch");
+const { upsertSunshineStreamingApp, sunshineStreamingAppName } = require("../utils/sunshineApps");
 const {
   isCloudflareTurnConfigured,
   generateCloudflareTurnIceServers,
@@ -134,30 +136,69 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const moonlightKind = readMoonlightWebManifest(moonlightInstallDir)?.kind || null;
       const moonlightKindForApi = moonlightKind === "docker" ? "docker" : null;
 
+      const resolved = resolveGameLaunch(getAllGames(), metadataPath, gameId, executableName);
+      if (!resolved.ok) {
+        return res.status(resolved.status).json({
+          error: resolved.error,
+          ...(resolved.detail ? { detail: resolved.detail } : {}),
+        });
+      }
+
+      const entry = getAllGames()[Number(gameId)];
+      const gameTitle =
+        String(entry?.title || entry?.name || "").trim() || `Game ${gameId}`;
+      const streamAppTitle = sunshineStreamingAppName(gameTitle);
+
+      const sunshineReachableBefore = await probeSunshineReachable(streaming);
+      if (!sunshineReachableBefore) {
+        return res.status(503).json({
+          error: "Sunshine is not reachable",
+          detail: "Start Sunshine on the home PC before remote play.",
+        });
+      }
+
+      try {
+        await upsertSunshineStreamingApp({
+          gameTitle,
+          fullCommandPath: resolved.fullCommandPath,
+          env: process.env,
+        });
+      } catch (error) {
+        console.error("Sunshine app registration failed:", error?.message || error);
+        return res.status(502).json({
+          error: "Could not register Sunshine application",
+          detail: error?.message || "Unknown error",
+        });
+      }
+
       let moonlightWebUrl = streaming.moonlightWebUrl;
       let moonlightStream = null;
       try {
-        moonlightStream = await ensureMoonlightDesktopStreamReady({
+        moonlightStream = await ensureMoonlightAppStreamReady({
           baseUrl: streaming.moonlightWebUrl,
           kind: moonlightKindForApi,
           env: process.env,
           lanIp: resolveLanIpHint(),
           cachedHostId: streaming.moonlightDesktopHostId,
-          cachedAppId: streaming.moonlightDesktopAppId,
+          appTitle: streamAppTitle,
+          maxAttempts: 5,
         });
         moonlightWebUrl = moonlightStream.url;
       } catch (error) {
         console.warn(
-          `Could not resolve Moonlight Desktop stream URL: ${error.message || error}`,
+          `Could not resolve Moonlight application stream URL: ${error.message || error}`,
         );
+        return res.status(502).json({
+          error: "Could not open application stream",
+          detail: error?.message || "Moonlight application not found after Sunshine registration",
+        });
       }
 
-      const launched = await launchGame(getAllGames(), metadataPath, gameId, executableName);
       rememberStreamingLaunch({
-        pid: launched.pid,
+        pid: null,
         gameId,
-        executableName: launched.executableName,
-        fullCommandPath: launched.fullCommandPath,
+        executableName: resolved.executableName,
+        fullCommandPath: resolved.fullCommandPath,
       });
       const sunshineReachable = await probeSunshineReachable(streaming);
 
@@ -173,29 +214,17 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       }
 
       if (!moonlightStream) {
-        try {
-          moonlightStream = await ensureMoonlightDesktopStreamReady({
-            baseUrl: streaming.moonlightWebUrl,
-            kind: moonlightKindForApi,
-            env: process.env,
-            lanIp: resolveLanIpHint(),
-            cachedHostId: streaming.moonlightDesktopHostId,
-            cachedAppId: streaming.moonlightDesktopAppId,
-            maxAttempts: 2,
-          });
-          moonlightWebUrl = moonlightStream.url;
-        } catch (error) {
-          console.warn(
-            `Could not resolve Moonlight Desktop stream URL after launch: ${error.message || error}`,
-          );
-        }
+        return res.status(502).json({
+          error: "Could not open application stream",
+          detail: "Moonlight application stream URL could not be resolved",
+        });
       }
 
       const publicApiBase = resolvePublicApiBaseForStop(req, moonlightWebUrl);
       moonlightWebUrl = attachMoonlightStopHook(moonlightWebUrl, {
         apiBase: publicApiBase,
         gameId,
-        executableName: launched.executableName,
+        executableName: resolved.executableName,
         hostId: moonlightStream?.hostId ?? null,
       });
       if (moonlightStream) {
@@ -208,17 +237,25 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       }
       if (moonlightWebUrl && !/\/stream(?:\.mhg\d+)?\.html(\?|$)/i.test(moonlightWebUrl)) {
         console.warn(
-          `[streaming/launch] moonlightWebUrl is not a direct Desktop stream link: ${moonlightWebUrl}`,
+          `[streaming/launch] moonlightWebUrl is not a direct application stream link: ${moonlightWebUrl}`,
         );
       } else if (moonlightWebUrl) {
-        console.log(`[streaming/launch] opening Moonlight Desktop stream`);
+        console.log(
+          `[streaming/launch] opening Moonlight app stream (${moonlightStream.appTitle || streamAppTitle})`,
+        );
       }
 
+      const datePlayed = recordGamePlayed(metadataPath, getAllGames(), gameId);
+
       res.json({
-        ...launched,
+        status: "stream-ready",
+        executableName: resolved.executableName,
+        fullCommandPath: resolved.fullCommandPath,
+        gameTitle,
         moonlightWebUrl,
         moonlightStream,
         sunshineReachable,
+        ...(datePlayed != null ? { datePlayed } : {}),
       });
     } catch (err) {
       if (err?.payload && err?.status) {
