@@ -902,7 +902,23 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
 
       // .rpm via rpm-builder (npm); requires rpmbuild on the system (Linux or brew install rpm on macOS)
       // Paths must be relative to cwd: absolute src paths make globby return [] → empty RPM.
+      // On macOS, plain rpmbuild tags OS=darwin and Linux rpm/dnf refuse the package — force Linux target.
       try {
+        const cpRpm = require('child_process');
+        if (!cpRpm.exec.__mhgLinuxTarget) {
+          const origExecRpm = cpRpm.exec.bind(cpRpm);
+          cpRpm.exec = (cmd, opts, cb) => {
+            if (typeof opts === 'function') {
+              cb = opts;
+              opts = {};
+            }
+            if (typeof cmd === 'string' && /\brpmbuild\b/.test(cmd) && !/--target\b/.test(cmd)) {
+              cmd = cmd.replace(/\brpmbuild\b/, 'rpmbuild --target x86_64-linux');
+            }
+            return origExecRpm(cmd, opts, cb);
+          };
+          cpRpm.exec.__mhgLinuxTarget = true;
+        }
         const buildRpm = require('rpm-builder');
         const optDirRel = path.relative(process.cwd(), optDir) || '.';
         const usrBinDirRel = path.relative(process.cwd(), usrBinDir) || '.';

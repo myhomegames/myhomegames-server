@@ -47,3 +47,5 @@ Package metadata (`apt-cache show myhomegames-server`) includes a short synopsis
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).
+
+To smoke-test a locally built `.deb` (install, enable, start/stop, HTTP) on Ubuntu, see [test-linux-packages.md](test-linux-packages.md).

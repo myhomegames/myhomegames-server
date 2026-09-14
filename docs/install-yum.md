@@ -58,3 +58,5 @@ Package metadata (`dnf info` / `yum info`) describes MyHomeGames as a self-hoste
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).
+
+To smoke-test a locally built `.rpm` (install, enable, start/stop, HTTP) on Rocky/RHEL-like guests, see [test-linux-packages.md](test-linux-packages.md). Confirm `rpm -qp --qf 'OS=%{OS}\n'` prints `linux` before copying the package into a guest.
