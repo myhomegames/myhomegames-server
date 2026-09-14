@@ -85,11 +85,16 @@ The run token is **not** in `.env`. On startup the web app fetches a per-user to
 When the tunnel starts, `ensureCloudflaredBinary` (`utils/cloudflaredBinary.js`):
 
 1. Ensures `METADATA_PATH/bin/cloudflared` exists (creates the directory if needed).
-2. Copies a **newer** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir).
-3. Downloads or updates the Cloudflare CLI:
-   - **Missing binary** → downloads `latest` from GitHub.
-   - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
-   - **Already up to date** → no download.
+2. Removes any existing binary that is **not usable** on this OS (wrong file format, e.g. a macOS Mach-O shipped by mistake inside a Linux package, or exit code 126).
+3. Copies a **newer, compatible** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir). Incompatible bundled files are ignored.
+4. Downloads or updates the Cloudflare CLI:
+    - **Missing / unusable binary** → downloads `latest` from GitHub (also when `CLOUDFLARED_SKIP_UPDATE=true`).
+    - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
+    - **Already up to date** → no download.
+
+**Linux packages built on macOS**: `scripts/copy-cloudflared-binary.js` downloads `cloudflared-linux-amd64` from GitHub into the `.deb` / `.rpm` / tarball. It does **not** copy the host `node_modules` macOS binary. Windows unified builds similarly fetch `cloudflared-windows-amd64.exe`.
+
+`/tunnel/status` reports `connected: true` only while the `cloudflared` child process is still running.
 
 To pin or disable auto-update:
 

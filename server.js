@@ -1080,6 +1080,7 @@ const {
   applyCloudflareTunnelEnv,
   startCloudflareTunnel,
   stopCloudflareTunnel,
+  watchCloudflareTunnel,
 } = require("./utils/cloudflareTunnel");
 const { ensureSunshineRunning, stopManagedSunshine } = require("./utils/sunshineService");
 const { ensureMoonlightWebRunning, stopManagedMoonlightWeb } = require("./utils/moonlightWebService");
@@ -1164,6 +1165,11 @@ async function maybeStartCloudflareTunnel(localOrigin) {
       runtimeToken: stored.token,
       publicUrl: stored.publicUrl,
       metadataPath: METADATA_PATH,
+    });
+    watchCloudflareTunnel(cloudflareTunnel, (stopped) => {
+      if (cloudflareTunnel === stopped) {
+        cloudflareTunnel = null;
+      }
     });
     return { started: true, deferReady: false };
   } catch (error) {

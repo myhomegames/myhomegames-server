@@ -764,7 +764,7 @@ if (linuxExe || winExe) {
     fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
     fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
     const linuxBinDir = path.join(BUILD_DIR, 'bin');
-    const hasLinuxBin = copyCloudflaredBinary(linuxBinDir);
+    const hasLinuxBin = copyCloudflaredBinary(linuxBinDir, { platform: 'linux', arch: 'x64' });
     const tarName = `MyHomeGames-${version}-linux-x64.tar.gz`;
     const tarPath = path.join(BUILD_DIR, tarName);
     const tarMembers = [`"${linuxExe}"`, '".env"', `"${SERVER_INFO_FILENAME}"`];
@@ -810,7 +810,7 @@ if (linuxExe || winExe) {
       }
       fs.copyFileSync(path.join(BUILD_DIR, '.env'), path.join(optDir, '.env'));
       fs.writeFileSync(path.join(optDir, SERVER_INFO_FILENAME), serverInfoJson);
-      copyCloudflaredBinary(path.join(optDir, 'bin'));
+      copyCloudflaredBinary(path.join(optDir, 'bin'), { platform: 'linux', arch: 'x64' });
       const wrapper = `#!/bin/sh
 cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
 `;

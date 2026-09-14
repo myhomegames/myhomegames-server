@@ -7,6 +7,10 @@ const {
   findBundledCloudflaredBin,
   parseCloudflaredVersion,
   compareCloudflaredVersions,
+  cloudflaredBinaryLooksCompatible,
+  isUsableCloudflaredBinary,
+  cloudflaredReleaseAssetName,
+  resolveCloudflaredInstallVersion,
 } = require("../../utils/cloudflaredBinary");
 
 describe("cloudflaredBinary", () => {
@@ -55,6 +59,70 @@ describe("cloudflaredBinary", () => {
     } finally {
       fs.unlinkSync(customBin);
       fs.rmdirSync(dir);
+    }
+  });
+
+  test("cloudflaredBinaryLooksCompatible detects ELF vs Mach-O", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-cf-magic-"));
+    const elfPath = path.join(dir, "elf");
+    const machoPath = path.join(dir, "macho");
+    fs.writeFileSync(elfPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02]));
+    fs.writeFileSync(machoPath, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x00]));
+    try {
+      expect(cloudflaredBinaryLooksCompatible(elfPath, "linux")).toBe(true);
+      expect(cloudflaredBinaryLooksCompatible(elfPath, "darwin")).toBe(false);
+      expect(cloudflaredBinaryLooksCompatible(machoPath, "darwin")).toBe(true);
+      expect(cloudflaredBinaryLooksCompatible(machoPath, "linux")).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("isUsableCloudflaredBinary rejects wrong-OS format without executing", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-cf-usable-"));
+    const machoOnLinuxCheck = path.join(dir, "macho");
+    fs.writeFileSync(machoOnLinuxCheck, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    try {
+      expect(isUsableCloudflaredBinary(machoOnLinuxCheck, "linux")).toBe(false);
+      // Cross-check: linux ELF claimed for packaging host is format-only when platforms differ
+      const elf = path.join(dir, "elf");
+      fs.writeFileSync(elf, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+      if (process.platform !== "linux") {
+        expect(isUsableCloudflaredBinary(elf, "linux")).toBe(true);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cloudflaredReleaseAssetName maps linux x64 to amd64 asset", () => {
+    expect(cloudflaredReleaseAssetName("linux", "x64")).toBe("cloudflared-linux-amd64");
+    expect(cloudflaredReleaseAssetName("darwin", "arm64")).toBe(
+      "cloudflared-darwin-arm64.tgz",
+    );
+    expect(cloudflaredReleaseAssetName("win32", "x64")).toBe(
+      "cloudflared-windows-amd64.exe",
+    );
+  });
+
+  test("resolveCloudflaredInstallVersion redownloads unusable binary even with SKIP_UPDATE", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-cf-skip-"));
+    const bad = path.join(dir, "cloudflared");
+    fs.writeFileSync(bad, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    try {
+      const version = await resolveCloudflaredInstallVersion(bad, {
+        CLOUDFLARED_SKIP_UPDATE: "true",
+      });
+      if (process.platform === "linux") {
+        expect(version).toBe("latest");
+      } else if (process.platform === "darwin") {
+        // Mach-O stub without real binary still fails --version → latest
+        expect(version).toBe("latest");
+      } else {
+        expect(version).toBe("latest");
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

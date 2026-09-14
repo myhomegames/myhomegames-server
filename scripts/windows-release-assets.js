@@ -95,7 +95,10 @@ function populateUnifiedPayload() {
   }
   fs.writeFileSync(path.join(UNIFIED_PAYLOAD_DIR, ".env"), ENV_CONTENT_STANDALONE);
   fs.writeFileSync(path.join(UNIFIED_PAYLOAD_DIR, SERVER_INFO_FILENAME), getServerInfoJson());
-  copyCloudflaredBinary(path.join(UNIFIED_PAYLOAD_DIR, "bin"));
+  copyCloudflaredBinary(path.join(UNIFIED_PAYLOAD_DIR, "bin"), {
+    platform: "win32",
+    arch: "x64",
+  });
   const png = path.join(BUILD_DIR, TRAY_PNG_NAME);
   if (fs.existsSync(png)) {
     fs.copyFileSync(png, path.join(UNIFIED_PAYLOAD_DIR, TRAY_PNG_NAME));

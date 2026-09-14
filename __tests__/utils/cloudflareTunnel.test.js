@@ -5,12 +5,28 @@ const {
   applyCloudflareTunnelEnv,
   buildCloudflareTunnelArgs,
   isCloudflareTunnelEnabled,
+  isCloudflareTunnelRunning,
 } = require("../../utils/cloudflareTunnel");
 
 describe("cloudflareTunnel", () => {
   test("isCloudflareTunnelEnabled respects flag", () => {
     expect(isCloudflareTunnelEnabled({ CLOUDFLARE_TUNNEL_ENABLED: "true" })).toBe(true);
     expect(isCloudflareTunnelEnabled({ CLOUDFLARE_TUNNEL_ENABLED: "false" })).toBe(false);
+  });
+
+  test("isCloudflareTunnelRunning requires a live child process", () => {
+    expect(isCloudflareTunnelRunning(null)).toBe(false);
+    expect(isCloudflareTunnelRunning({})).toBe(false);
+    expect(
+      isCloudflareTunnelRunning({
+        process: { killed: false, exitCode: null, signalCode: null },
+      }),
+    ).toBe(true);
+    expect(
+      isCloudflareTunnelRunning({
+        process: { killed: false, exitCode: 126, signalCode: null },
+      }),
+    ).toBe(false);
   });
 
   test("applyCloudflareTunnelEnv sets API_BASE and disables local HTTPS", () => {
