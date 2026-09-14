@@ -292,9 +292,9 @@ npm run publish:repos
 The full build (`npm run build`) produces packages for multiple platforms. Requirements:
 
 - **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper, and for `sips` / `iconutil` when regenerating the app icon). The script builds both x64 and arm64 `.pkg` installers.
-- **Linux (.tar.gz):** No extra tools; Node and npm only.
-- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
-- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
+- **Linux (.tar.gz):** No extra tools; Node and npm only. Includes the binary, `.env`, and `myhomegames-server.service` (install the unit under `/lib/systemd/system/` then `systemctl enable --now myhomegames-server`).
+- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency). Ships a systemd unit with postinst start / prerm stop.
+- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file. Same systemd unit and start/stop scripts as the `.deb`.
 - **Windows:** Node and npm; **`npm run build:win-unified`** and the full **`npm run build`** need **Go 1.21+** on `PATH`. The Windows release artifact is **`MyHomeGames-<ver>-win-x64.zip`**, a zip containing **`MyHomeGames-<ver>-win-x64.exe`**: a single executable that **embeds** the `pkg` server binary, tray PowerShell script, `.env`, `server-info.json`, optional `MyHomeGames-Tray.png`, and `README-WINDOWS.txt`. On first run it extracts to `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\` and starts the tray. **`npm run build:win-unified`** runs **`pkg`** if the Windows server exe is missing from `build/`. Full **`npm run build`** produces the `.exe` and `.zip` after the macOS icon step so `MyHomeGames-Tray.png` can be included in the embedded payload when the icon is generated.
 
 #### macOS app icon (Dock / Finder)

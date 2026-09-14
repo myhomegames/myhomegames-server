@@ -1,0 +1,19 @@
+[Unit]
+Description=MyHomeGames Server
+Documentation=https://github.com/myhomegames/myhomegames-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/myhomegames-server
+EnvironmentFile=-/opt/myhomegames-server/.env
+Environment=METADATA_PATH=/var/lib/myhomegames-server
+ExecStart=/opt/myhomegames-server/myhomegames-server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
