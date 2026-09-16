@@ -484,7 +484,6 @@ if (process.env.NODE_ENV === 'test') {
 if (!fs.existsSync(SETTINGS_FILE)) {
   try {
     const defaultSettings = {
-      language: "en",
       visibleLibraries: ["recommended", "library", "collections", "categories"],
     };
     writeSettings(defaultSettings);
@@ -842,7 +841,6 @@ function attachTwitchAppCredentialsToSettings(result) {
 
 function readSettings() {
   const defaultSettings = {
-    language: "en",
     visibleLibraries: ["recommended", "library", "collections", "categories"],
     twitchApiEnabled: false,
     activeSkinId: "",
@@ -868,6 +866,13 @@ function readSettings() {
     ...settings,
     skinWeb,
   };
+  // Language is optional until the web app (browser locale) or user sets it.
+  const rawLang = typeof settings.language === "string" ? settings.language.trim() : "";
+  if (rawLang) {
+    result.language = rawLang;
+  } else {
+    delete result.language;
+  }
   delete result.fixedFocalStepSound;
   delete result.twitchClientId;
   delete result.twitchClientSecret;

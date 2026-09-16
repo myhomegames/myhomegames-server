@@ -86,7 +86,7 @@ describe('Helper Functions', () => {
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      expect(response.body.language).toBe('en');
+      expect(response.body.language).toBeUndefined();
       
       // Restore settings file
       if (fs.existsSync(backupPath)) {
@@ -110,13 +110,13 @@ describe('Helper Functions', () => {
       delete require.cache[require.resolve('../server.js')];
       const freshApp = require('../server.js');
       
-      // Should return default settings
+      // Should return default settings (language unset until client/browser sets it)
       const response = await request(freshApp)
         .get('/settings')
         .set('X-Auth-Token', 'test-token')
         .expect(200);
       
-      expect(response.body.language).toBe('en');
+      expect(response.body.language).toBeUndefined();
       
       // Restore original
       if (fs.existsSync(backupPath)) {
