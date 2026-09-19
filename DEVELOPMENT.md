@@ -85,11 +85,16 @@ The run token is **not** in `.env`. On startup the web app fetches a per-user to
 When the tunnel starts, `ensureCloudflaredBinary` (`utils/cloudflaredBinary.js`):
 
 1. Ensures `METADATA_PATH/bin/cloudflared` exists (creates the directory if needed).
-2. Copies a **newer** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir).
-3. Downloads or updates the Cloudflare CLI:
-   - **Missing binary** → downloads `latest` from GitHub.
-   - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
-   - **Already up to date** → no download.
+2. Removes any existing binary that is **not usable** on this OS (wrong file format, e.g. a macOS Mach-O shipped by mistake inside a Linux package, or exit code 126).
+3. Copies a **newer, compatible** bundled binary from the app package into metadata, if the release ships one (macOS `.app`, Windows/Linux install dir). Incompatible bundled files are ignored.
+4. Downloads or updates the Cloudflare CLI:
+    - **Missing / unusable binary** → downloads `latest` from GitHub (also when `CLOUDFLARED_SKIP_UPDATE=true`).
+    - **Existing binary older than latest release** → overwrites the same file with `latest` (no separate old copy is kept).
+    - **Already up to date** → no download.
+
+**Linux packages built on macOS**: `scripts/copy-cloudflared-binary.js` downloads `cloudflared-linux-amd64` from GitHub into the `.deb` / `.rpm` / tarball. It does **not** copy the host `node_modules` macOS binary. Windows unified builds similarly fetch `cloudflared-windows-amd64.exe`.
+
+`/tunnel/status` reports `connected: true` only while the `cloudflared` child process is still running.
 
 To pin or disable auto-update:
 
@@ -292,10 +297,12 @@ npm run publish:repos
 The full build (`npm run build`) produces packages for multiple platforms. Requirements:
 
 - **macOS (.pkg):** Xcode Command Line Tools (for `swiftc` to compile the app wrapper, and for `sips` / `iconutil` when regenerating the app icon). The script builds both x64 and arm64 `.pkg` installers.
-- **Linux (.tar.gz):** No extra tools; Node and npm only.
-- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency).
-- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file.
-- **Windows:** Node and npm; **`npm run build:win-unified`** and the full **`npm run build`** need **Go 1.21+** on `PATH`. The Windows release artifact is **`MyHomeGames-<ver>-win-x64.zip`**, a zip containing **`MyHomeGames-<ver>-win-x64.exe`**: a single executable that **embeds** the `pkg` server binary, tray PowerShell script, `.env`, `server-info.json`, optional `MyHomeGames-Tray.png`, and `README-WINDOWS.txt`. On first run it extracts to `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\` and starts the tray. **`npm run build:win-unified`** runs **`pkg`** if the Windows server exe is missing from `build/`. Full **`npm run build`** produces the `.exe` and `.zip` after the macOS icon step so `MyHomeGames-Tray.png` can be included in the embedded payload when the icon is generated.
+- **Linux (.tar.gz):** No extra tools; Node and npm only. Includes the binary, `.env`, and `myhomegames-server.service` (install the unit under `/lib/systemd/system/` then `systemctl enable --now myhomegames-server`).
+- **Linux (.deb):** No extra tools; the build uses `deboa` (npm dependency). Ships a systemd unit with postinst start / prerm stop.
+- **Linux (.rpm):** Requires `rpmbuild` on the machine. On macOS you can install it with `brew install rpm`; on Linux it is usually available from the system package manager. If `rpmbuild` is not available, the build completes but skips generating the `.rpm` file. Same systemd unit and start/stop scripts as the `.deb`. On macOS the build forces `rpmbuild --target x86_64-linux` so the package is not tagged `OS=darwin`.
+
+**Smoke-test .deb and .rpm on real systemd guests** (Ubuntu + Rocky via Lima, or any amd64 Linux VM): see [docs/test-linux-packages.md](docs/test-linux-packages.md). Do not rely on Docker `linux/amd64` on Apple Silicon for `systemctl start` validation.
+- **Windows:** Node and npm; **`npm run build:win-unified`** and the full **`npm run build`** need **Go 1.21+** on `PATH`. The Windows release artifact is **`MyHomeGames-<ver>-win-x64.zip`**, a zip containing **`MyHomeGames-<ver>-win-x64.exe`**: a single executable that **embeds** the `pkg` server binary, tray PowerShell script, `.env`, `server-info.json`, optional `MyHomeGames-Tray.png`, and `README-WINDOWS.txt`. On first run it extracts to `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\`, copies a stable launcher to `%LOCALAPPDATA%\MyHomeGames\MyHomeGames.exe`, creates a Start Menu shortcut (**MyHomeGames Server**), and starts the tray. **`npm run build:win-unified`** runs **`pkg`** if the Windows server exe is missing from `build/`. Full **`npm run build`** produces the `.exe` and `.zip` after the macOS icon step so `MyHomeGames-Tray.png` can be included in the embedded payload when the icon is generated.
 
 #### macOS app icon (Dock / Finder)
 

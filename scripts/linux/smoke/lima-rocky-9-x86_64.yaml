@@ -1,0 +1,30 @@
+# Lima: Rocky Linux 9 amd64 (systemd smoke test for .rpm)
+# Usage: limactl create --name=mhg-rpm scripts/linux/smoke/lima-rocky-9-x86_64.yaml
+# Prefer a short LIMA_HOME on a large disk when the Mac system volume is full.
+# Copy packages with: limactl copy build/*.rpm mhg-rpm:/tmp/
+
+minimumLimaVersion: "2.0.0"
+
+arch: "x86_64"
+cpus: 2
+memory: "3GiB"
+disk: "20GiB"
+
+images:
+  - location: "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2"
+    arch: "x86_64"
+
+# No mounts: reverse-sshfs / sshfs install is unreliable under slow TCG.
+mounts: []
+
+mountTypesUnsupported: [9p]
+
+ssh:
+  localPort: 0
+
+containerd:
+  system: false
+  user: false
+
+# Avoid dnf in provision: first-boot mirror/metadata issues are common under TCG.
+# The RPM under test is self-contained (rpm -Uvh).

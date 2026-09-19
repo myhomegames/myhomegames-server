@@ -27,12 +27,25 @@ sudo apt upgrade myhomegames-server
 sudo apt remove myhomegames-server
 ```
 
-## Binary location
+## Binary and service
 
-The server is installed under `/opt/myhomegames-server`; the `myhomegames-server` command is available in `/usr/bin`.
+The package installs the server under `/opt/myhomegames-server` and provides `/usr/bin/myhomegames-server`.
+
+A **systemd** unit is installed as `myhomegames-server.service`. After install it is enabled and started automatically.
+
+```bash
+sudo systemctl status myhomegames-server
+sudo systemctl start myhomegames-server
+sudo systemctl stop myhomegames-server
+sudo systemctl restart myhomegames-server
+```
+
+Runtime data (metadata, covers, settings) lives in `/var/lib/myhomegames-server`. Config defaults are in `/opt/myhomegames-server/.env`.
 
 Package metadata (`apt-cache show myhomegames-server`) includes a short synopsis, extended description, homepage, and section `games`.
 
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).
+
+To smoke-test a locally built `.deb` (install, enable, start/stop, HTTP) on Ubuntu, see [test-linux-packages.md](test-linux-packages.md).

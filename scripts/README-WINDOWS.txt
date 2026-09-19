@@ -9,7 +9,11 @@ and config under:
 
   %LOCALAPPDATA%\\MyHomeGames\\server-runtime\\<version>\\
 
-and starts the tray.
+copies a stable launcher to:
+
+  %LOCALAPPDATA%\\MyHomeGames\\MyHomeGames.exe
+
+adds a Start Menu shortcut ("MyHomeGames Server"), and starts the tray.
 
 QUICK START
 -----------
@@ -18,8 +22,10 @@ Unzip the archive, then double-click:
   MyHomeGames-*-win-x64.exe
 
 This starts the server in the background (no server console window) and shows an icon
-in the system tray (notification area, near the clock). Right-click the icon
-for:
+in the system tray (notification area, near the clock). After the first launch you can
+also start it from the Windows Start Menu: **MyHomeGames Server**.
+
+Right-click the tray icon for:
 
   - Open web app
   - Open API (browser)

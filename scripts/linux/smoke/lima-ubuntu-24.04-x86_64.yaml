@@ -1,0 +1,32 @@
+# Lima: Ubuntu 24.04 amd64 (systemd smoke test for .deb)
+# Usage: limactl create --name=mhg-deb scripts/linux/smoke/lima-ubuntu-24.04-x86_64.yaml
+# Prefer a short LIMA_HOME on a large disk when the Mac system volume is full.
+# Copy packages with: limactl copy build/*.deb mhg-deb:/tmp/
+
+arch: "x86_64"
+cpus: 2
+memory: "3GiB"
+disk: "20GiB"
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+# No mounts: reverse-sshfs can hang under slow TCG; use limactl copy instead.
+mounts: []
+
+ssh:
+  localPort: 0
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq ca-certificates curl >/dev/null

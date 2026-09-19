@@ -326,7 +326,8 @@ describe('GET /settings', () => {
       .get('/settings')
       .expect(200);
     
-    expect(response.body).toHaveProperty('language', 'en');
+    expect(response.body).toHaveProperty('visibleLibraries');
+    expect(response.body.language).toBeUndefined();
     
     // Restore settings file
     if (fs.existsSync(backupPath)) {

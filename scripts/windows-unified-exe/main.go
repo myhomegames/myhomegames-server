@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -60,6 +61,119 @@ func localAppData() string {
 
 func extractDir() string {
 	return filepath.Join(localAppData(), "MyHomeGames", "server-runtime", appVersion)
+}
+
+func mhgRootDir() string {
+	return filepath.Join(localAppData(), "MyHomeGames")
+}
+
+func stableLauncherPath() string {
+	return filepath.Join(mhgRootDir(), "MyHomeGames.exe")
+}
+
+func startMenuShortcutPath() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return ""
+	}
+	return filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "MyHomeGames Server.lnk")
+}
+
+func escapePSSingleQuoted(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		// Destination may be locked if already running from stable path — ignore replace failure.
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// installStableLauncher copies this unified exe to a fixed AppData path so Start Menu
+// keeps working after the user deletes the zip/Downloads copy.
+func installStableLauncher() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	dest := stableLauncherPath()
+	if strings.EqualFold(filepath.Clean(self), filepath.Clean(dest)) {
+		return dest, nil
+	}
+	if err := copyFile(self, dest); err != nil {
+		// Still usable if we are already launching; Start Menu may keep an older copy.
+		if _, statErr := os.Stat(dest); statErr == nil {
+			return dest, nil
+		}
+		return "", err
+	}
+	return dest, nil
+}
+
+func ensureStartMenuShortcut(targetExe string) error {
+	lnk := startMenuShortcutPath()
+	if lnk == "" || targetExe == "" {
+		return fmt.Errorf("missing APPDATA or target")
+	}
+	programsDir := filepath.Dir(lnk)
+	ps := fmt.Sprintf(
+		"$ErrorActionPreference='Stop'; "+
+			"New-Item -ItemType Directory -Force -Path '%s' | Out-Null; "+
+			"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s'); "+
+			"$s.TargetPath='%s'; "+
+			"$s.WorkingDirectory='%s'; "+
+			"$s.Description='MyHomeGames Server'; "+
+			"$s.Save()",
+		escapePSSingleQuoted(programsDir),
+		escapePSSingleQuoted(lnk),
+		escapePSSingleQuoted(targetExe),
+		escapePSSingleQuoted(filepath.Dir(targetExe)),
+	)
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", ps,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
+	}
+	return nil
 }
 
 func extractPayload(dest string) error {
@@ -120,6 +234,13 @@ func main() {
 		showMsg("MyHomeGames Server", "Could not extract application files.\n\n"+err.Error()+
 			"\n\nDetails:\n"+filepath.Join(dest, errLogName))
 		return
+	}
+
+	// Best-effort: stable AppData launcher + Start Menu entry (user can delete Downloads zip).
+	if launcher, err := installStableLauncher(); err != nil {
+		appendErrorLog(dest, "Stable launcher copy", err.Error())
+	} else if err := ensureStartMenuShortcut(launcher); err != nil {
+		appendErrorLog(dest, "Start Menu shortcut", err.Error())
 	}
 
 	ps1 := filepath.Join(dest, "MyHomeGames-Server-Tray.ps1")

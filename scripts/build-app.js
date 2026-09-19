@@ -764,12 +764,17 @@ if (linuxExe || winExe) {
     fs.writeFileSync(path.join(BUILD_DIR, '.env'), envContentStandalone);
     fs.writeFileSync(path.join(BUILD_DIR, SERVER_INFO_FILENAME), serverInfoJson);
     const linuxBinDir = path.join(BUILD_DIR, 'bin');
-    const hasLinuxBin = copyCloudflaredBinary(linuxBinDir);
+    const hasLinuxBin = copyCloudflaredBinary(linuxBinDir, { platform: 'linux', arch: 'x64' });
     const tarName = `MyHomeGames-${version}-linux-x64.tar.gz`;
     const tarPath = path.join(BUILD_DIR, tarName);
     const tarMembers = [`"${linuxExe}"`, '".env"', `"${SERVER_INFO_FILENAME}"`];
     if (hasLinuxBin) {
       tarMembers.push('"bin"');
+    }
+    const linuxUnitSrc = path.join(__dirname, 'linux', 'myhomegames-server.service');
+    if (fs.existsSync(linuxUnitSrc)) {
+      fs.copyFileSync(linuxUnitSrc, path.join(BUILD_DIR, 'myhomegames-server.service'));
+      tarMembers.push('"myhomegames-server.service"');
     }
     try {
       execSync(`tar -czf "${tarPath}" -C "${BUILD_DIR}" ${tarMembers.join(' ')}`, {
@@ -805,12 +810,21 @@ if (linuxExe || winExe) {
       }
       fs.copyFileSync(path.join(BUILD_DIR, '.env'), path.join(optDir, '.env'));
       fs.writeFileSync(path.join(optDir, SERVER_INFO_FILENAME), serverInfoJson);
-      copyCloudflaredBinary(path.join(optDir, 'bin'));
+      copyCloudflaredBinary(path.join(optDir, 'bin'), { platform: 'linux', arch: 'x64' });
       const wrapper = `#!/bin/sh
 cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
 `;
       fs.writeFileSync(path.join(usrBinDir, 'myhomegames-server'), wrapper);
       fs.chmodSync(path.join(usrBinDir, 'myhomegames-server'), '755');
+
+      const linuxScriptsDir = path.join(__dirname, 'linux');
+      const systemdUnitSrc = path.join(linuxScriptsDir, 'myhomegames-server.service');
+      const systemdUnitDir = path.join(pkgRoot, 'lib', 'systemd', 'system');
+      fs.mkdirSync(systemdUnitDir, { recursive: true });
+      fs.copyFileSync(systemdUnitSrc, path.join(systemdUnitDir, 'myhomegames-server.service'));
+      const postinstScript = path.join(linuxScriptsDir, 'postinst.sh');
+      const prermScript = path.join(linuxScriptsDir, 'prerm.sh');
+      const postrmScript = path.join(linuxScriptsDir, 'postrm.sh');
 
       const PKG_HOMEPAGE = 'https://github.com/myhomegames/myhomegames-server';
       const PKG_MAINTAINER = 'MyHomeGames <noreply@myhomegames.dev>';
@@ -824,7 +838,8 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
         'Features include a local HTTP API, optional Cloudflare Tunnel for remote access,',
         'UI skins, and optional Sunshine / Moonlight Web setup for browser remote play.',
         '',
-        'Installed under /opt/myhomegames-server. Start with: myhomegames-server',
+        'Installed under /opt/myhomegames-server with a systemd unit.',
+        'Start/stop: systemctl start|stop myhomegames-server',
         '',
         'Web UI: https://github.com/myhomegames/myhomegames-web',
         `Docs: ${PKG_HOMEPAGE}`,
@@ -853,6 +868,11 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
             section: 'games',
             priority: 'optional',
             architecture: 'amd64',
+            maintainerScripts: {
+              postinst: postinstScript,
+              prerm: prermScript,
+              postrm: postrmScript,
+            },
           },
           modifyTarHeader: (header) => {
             if (header.name && header.name.endsWith('myhomegames-server') && !header.name.endsWith('.env')) {
@@ -866,6 +886,12 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
             const wrapperPath = path.join(usrBin, 'myhomegames-server');
             fs.writeFileSync(wrapperPath, wrapper);
             fs.chmodSync(wrapperPath, '755');
+            const unitDestDir = path.join(dataFolderDestination, 'lib', 'systemd', 'system');
+            fs.mkdirSync(unitDestDir, { recursive: true });
+            fs.copyFileSync(
+              systemdUnitSrc,
+              path.join(unitDestDir, 'myhomegames-server.service'),
+            );
           },
         });
         await deboa.package();
@@ -876,15 +902,37 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
 
       // .rpm via rpm-builder (npm); requires rpmbuild on the system (Linux or brew install rpm on macOS)
       // Paths must be relative to cwd: absolute src paths make globby return [] → empty RPM.
+      // On macOS, plain rpmbuild tags OS=darwin and Linux rpm/dnf refuse the package — force Linux target.
       try {
+        const cpRpm = require('child_process');
+        if (!cpRpm.exec.__mhgLinuxTarget) {
+          const origExecRpm = cpRpm.exec.bind(cpRpm);
+          cpRpm.exec = (cmd, opts, cb) => {
+            if (typeof opts === 'function') {
+              cb = opts;
+              opts = {};
+            }
+            if (typeof cmd === 'string' && /\brpmbuild\b/.test(cmd) && !/--target\b/.test(cmd)) {
+              cmd = cmd.replace(/\brpmbuild\b/, 'rpmbuild --target x86_64-linux');
+            }
+            return origExecRpm(cmd, opts, cb);
+          };
+          cpRpm.exec.__mhgLinuxTarget = true;
+        }
         const buildRpm = require('rpm-builder');
         const optDirRel = path.relative(process.cwd(), optDir) || '.';
         const usrBinDirRel = path.relative(process.cwd(), usrBinDir) || '.';
+        const systemdUnitDirRel = path.relative(process.cwd(), systemdUnitDir) || '.';
         const rpmFiles = [
           { cwd: optDirRel, src: 'myhomegames-server', dest: '/opt/myhomegames-server/' },
           { cwd: optDirRel, src: '.env', dest: '/opt/myhomegames-server/' },
           { cwd: optDirRel, src: SERVER_INFO_FILENAME, dest: '/opt/myhomegames-server/' },
           { cwd: usrBinDirRel, src: 'myhomegames-server', dest: '/usr/bin/' },
+          {
+            cwd: systemdUnitDirRel,
+            src: 'myhomegames-server.service',
+            dest: '/lib/systemd/system/',
+          },
         ];
         const optBinDir = path.join(optDir, 'bin');
         if (fs.existsSync(optBinDir) && fs.readdirSync(optBinDir).length > 0) {
@@ -914,6 +962,31 @@ cd /opt/myhomegames-server && exec ./myhomegames-server "$@"
               tempDir: path.join(BUILD_DIR, 'rpm-work'),
               verbose: false,
               files: rpmFiles,
+              postInstallScript: [
+                'mkdir -p /var/lib/myhomegames-server',
+                'if command -v systemctl >/dev/null 2>&1; then',
+                '  systemctl daemon-reload >/dev/null 2>&1 || true',
+                '  systemctl enable myhomegames-server.service >/dev/null 2>&1 || true',
+                '  if systemctl is-active --quiet myhomegames-server.service 2>/dev/null; then',
+                '    systemctl restart myhomegames-server.service >/dev/null 2>&1 || true',
+                '  else',
+                '    systemctl start myhomegames-server.service >/dev/null 2>&1 || true',
+                '  fi',
+                'fi',
+              ],
+              preUninstallScript: [
+                'if command -v systemctl >/dev/null 2>&1; then',
+                '  systemctl stop myhomegames-server.service >/dev/null 2>&1 || true',
+                '  if [ "$1" = "0" ]; then',
+                '    systemctl disable myhomegames-server.service >/dev/null 2>&1 || true',
+                '  fi',
+                'fi',
+              ],
+              postUninstallScript: [
+                'if command -v systemctl >/dev/null 2>&1; then',
+                '  systemctl daemon-reload >/dev/null 2>&1 || true',
+                'fi',
+              ],
             },
             (err, rpmPath) => {
               if (err) return reject(err);

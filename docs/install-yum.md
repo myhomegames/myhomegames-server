@@ -38,12 +38,25 @@ sudo dnf upgrade myhomegames-server
 sudo dnf remove myhomegames-server
 ```
 
-## Binary location
+## Binary and service
 
 The package installs the server under `/opt/myhomegames-server` and provides `/usr/bin/myhomegames-server`.
+
+A **systemd** unit is installed as `myhomegames-server.service`. After install it is enabled and started automatically.
+
+```bash
+sudo systemctl status myhomegames-server
+sudo systemctl start myhomegames-server
+sudo systemctl stop myhomegames-server
+sudo systemctl restart myhomegames-server
+```
+
+Runtime data (metadata, covers, settings) lives in `/var/lib/myhomegames-server`. Config defaults are in `/opt/myhomegames-server/.env`.
 
 Package metadata (`dnf info` / `yum info`) describes MyHomeGames as a self-hosted game library backend (catalog and optional remote play), with homepage and Apache-2.0 license.
 
 ## Maintainers
 
 Publishing is automatic on `npm run release` when Cloudsmith env vars are configured. See [install-cloudsmith.md](install-cloudsmith.md).
+
+To smoke-test a locally built `.rpm` (install, enable, start/stop, HTTP) on Rocky/RHEL-like guests, see [test-linux-packages.md](test-linux-packages.md). Confirm `rpm -qp --qf 'OS=%{OS}\n'` prints `linux` before copying the package into a guest.

@@ -173,13 +173,37 @@ async function startCloudflareTunnel({
       clearTimeout(timeout);
       reject(err);
     });
+    tunnel.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(
+        new Error(
+          `cloudflared exited before connect (code=${code}${signal ? `, signal=${signal}` : ""})`,
+        ),
+      );
+    });
   }).catch((err) => {
+    try {
+      stopCloudflareTunnel(tunnel);
+    } catch {
+      // ignore
+    }
     if (env.CLOUDFLARE_TUNNEL_STRICT !== "true") {
       console.warn("Cloudflare Tunnel:", err.message || err);
-      return;
     }
     throw err;
   });
+
+  if (!isCloudflareTunnelRunning(tunnel)) {
+    const err = new Error(
+      "cloudflared failed to stay running (wrong binary OS/arch, permissions, or bad token).",
+    );
+    try {
+      stopCloudflareTunnel(tunnel);
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
 
   console.log(
     `Cloudflare Tunnel active (${built.mode}) → ${displayPublicUrl.replace(/\/$/, "")}`,
@@ -187,6 +211,33 @@ async function startCloudflareTunnel({
   console.log(`  Local origin: ${localOrigin}`);
 
   return tunnel;
+}
+
+/**
+ * True when the npm Tunnel wrapper still has a live child process.
+ */
+function isCloudflareTunnelRunning(tunnel) {
+  if (!tunnel) return false;
+  const child = tunnel.process;
+  if (!child || typeof child !== "object") return false;
+  if (child.killed) return false;
+  if (child.exitCode != null) return false;
+  if (child.signalCode != null) return false;
+  return true;
+}
+
+/**
+ * Clear the stored tunnel reference when the child exits.
+ */
+function watchCloudflareTunnel(tunnel, onStopped) {
+  if (!tunnel || typeof onStopped !== "function") return;
+  tunnel.once("exit", () => {
+    try {
+      onStopped(tunnel);
+    } catch {
+      // ignore
+    }
+  });
 }
 
 function stopCloudflareTunnel(tunnel) {
@@ -205,5 +256,7 @@ module.exports = {
   buildCloudflareTunnelArgs,
   startCloudflareTunnel,
   stopCloudflareTunnel,
+  isCloudflareTunnelRunning,
+  watchCloudflareTunnel,
   defaultCloudflaredConfigPath,
 };

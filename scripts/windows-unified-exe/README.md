@@ -6,7 +6,8 @@ On launch it writes files under:
 
 `%LOCALAPPDATA%\MyHomeGames\server-runtime\<version>\`
 
-and runs PowerShell with the tray script.
+copies itself to `%LOCALAPPDATA%\MyHomeGames\MyHomeGames.exe`, creates a **Start Menu**
+shortcut (`MyHomeGames Server`), and runs PowerShell with the tray script.
 
 **Build** (from `myhomegames-server/`):
 

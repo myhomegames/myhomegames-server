@@ -4,6 +4,8 @@ const {
   isCloudflareTunnelEnabled,
   startCloudflareTunnel,
   stopCloudflareTunnel,
+  isCloudflareTunnelRunning,
+  watchCloudflareTunnel,
 } = require("../utils/cloudflareTunnel");
 const {
   loadStoredTunnelCredentials,
@@ -43,9 +45,14 @@ async function startTunnelFromStored(deps, stored) {
     metadataPath,
   });
   setTunnelProcess(tunnel);
+  watchCloudflareTunnel(tunnel, (stopped) => {
+    if (getTunnelProcess() === stopped) {
+      setTunnelProcess(null);
+    }
+  });
 
   return {
-    connected: true,
+    connected: isCloudflareTunnelRunning(tunnel),
     publicUrl: publicUrl || "",
   };
 }
@@ -74,11 +81,14 @@ function registerTunnelRoutes(app, deps) {
 
   app.get("/tunnel/status", (req, res) => {
     const stored = loadStoredTunnelCredentials(metadataPath);
-    const process = getTunnelProcess();
+    const tunnel = getTunnelProcess();
+    if (tunnel && !isCloudflareTunnelRunning(tunnel)) {
+      setTunnelProcess(null);
+    }
     res.json({
       featureEnabled: isCloudflareTunnelEnabled(),
       hasStoredToken: Boolean(stored?.token),
-      connected: Boolean(process),
+      connected: isCloudflareTunnelRunning(getTunnelProcess()),
       publicUrl: (stored?.publicUrl || "").replace(/\/$/, ""),
     });
   });
@@ -119,13 +129,17 @@ function registerTunnelRoutes(app, deps) {
       return res.status(400).json({ error: "Cloudflare Tunnel is not enabled on this server." });
     }
 
-    if (getTunnelProcess()) {
+    const existing = getTunnelProcess();
+    if (existing && isCloudflareTunnelRunning(existing)) {
       const stored = loadStoredTunnelCredentials(metadataPath);
       notifyTunnelConnected();
       return res.json({
         connected: true,
         publicUrl: (stored?.publicUrl || "").replace(/\/$/, ""),
       });
+    }
+    if (existing) {
+      setTunnelProcess(null);
     }
 
     const stored = loadStoredTunnelCredentials(metadataPath);
