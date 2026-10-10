@@ -101,7 +101,12 @@ if (envPath) {
     console.error(`Failed to load .env file from ${envPath}: ${result.error.message}`);
   }
 } else {
-  require("dotenv").config();
+  const namedEnv = path.join(cwd, "MyHomeGames.env");
+  if (!fs.existsSync(path.join(cwd, ".env")) && fs.existsSync(namedEnv)) {
+    require("dotenv").config({ path: namedEnv });
+  } else {
+    require("dotenv").config();
+  }
 }
 
 const express = require("express");

@@ -22,8 +22,10 @@ const {
   SERVER_INFO_FILENAME,
 } = require("../windows-release-assets");
 
-const PUBLISHER = "CN=MyHomeGames";
-const PACKAGE_NAME = "MyHomeGames.Server";
+const PUBLISHER = "CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2";
+const PUBLISHER_DISPLAY_NAME = "lucastancapiano";
+const PACKAGE_NAME = "lucastancapiano.myhomegames-server";
+const DISPLAY_NAME = "myhomegames-server";
 
 function readPackageJson() {
   return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
@@ -122,8 +124,8 @@ function manifestXml(version) {
     Version="${version}"
     ProcessorArchitecture="x64" />
   <Properties>
-    <DisplayName>MyHomeGames Server</DisplayName>
-    <PublisherDisplayName>MyHomeGames</PublisherDisplayName>
+    <DisplayName>${DISPLAY_NAME}</DisplayName>
+    <PublisherDisplayName>${PUBLISHER_DISPLAY_NAME}</PublisherDisplayName>
     <Logo>Assets\\StoreLogo.png</Logo>
     <virtualization:FileSystemWriteVirtualization>
       <virtualization:ExcludedDirectories>
@@ -141,7 +143,7 @@ function manifestXml(version) {
   <Applications>
     <Application Id="Server" Executable="MyHomeGames.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="MyHomeGames Server"
+        DisplayName="${DISPLAY_NAME}"
         Description="MyHomeGames home game server"
         BackgroundColor="#1a1a1a"
         Square150x150Logo="Assets\\Square150x150Logo.png"
@@ -179,7 +181,8 @@ function stagePayload() {
   if (fs.existsSync(readme)) {
     fs.copyFileSync(readme, path.join(LAYOUT_DIR, "README-WINDOWS.txt"));
   }
-  fs.writeFileSync(path.join(LAYOUT_DIR, ".env"), ENV_CONTENT_STANDALONE);
+  // Extensionless ".env" has no Appx content type, so Windows refuses the package.
+  fs.writeFileSync(path.join(LAYOUT_DIR, "MyHomeGames.env"), ENV_CONTENT_STANDALONE);
   fs.writeFileSync(path.join(LAYOUT_DIR, SERVER_INFO_FILENAME), getServerInfoJson());
   copyCloudflaredBinary(path.join(LAYOUT_DIR, "bin"), { platform: "win32", arch: "x64" });
   const trayPng = path.join(BUILD_DIR, "MyHomeGames-Tray.png");
@@ -207,13 +210,178 @@ function buildLauncher() {
   if (result.status !== 0 || !fs.existsSync(outExe)) {
     throw new Error("go build failed for the MSIX launcher.");
   }
+  markAppContainer(outExe);
 }
 
-function packOnWindows(outFile) {
+/** Windows refuses an MSIX whose entry exe lacks IMAGE_DLLCHARACTERISTICS_APPCONTAINER. */
+function markAppContainer(exePath) {
+  const buf = fs.readFileSync(exePath);
+  if (buf.readUInt16LE(0) !== 0x5a4d) {
+    throw new Error(`${path.basename(exePath)} is not a PE executable.`);
+  }
+  const pe = buf.readUInt32LE(0x3c);
+  if (buf.toString("ascii", pe, pe + 4) !== "PE\0\0") {
+    throw new Error(`${path.basename(exePath)} has no PE header.`);
+  }
+  const optional = pe + 24;
+  const magic = buf.readUInt16LE(optional);
+  if (magic !== 0x20b && magic !== 0x10b) {
+    throw new Error(`${path.basename(exePath)} has an unknown PE optional header.`);
+  }
+  const at = optional + 70;
+  buf.writeUInt16LE(buf.readUInt16LE(at) | 0x1000, at);
+  fs.writeFileSync(exePath, buf);
+}
+
+const OPENAPPX_VENV = path.join(BUILD_DIR, "openappx-venv");
+const SIGNING_DIR = path.join(BUILD_DIR, "msix-signing");
+
+function runChecked(command, args, extraEnv) {
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+  });
+  if (result.error) {
+    throw new Error(`Could not run ${command}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.slice(0, 4).join(" ")} failed.`);
+  }
+}
+
+function findPython() {
+  const candidates = ["python3.12", "python3.13", "python3.11", "python3"];
+  for (const name of candidates) {
+    const result = spawnSync(
+      name,
+      ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+      { stdio: "ignore" },
+    );
+    if (result.status === 0) return name;
+  }
+  throw new Error("Python 3.10+ is required to pack an MSIX on macOS or Linux.");
+}
+
+function ensureOpenAppx() {
+  const py = path.join(OPENAPPX_VENV, "bin", "python3");
+  if (!fs.existsSync(py)) {
+    runChecked(findPython(), ["-m", "venv", OPENAPPX_VENV]);
+  }
+  const check = spawnSync(py, ["-c", "import openappx, cryptography"], { stdio: "ignore" });
+  if (check.status !== 0) {
+    runChecked(py, ["-m", "pip", "install", "--disable-pip-version-check", "openappx[sign]"]);
+  }
+  return py;
+}
+
+function certInfo(py, cerPath) {
+  const result = spawnSync(
+    py,
+    [
+      "-c",
+      [
+        "import sys",
+        "from pathlib import Path",
+        "from cryptography import x509",
+        "raw = Path(sys.argv[1]).read_bytes()",
+        "try:",
+        "    cert = x509.load_der_x509_certificate(raw)",
+        "except ValueError:",
+        "    cert = x509.load_pem_x509_certificate(raw)",
+        "print(cert.subject.rfc4514_string())",
+        "print(cert.not_valid_after_utc.year)",
+      ].join("\n"),
+      cerPath,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) return { subject: "", year: 0 };
+  const [subject, year] = String(result.stdout || "").trim().split(/\r?\n/);
+  return { subject: subject || "", year: Number(year) || 0 };
+}
+
+function ensureMsixCert(py) {
+  fs.mkdirSync(SIGNING_DIR, { recursive: true });
+  const stem = path.join(SIGNING_DIR, "MyHomeGames");
+  const pfx = `${stem}.pfx`;
+  const cer = `${stem}.cer`;
+  const info = fs.existsSync(cer) ? certInfo(py, cer) : { subject: "", year: 0 };
+  if (!fs.existsSync(pfx) || !fs.existsSync(cer) || info.subject !== PUBLISHER || info.year < 9999) {
+    fs.rmSync(pfx, { force: true });
+    fs.rmSync(cer, { force: true });
+    runChecked(py, [
+      "-c",
+      [
+        "import datetime, sys",
+        "from pathlib import Path",
+        "from cryptography import x509",
+        "from cryptography.hazmat.primitives import hashes, serialization",
+        "from cryptography.hazmat.primitives.serialization import pkcs12",
+        "from cryptography.hazmat.primitives.serialization import pkcs12",
+        "from cryptography.hazmat.primitives.asymmetric import rsa",
+        "from cryptography.x509.oid import ExtendedKeyUsageOID",
+        "publisher, stem = sys.argv[1], Path(sys.argv[2])",
+        "name = x509.Name.from_rfc4514_string(publisher)",
+        "key = rsa.generate_private_key(public_exponent=65537, key_size=2048)",
+        "now = datetime.datetime.now(datetime.timezone.utc)",
+        "cert = (",
+        "    x509.CertificateBuilder()",
+        "    .subject_name(name)",
+        "    .issuer_name(name)",
+        "    .public_key(key.public_key())",
+        "    .serial_number(x509.random_serial_number())",
+        "    .not_valid_before(now - datetime.timedelta(days=1))",
+        "    .not_valid_after(datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc))",
+        "    .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)",
+        "    .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False, data_encipherment=False, key_agreement=False, key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False), critical=True)",
+        "    .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]), critical=True)",
+        "    .sign(key, hashes.SHA256())",
+        ")",
+        "pfx = pkcs12.serialize_key_and_certificates(b'MyHomeGames MSIX', key, cert, None, serialization.NoEncryption())",
+        "stem.with_suffix('.pfx').write_bytes(pfx)",
+        "stem.with_suffix('.cer').write_bytes(cert.public_bytes(serialization.Encoding.DER))",
+        "print(cert.not_valid_after_utc.date().isoformat())",
+      ].join("\n"),
+      PUBLISHER,
+      stem,
+    ]);
+  }
+  return { pfx, cer };
+}
+
+/**
+ * Pack and sign a layout on macOS or Linux. The .pfx stays in build/msix-signing.
+ * @param {string} layoutDir
+ * @param {string} outFile
+ */
+function packSignedMsix(layoutDir, outFile, cerOut) {
+  const py = ensureOpenAppx();
+  const cert = ensureMsixCert(py);
+  if (fs.existsSync(outFile)) fs.rmSync(outFile);
+  runChecked(py, ["-m", "openappx", "pack", "--root", layoutDir, "--out", outFile]);
+  runChecked(py, ["-m", "openappx", "sign", "--package", outFile, "--pfx", cert.pfx]);
+  runChecked(py, ["-m", "openappx", "inspect", "--package", outFile]);
+  fs.copyFileSync(cert.cer, cerOut);
+  return cerOut;
+}
+
+function packOnWindows(outFile, cerOut) {
   const script = path.join(MSIX_DIR, "pack.ps1");
   const result = spawnSync(
     "powershell.exe",
-    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Layout", LAYOUT_DIR, "-OutFile", outFile],
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      script,
+      "-Layout",
+      LAYOUT_DIR,
+      "-OutFile",
+      outFile,
+      "-CerFile",
+      cerOut,
+    ],
     { stdio: "inherit" },
   );
   if (result.error) {
@@ -232,8 +400,10 @@ function buildWindowsMsix(options = {}) {
   if (options.ensurePkg && !findWinExe()) {
     runPkgWindowsOnly();
   }
-  const version = msixVersion(readPackageJson().version);
-  const outFile = path.join(BUILD_DIR, `MyHomeGames-${readPackageJson().version}-win-x64.msix`);
+  const packageVersion = readPackageJson().version;
+  const version = msixVersion(packageVersion);
+  const outFile = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}-win-x64.msix`);
+  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}.cer`);
   resetLayout();
   stagePayload();
   buildLauncher();
@@ -244,15 +414,17 @@ function buildWindowsMsix(options = {}) {
   writeLogo(path.join(assets, "StoreLogo.png"), 50);
 
   if (process.platform === "win32") {
-    packOnWindows(outFile);
-    console.log(`✅ Windows MSIX: ${path.basename(outFile)}`);
-    return outFile;
+    packOnWindows(outFile, cerOut);
+  } else {
+    packSignedMsix(LAYOUT_DIR, outFile, cerOut);
   }
 
-  console.log(`✅ Windows MSIX layout: ${LAYOUT_DIR}`);
-  console.log("   Pack and sign on Windows (SDK makeappx + signtool):");
-  console.log(`   powershell -File scripts/windows-msix/pack.ps1 -Layout build/msix-layout -OutFile build/${path.basename(outFile)}`);
-  return LAYOUT_DIR;
+  console.log(`✅ Windows MSIX: ${path.basename(outFile)}`);
+  console.log(`   Public cert: ${cerOut}`);
+  console.log("   On Windows, enable sideload (or Developer Mode), then:");
+  console.log(`   Import-Certificate -FilePath ${path.basename(cerOut)} -CertStoreLocation Cert:\\CurrentUser\\TrustedPeople`);
+  console.log(`   Add-AppxPackage -Path ${path.basename(outFile)}`);
+  return outFile;
 }
 
 module.exports = {
@@ -260,6 +432,7 @@ module.exports = {
   PUBLISHER,
   msixVersion,
   buildWindowsMsix,
+  packSignedMsix,
 };
 
 if (require.main === module) {

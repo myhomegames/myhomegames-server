@@ -1,6 +1,8 @@
 # MyHomeGames Windows MSIX
 
-The package contains the `pkg` server, `MyHomeGames-Server-Tray.ps1`, `.env`, `server-info.json`, and optional tray icon. `MyHomeGames.exe` is the entry point: it starts the tray from the install folder. It does not extract files or create a Start Menu shortcut. Windows does that from `AppxManifest.xml`.
+The package contains the `pkg` server, `MyHomeGames-Server-Tray.ps1`, `MyHomeGames.env`, `server-info.json`, and optional tray icon. `MyHomeGames.exe` is the entry point: it starts the tray from the install folder. It does not extract files or create a Start Menu shortcut. Windows does that from `AppxManifest.xml`.
+
+The config file is `MyHomeGames.env` rather than `.env`. An extensionless file has no Appx content type, and Windows refuses to install the package. The tray and the server read this name when `.env` is absent. The self-extracting exe still ships `.env`.
 
 Library data stays in the real `%APPDATA%\MyHomeGames` and `%LOCALAPPDATA%\MyHomeGames` folders. The manifest excludes those paths from MSIX file virtualization, so an existing library is the one the package uses.
 
@@ -14,11 +16,15 @@ npm run build:win-msix
 
 Requires **Go 1.21+**. Runs `pkg` (`node18-win-x64`) if `build/` has no Windows server exe.
 
-On macOS or Linux this writes `build/msix-layout/`. On Windows, with the Windows 10/11 SDK (`makeappx`, `signtool`), it also writes a signed `build/MyHomeGames-<ver>-win-x64.msix`. The manifest publisher is `CN=MyHomeGames`. If that cert is missing, `pack.ps1` creates a self-signed one and trusts it for the current user.
+On macOS and Linux this writes a signed `build/MyHomeGames-<ver>-win-x64.msix` and `build/MyHomeGames-<ver>.cer`. Packing uses [openappx](https://github.com/gianlucamazza/openappx) (Python 3.10+). The first run creates `build/openappx-venv` and a self-signed certificate for `CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2` in `build/msix-signing/`, valid through 9999-12-31. Keep that directory: a new certificate must be trusted again on Windows. The package identity is `lucastancapiano.myhomegames-server`.
 
-Pack a layout that was staged on another machine:
+`npm run release` uploads both files to the GitHub release, next to the Windows zip.
+
+On Windows, with the Windows 10/11 SDK (`makeappx`, `signtool`), the same command packs and signs with the SDK instead. `pack.ps1` also writes the public `.cer`.
+
+Install on Windows (sideload or Developer Mode enabled):
 
 ```powershell
-powershell -File scripts/windows-msix/pack.ps1 -Layout build/msix-layout -OutFile build/MyHomeGames-1.2.5-win-x64.msix
-Add-AppxPackage -Path build/MyHomeGames-1.2.5-win-x64.msix
+Import-Certificate -FilePath MyHomeGames-1.2.5.cer -CertStoreLocation Cert:\CurrentUser\TrustedPeople
+Add-AppxPackage -Path MyHomeGames-1.2.5-win-x64.msix
 ```

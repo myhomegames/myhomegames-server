@@ -88,6 +88,10 @@ if (-not $serverExe) {
 }
 
 $envPath = Join-Path $ScriptDir ".env"
+if (-not (Test-Path -LiteralPath $envPath)) {
+  # MSIX cannot carry an extensionless .env (no content type). The package uses this name.
+  $envPath = Join-Path $ScriptDir "MyHomeGames.env"
+}
 $envMap = Read-DotEnv $envPath
 
 $httpsOn = ($envMap["HTTPS_ENABLED"] -eq "true")
