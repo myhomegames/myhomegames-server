@@ -18,7 +18,7 @@ Requires **Go 1.21+**. Runs `pkg` (`node18-win-x64`) if `build/` has no Windows 
 
 On macOS and Linux this writes a signed `build/MyHomeGames-<ver>-win-x64.msix` and `build/MyHomeGames-<ver>.cer`. Packing uses [openappx](https://github.com/gianlucamazza/openappx) (Python 3.10+). The first run creates `build/openappx-venv` and a self-signed certificate for `CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2` in `build/msix-signing/`, valid through 9999-12-31. Keep that directory: a new certificate must be trusted again on Windows. The package identity is `lucastancapiano.myhomegames-server`.
 
-`npm run release` uploads both files to the GitHub release, next to the Windows zip.
+These files are for Partner Center and local sideload. `npm run release` does not upload them; the public Windows download remains the zip.
 
 On Windows, with the Windows 10/11 SDK (`makeappx`, `signtool`), the same command packs and signs with the SDK instead. `pack.ps1` also writes the public `.cer`.
 

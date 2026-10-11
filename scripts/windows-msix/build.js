@@ -23,7 +23,7 @@ const {
 } = require("../windows-release-assets");
 
 const PUBLISHER = "CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2";
-const PUBLISHER_DISPLAY_NAME = "lucastancapiano";
+const PUBLISHER_DISPLAY_NAME = "it.vige";
 const PACKAGE_NAME = "lucastancapiano.myhomegames-server";
 const DISPLAY_NAME = "myhomegames-server";
 
