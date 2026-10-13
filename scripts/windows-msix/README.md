@@ -1,6 +1,8 @@
 # MyHomeGames Windows MSIX
 
-The package contains the `pkg` server, `MyHomeGames-Server-Tray.ps1`, `MyHomeGames.env`, `server-info.json`, and optional tray icon. `MyHomeGames.exe` is the entry point: it starts the tray from the install folder. It does not extract files or create a Start Menu shortcut. Windows does that from `AppxManifest.xml`.
+The package contains the `pkg` server, `MyHomeGames-Server-Tray.ps1`, `MyHomeGames.env`, `server-info.json`, and optional tray icon. `MyHomeGames.exe` is the entry point: it starts the server executable, then the tray. It does not extract files or create a Start Menu shortcut. Windows does that from `AppxManifest.xml`.
+
+PowerShell cannot start another executable inside `WindowsApps` (CreateProcess returns access denied). The tray only attaches to the process id passed by the entry point (`MYGAMES_SERVER_PID`). The zip launcher still starts the server from the tray script, because those files are extracted under `%LOCALAPPDATA%`.
 
 The config file is `MyHomeGames.env` rather than `.env`. An extensionless file has no Appx content type, and Windows refuses to install the package. The tray and the server read this name when `.env` is absent. The self-extracting exe still ships `.env`.
 

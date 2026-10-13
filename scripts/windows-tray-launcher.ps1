@@ -15,6 +15,17 @@ $TrayErrorLog = if ($ScriptDir) {
 } else {
   Join-Path $env:TEMP "MyHomeGames-Server-Tray-errors.log"
 }
+# WindowsApps is not writable. Keep the tray log next to the other package data.
+if ($ScriptDir -and $ScriptDir -match '\\WindowsApps\\') {
+  $logDir = Join-Path $env:LOCALAPPDATA "MyHomeGames"
+  if (-not $logDir) { $logDir = $env:TEMP }
+  try {
+    if (-not (Test-Path -LiteralPath $logDir)) {
+      New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $TrayErrorLog = Join-Path $logDir "MyHomeGames-Server-Tray-errors.log"
+  } catch {}
+}
 
 function Write-TrayErrorLog {
   param(
@@ -131,30 +142,57 @@ if (Test-Path -LiteralPath $infoPath) {
   $aboutText = "MyHomeGames Server`n`nAPI: $apiBase"
 }
 
-# Start server process without a console window
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $serverExe
-$psi.WorkingDirectory = $ScriptDir
-$psi.UseShellExecute = $false
-$psi.CreateNoWindow = $true
-$psi.RedirectStandardOutput = $false
-$psi.RedirectStandardError = $false
+# Start server process without a console window.
+# The MSIX entry point starts the server itself and sets MYGAMES_SERVER_PID.
+# PowerShell cannot execute other files under WindowsApps (access denied).
+$global:ServerProcess = $null
+if ($env:MYGAMES_SERVER_PID) {
+  $serverPid = 0
+  if ([int]::TryParse($env:MYGAMES_SERVER_PID, [ref]$serverPid) -and $serverPid -gt 0) {
+    try {
+      $global:ServerProcess = Get-Process -Id $serverPid -ErrorAction Stop
+    } catch {
+      $full = $_.Exception.ToString()
+      if ($_.ScriptStackTrace) { $full = $full + [Environment]::NewLine + $_.ScriptStackTrace }
+      Write-TrayErrorLog -Section "Could not attach to server process" -Detail $full
+      $em = "Could not start server: $($_.Exception.Message)"
+      [Console]::Error.WriteLine("MyHomeGames tray: $em")
+      [System.Windows.Forms.MessageBox]::Show(
+        ($em + "`n`nFull details saved to:`n$TrayErrorLog"),
+        "MyHomeGames Server",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      ) | Out-Null
+      exit 1
+    }
+  }
+}
 
-try {
-  $global:ServerProcess = [System.Diagnostics.Process]::Start($psi)
-} catch {
-  $full = $_.Exception.ToString()
-  if ($_.ScriptStackTrace) { $full = $full + [Environment]::NewLine + $_.ScriptStackTrace }
-  Write-TrayErrorLog -Section "Could not start server process" -Detail $full
-  $em = "Could not start server: $($_.Exception.Message)"
-  [Console]::Error.WriteLine("MyHomeGames tray: $em")
-  [System.Windows.Forms.MessageBox]::Show(
-    ($em + "`n`nFull details saved to:`n$TrayErrorLog"),
-    "MyHomeGames Server",
-    [System.Windows.Forms.MessageBoxButtons]::OK,
-    [System.Windows.Forms.MessageBoxIcon]::Error
-  ) | Out-Null
-  exit 1
+if (-not $global:ServerProcess) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $serverExe
+  $psi.WorkingDirectory = $ScriptDir
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $false
+  $psi.RedirectStandardError = $false
+
+  try {
+    $global:ServerProcess = [System.Diagnostics.Process]::Start($psi)
+  } catch {
+    $full = $_.Exception.ToString()
+    if ($_.ScriptStackTrace) { $full = $full + [Environment]::NewLine + $_.ScriptStackTrace }
+    Write-TrayErrorLog -Section "Could not start server process" -Detail $full
+    $em = "Could not start server: $($_.Exception.Message)"
+    [Console]::Error.WriteLine("MyHomeGames tray: $em")
+    [System.Windows.Forms.MessageBox]::Show(
+      ($em + "`n`nFull details saved to:`n$TrayErrorLog"),
+      "MyHomeGames Server",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
+    exit 1
+  }
 }
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon

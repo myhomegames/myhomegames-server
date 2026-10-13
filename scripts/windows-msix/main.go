@@ -55,6 +55,34 @@ func appendErrorLog(section, body string) {
 	_, _ = fmt.Fprintf(f, "==== %s ====\n[%s]\n%s\n\n", ts, section, body)
 }
 
+func startServer(dir string) (*exec.Cmd, error) {
+	var exe string
+	for _, name := range []string{
+		"myhomegames-server-win-x64.exe",
+		"myhomegames-server-node18-win-x64.exe",
+		"myhomegames-server.exe",
+	} {
+		candidate := filepath.Join(dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			exe = candidate
+			break
+		}
+	}
+	if exe == "" {
+		return nil, fmt.Errorf("server executable not found in %s", dir)
+	}
+	cmd := exec.Command(exe)
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
 func packageDir() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -100,11 +128,27 @@ func main() {
 		return
 	}
 
+	// PowerShell is outside the package, so it cannot CreateProcess another exe
+	// under WindowsApps (Win32 error 5, access denied). This entry process can.
+	server, err := startServer(dir)
+	if err != nil {
+		appendErrorLog("Server process", err.Error())
+		showMsg("MyHomeGames Server", "Could not start server:\n"+err.Error()+
+			"\n\nDetails:\n"+filepath.Join(dataDir(), errLogName))
+		return
+	}
+	defer func() {
+		if server.Process != nil {
+			_ = server.Process.Kill()
+		}
+	}()
+
 	cmd := exec.Command(
 		"powershell.exe",
 		"-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1,
 	)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), fmt.Sprintf("MYGAMES_SERVER_PID=%d", server.Process.Pid))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stderr, stdout bytes.Buffer
 	cmd.Stderr = &stderr
