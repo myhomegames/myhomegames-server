@@ -1,6 +1,6 @@
 "use strict";
 
-const { requestMoonlightWebJson, postJson } = require("./moonlightWebCredentials");
+const { requestMoonlightWebJson, requestJson, postJson } = require("./moonlightWebCredentials");
 const {
   DEFAULT_USERNAME: DEFAULT_SUNSHINE_USERNAME,
   DEFAULT_PASSWORD: DEFAULT_SUNSHINE_PASSWORD,
@@ -9,6 +9,7 @@ const {
 const DEFAULT_SUNSHINE_HTTP_PORT = 47989;
 const DEFAULT_SUNSHINE_HTTPS_PORT = 47990;
 const DEFAULT_CLIENT_NAME = "MyHomeGames";
+const PAIRING_ID_RE = /^[0-9a-fA-F]{32}$/;
 
 function resolveSunshineAddressForMoonlight({ kind, env = process.env, lanIp = null } = {}) {
   const override = env.MOONLIGHT_WEB_SUNSHINE_ADDRESS?.trim();
@@ -159,26 +160,85 @@ async function findHostByAddress(baseUrl, cookie, address) {
   return null;
 }
 
-function resolveSunshinePinUrl(env = process.env) {
+function resolveSunshineApiBase(env = process.env) {
   const override = env.SUNSHINE_API_BASE?.trim();
-  if (override) {
-    return `${override.replace(/\/$/, "")}/api/pin`;
-  }
+  if (override) return override.replace(/\/$/, "");
   const host = String(env.SUNSHINE_HOST || "127.0.0.1").trim() || "127.0.0.1";
   const port = resolveSunshineHttpsPort(env);
-  return `https://${host}:${port}/api/pin`;
+  return `https://${host}:${port}`;
+}
+
+function resolveSunshinePinUrl(env = process.env) {
+  return `${resolveSunshineApiBase(env)}/api/pin`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Sunshine 2026+ lists pending GameStream approvals on GET /api/pin.
+ * Older builds only accept POST and answer 404/405 here.
+ * @returns {Promise<string[]|null>} ids, or null when this Sunshine has no pending-list API
+ */
+async function listPendingSunshinePairingIds(env = process.env) {
+  const auth = resolveSunshineAdminCredentials(env);
+  const response = await requestJson({
+    urlString: resolveSunshinePinUrl(env),
+    method: "GET",
+    timeoutMs: 10_000,
+    auth,
+  });
+  if (response.statusCode === 404 || response.statusCode === 405) return null;
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(
+      `Sunshine GET /api/pin failed (${response.statusCode}): ${response.body.slice(0, 200)}`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(response.body || "{}");
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed.pairings)) return null;
+  return parsed.pairings
+    .map((item) => String(item?.id || "").trim())
+    .filter((id) => PAIRING_ID_RE.test(id));
+}
+
+/** Newest pending approval id, null on legacy Sunshine, "" when the list stays empty. */
+async function resolveSunshinePairingId(env = process.env) {
+  const deadline = Date.now() + 4_000;
+  while (Date.now() <= deadline) {
+    const ids = await listPendingSunshinePairingIds(env);
+    if (ids == null) return null;
+    if (ids.length) return ids[ids.length - 1];
+    await sleep(250);
+  }
+  return "";
 }
 
 async function submitSunshinePin({ pin, name, env = process.env }) {
   const auth = resolveSunshineAdminCredentials(env);
-  const response = await postJson(
-    resolveSunshinePinUrl(env),
-    { pin: String(pin), name: name || DEFAULT_CLIENT_NAME },
-    30_000,
-    { auth },
-  );
+  const pairingId = await resolveSunshinePairingId(env);
+  if (pairingId === "") {
+    throw new Error("Sunshine has no pending pairing request to approve");
+  }
+  const body = { pin: String(pin), name: name || DEFAULT_CLIENT_NAME };
+  if (pairingId) body.pairing_id = pairingId;
+  const response = await postJson(resolveSunshinePinUrl(env), body, 30_000, { auth });
   if (response.statusCode < 200 || response.statusCode >= 300) {
     throw new Error(`Sunshine /api/pin failed (${response.statusCode}): ${response.body.slice(0, 200)}`);
+  }
+  try {
+    const parsed = JSON.parse(response.body || "{}");
+    if (parsed && parsed.status === false) {
+      throw new Error("Sunshine rejected the Moonlight Web pairing PIN");
+    }
+  } catch (error) {
+    if (error instanceof SyntaxError) return response;
+    throw error;
   }
   return response;
 }
@@ -213,6 +273,7 @@ function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
       let buffer = "";
       let pinSent = false;
       let settled = false;
+      let pinError = null;
       let pinPromise = Promise.resolve();
       let pairedPayload = null;
       const clientName = env.MOONLIGHT_WEB_CLIENT_NAME?.trim() || DEFAULT_CLIENT_NAME;
@@ -224,11 +285,17 @@ function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
         else resolve(value);
       };
 
+      const finishAfterPin = (fallbackError) => {
+        pinPromise.then(() => {
+          if (pinError) finish(pinError);
+          else if (pairedPayload) finish(null, { paired: true, host: pairedPayload });
+          else finish(fallbackError);
+        });
+      };
+
       const maybeFinishSuccess = () => {
         if (!pairedPayload || !pinSent) return;
-        pinPromise
-          .then(() => finish(null, { paired: true, host: pairedPayload }))
-          .catch((error) => finish(error));
+        finishAfterPin(new Error("Moonlight Web pairing stream ended before confirmation"));
       };
 
       const req = lib.request(
@@ -274,10 +341,12 @@ function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
               const pin = extractPin(message);
               if (pin && !pinSent) {
                 pinSent = true;
-                pinPromise = new Promise((resolveDelay) => setTimeout(resolveDelay, 1500))
-                  .then(() => submitSunshinePin({ pin, name: clientName, env }))
+                pinPromise = submitSunshinePin({ pin, name: clientName, env })
                   .then(() => {
                     console.log(`Sunshine accepted Moonlight Web pairing PIN (${pin}).`);
+                  })
+                  .catch((error) => {
+                    pinError = error;
                   });
                 maybeFinishSuccess();
                 continue;
@@ -301,8 +370,8 @@ function pairMoonlightHost(baseUrl, cookie, hostId, env = process.env) {
           });
           res.on("end", () => {
             if (settled) return;
-            if (pairedPayload && pinSent) {
-              maybeFinishSuccess();
+            if (pinSent) {
+              finishAfterPin(new Error("Moonlight Web pairing stream ended before confirmation"));
               return;
             }
             finish(new Error("Moonlight Web pairing stream ended before confirmation"));
