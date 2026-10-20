@@ -34,4 +34,13 @@ const result = spawnSync("npx", ["release-it", "--no-increment", "--ci", ...proc
   shell: process.platform === "win32",
 });
 
-process.exit(result.status ?? 1);
+if ((result.status ?? 1) !== 0) {
+  process.exit(result.status ?? 1);
+}
+
+const align = spawnSync("node", ["scripts/align-main-to-release-tag.mjs"], {
+  stdio: "inherit",
+  cwd: root,
+  env: process.env,
+});
+process.exit(align.status ?? 1);

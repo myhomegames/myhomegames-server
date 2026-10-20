@@ -263,6 +263,7 @@ This will:
 3. Create a GitHub release with the changelog
 4. Attach release assets (`.pkg`, `.deb`, `.rpm`, `.tar.gz`, `.zip`)
 5. Run **`scripts/publish-package-repos.js`** (optional; see below)
+6. Merge the new release tag into `main` and push `main` (`scripts/align-main-to-release-tag.mjs`). This runs only after the steps above succeed. The current branch is left as-is.
 
 ### Package repositories (APT / YUM / Homebrew)
 
