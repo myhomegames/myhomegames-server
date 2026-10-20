@@ -164,6 +164,123 @@ describe("moonlightWebPairing", () => {
     }
   });
 
+  it("sends Sunshine the pending pairing id with the PIN", async () => {
+    let sunshinePin = null;
+    const hosts = [];
+    const pairingId = "0123456789abcdef0123456789abcdef";
+
+    const moonlight = http.createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/api/hosts") {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(
+          `${JSON.stringify({
+            hosts: hosts.map((h) => ({
+              host_id: h.host_id,
+              name: h.name,
+              paired: h.paired,
+              owner: "ThisUser",
+              server_state: "Free",
+            })),
+          })}\n`,
+        );
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/host") {
+        const hostId = Number(url.searchParams.get("host_id"));
+        const host = hosts.find((h) => h.host_id === hostId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ host }));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/host") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          const parsed = JSON.parse(body);
+          const host = {
+            host_id: 9,
+            name: "Sunshine",
+            paired: "NotPaired",
+            address: parsed.address,
+            http_port: parsed.http_port,
+            local_ip: parsed.address,
+            owner: "ThisUser",
+            server_state: "Free",
+          };
+          hosts.push(host);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ host }));
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/pair") {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write(`${JSON.stringify({ Pin: "2468" })}\n`);
+        setTimeout(() => {
+          hosts[0].paired = "Paired";
+          res.end(`${JSON.stringify({ Paired: hosts[0] })}\n`);
+        }, 80);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    const sunshine = http.createServer((req, res) => {
+      if (req.method === "GET" && req.url === "/api/pin") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ pairings: [{ id: pairingId, name: "", address: "127.0.0.1" }] }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/pin") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          sunshinePin = JSON.parse(body);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: true }));
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise((resolve) => moonlight.listen(0, "127.0.0.1", resolve));
+    await new Promise((resolve) => sunshine.listen(0, "127.0.0.1", resolve));
+    const moonlightPort = moonlight.address().port;
+    const sunshinePort = sunshine.address().port;
+
+    try {
+      const result = await ensureMoonlightWebSunshinePairing({
+        baseUrl: `http://127.0.0.1:${moonlightPort}`,
+        cookie: "mlSession=test",
+        kind: "native",
+        env: {
+          SUNSHINE_API_BASE: `http://127.0.0.1:${sunshinePort}`,
+          SUNSHINE_USERNAME: "sunshine",
+          SUNSHINE_PASSWORD: "admin",
+          MOONLIGHT_WEB_CLIENT_NAME: "MyHomeGames",
+        },
+      });
+
+      expect(result.paired).toBe(true);
+      expect(sunshinePin).toEqual({
+        pin: "2468",
+        name: "MyHomeGames",
+        pairing_id: pairingId,
+      });
+    } finally {
+      await new Promise((resolve) => moonlight.close(resolve));
+      await new Promise((resolve) => sunshine.close(resolve));
+    }
+  });
+
   it("skips pairing when host is already Paired", async () => {
     const moonlight = http.createServer((req, res) => {
       const url = new URL(req.url, "http://127.0.0.1");

@@ -101,7 +101,12 @@ if (envPath) {
     console.error(`Failed to load .env file from ${envPath}: ${result.error.message}`);
   }
 } else {
-  require("dotenv").config();
+  const namedEnv = path.join(cwd, "MyHomeGames.env");
+  if (!fs.existsSync(path.join(cwd, ".env")) && fs.existsSync(namedEnv)) {
+    require("dotenv").config({ path: namedEnv });
+  } else {
+    require("dotenv").config();
+  }
 }
 
 const express = require("express");
@@ -1216,6 +1221,44 @@ async function maybeStartMoonlightWeb() {
   }
 }
 
+let frontendBrowserOpened = false;
+
+/** Open FRONTEND_URL in the default browser once per process (release .env and local .env). */
+function openFrontendInBrowser() {
+  if (frontendBrowserOpened) return;
+  const raw = String(process.env.FRONTEND_URL || "").trim();
+  if (!raw) return;
+  let target;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    target = url.toString();
+  } catch {
+    console.warn(`FRONTEND_URL is not a valid URL: ${raw}`);
+    return;
+  }
+  frontendBrowserOpened = true;
+  console.log(`Opening browser at ${target}`);
+  try {
+    const child =
+      process.platform === "darwin"
+        ? spawn("open", [target], { detached: true, stdio: "ignore" })
+        : process.platform === "win32"
+          ? spawn("cmd", ["/c", "start", "", target], {
+              detached: true,
+              stdio: "ignore",
+              windowsHide: true,
+            })
+          : spawn("xdg-open", [target], { detached: true, stdio: "ignore" });
+    child.on("error", (err) => {
+      console.warn(`Could not open browser: ${err.message || err}`);
+    });
+    child.unref();
+  } catch (err) {
+    console.warn(`Could not open browser: ${err?.message || err}`);
+  }
+}
+
 /**
  * @returns {Promise<{ signalReady: boolean }>}
  * signalReady false = Cloudflare Tunnel will connect later via the web app; Dock keeps bouncing.
@@ -1323,6 +1366,7 @@ if (process.env.NODE_ENV !== 'test') {
         httpsServer = https.createServer({ key, cert }, app);
         httpsServer.listen(HTTPS_PORT, "127.0.0.1", () => {
           console.log(`MyHomeGames server listening on https://localhost:${HTTPS_PORT}`);
+          openFrontendInBrowser();
           console.log(`Using SSL certificates from: ${metadataCertsDir}`);
           const localOrigin = `https://127.0.0.1:${HTTPS_PORT}`;
           onServerListening(localOrigin)
@@ -1363,6 +1407,7 @@ if (process.env.NODE_ENV !== 'test') {
     const localOrigin = `http://127.0.0.1:${HTTP_PORT}`;
     httpServer.listen(HTTP_PORT, '127.0.0.1', () => {
       console.log(`MyHomeGames server listening on http://localhost:${HTTP_PORT}`);
+      openFrontendInBrowser();
       onServerListening(localOrigin)
         .then((state) => {
           if (state?.signalReady) {

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { buildWindowsUnifiedExe } = require('./windows-release-assets');
+const { buildWindowsMsix } = require('./windows-msix/build');
 const releaseEnvContent = require('./release-env-content');
 const { copyCloudflaredBinary } = require('./copy-cloudflared-binary');
 
@@ -791,6 +792,11 @@ if (linuxExe || winExe) {
       buildWindowsUnifiedExe();
     } catch (e) {
       console.log('⚠️  Windows packaging failed:', e.message);
+    }
+    try {
+      buildWindowsMsix();
+    } catch (e) {
+      console.log('⚠️  Windows MSIX layout failed:', e.message);
     }
   }
 

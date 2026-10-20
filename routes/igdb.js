@@ -261,7 +261,8 @@ function fetchIGDBGameNamesByIds(ids, accessToken, clientId) {
   const uniqueIds = [...new Set(ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
   if (uniqueIds.length === 0) return Promise.resolve(new Map());
 
-  const postData = `fields id,name; where id = (${uniqueIds.join(",")});`;
+  // IGDB defaults to 10 rows when limit is omitted, so longer id lists came back incomplete.
+  const postData = `fields id,name; where id = (${uniqueIds.join(",")}); limit ${Math.min(uniqueIds.length, 500)};`;
 
   const options = {
     hostname: "api.igdb.com",
@@ -317,7 +318,8 @@ function fetchIGDBGameDetailsByIds(ids, accessToken, clientId) {
   const uniqueIds = [...new Set(ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
   if (uniqueIds.length === 0) return Promise.resolve(new Map());
 
-  const postData = `fields id,name,cover.url,first_release_date; where id = (${uniqueIds.join(",")});`;
+  // IGDB defaults to 10 rows when limit is omitted, so longer id lists came back incomplete.
+  const postData = `fields id,name,cover.url,first_release_date; where id = (${uniqueIds.join(",")}); limit ${Math.min(uniqueIds.length, 500)};`;
 
   const options = {
     hostname: "api.igdb.com",
