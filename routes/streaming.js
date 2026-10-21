@@ -1,3 +1,4 @@
+const path = require("path");
 const { launchGame, resolveGameLaunch } = require("../utils/gameLauncher");
 const { recordGamePlayed } = require("./library");
 const {
@@ -93,7 +94,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
         sunshineVersion: manifest?.version || null,
         moonlightWebEnabled: isMoonlightWebEnabled(),
         moonlightWebReachable,
-        moonlightWebInstalled: Boolean(moonlightExecutable) || moonlightManifest?.kind === "docker",
+        moonlightWebInstalled: Boolean(moonlightExecutable),
         moonlightWebVersion: moonlightManifest?.version || null,
         moonlightWebKind: moonlightManifest?.kind || null,
         ready:
@@ -133,8 +134,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
             : undefined;
 
       const moonlightInstallDir = resolveMoonlightWebInstallDir(metadataPath);
-      const moonlightKind = readMoonlightWebManifest(moonlightInstallDir)?.kind || null;
-      const moonlightKindForApi = moonlightKind === "docker" ? "docker" : null;
+      const moonlightExecutable = findMoonlightWebExecutable(moonlightInstallDir);
 
       const resolved = resolveGameLaunch(getAllGames(), metadataPath, gameId, executableName);
       if (!resolved.ok) {
@@ -176,7 +176,7 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       try {
         moonlightStream = await ensureMoonlightAppStreamReady({
           baseUrl: streaming.moonlightWebUrl,
-          kind: moonlightKindForApi,
+          kind: null,
           env: process.env,
           lanIp: resolveLanIpHint(),
           cachedHostId: streaming.moonlightDesktopHostId,
@@ -203,10 +203,10 @@ function registerStreamingRoutes(app, optionalToken, readSettings, metadataPath,
       const sunshineReachable = await probeSunshineReachable(streaming);
 
       try {
-        if (moonlightKind === "docker" || moonlightKind == null) {
+        if (moonlightExecutable) {
           await refreshMoonlightTurnIceServers({
             installDir: moonlightInstallDir,
-            kind: moonlightKind === "docker" ? "docker" : null,
+            packageRoot: path.dirname(moonlightExecutable),
           });
         }
       } catch (error) {

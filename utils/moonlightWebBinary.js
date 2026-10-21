@@ -5,10 +5,9 @@ const fs = require("fs");
 const https = require("https");
 const os = require("os");
 const path = require("path");
-const { ensureDockerRuntime, isDockerDaemonReady } = require("./dockerRuntime");
 
-const GITHUB_RELEASES_API = "https://api.github.com/repos/MrCreativ3001/moonlight-web-stream/releases/latest";
-const DOCKER_IMAGE = "mrcreativ3001/moonlight-web-stream";
+const MOONLIGHT_WEB_GITHUB_REPO = "flashboss/moonlight-web-stream";
+const GITHUB_RELEASES_API = `https://api.github.com/repos/${MOONLIGHT_WEB_GITHUB_REPO}/releases/latest`;
 const INSTALL_MANIFEST = "install.json";
 const MIN_ARCHIVE_BYTES = 1024 * 1024;
 
@@ -32,11 +31,7 @@ function writeInstallManifest(installDir, manifest) {
   fs.writeFileSync(path.join(installDir, INSTALL_MANIFEST), JSON.stringify(manifest, null, 2), "utf8");
 }
 
-function isDockerAvailable() {
-  return isDockerDaemonReady();
-}
-
-/** Official GitHub release archives (Windows / Linux only — no macOS binary). */
+/** GitHub release archives from the fork that also publishes macOS builds. */
 function detectNativeInstallStrategy() {
   if (process.platform === "win32") {
     return {
@@ -61,28 +56,35 @@ function detectNativeInstallStrategy() {
     };
   }
 
+  if (process.platform === "darwin") {
+    if (process.arch === "arm64") {
+      return {
+        kind: "tar.gz",
+        assetPattern: /^moonlight-web-aarch64-apple-darwin\.tar\.gz$/i,
+        image: null,
+      };
+    }
+    if (process.arch === "x64") {
+      return {
+        kind: "tar.gz",
+        assetPattern: /^moonlight-web-x86_64-apple-darwin\.tar\.gz$/i,
+        image: null,
+      };
+    }
+  }
+
   return null;
 }
 
-/**
- * Prefer native GitHub archives on Windows/Linux. Docker is used on macOS (no official
- * native binary), when MOONLIGHT_WEB_FORCE_DOCKER=true, or if native install fails.
- * MOONLIGHT_WEB_FORCE_NATIVE=true skips the Docker fallback after a native failure.
- */
-function detectInstallStrategy(env = process.env) {
-  if (env.MOONLIGHT_WEB_FORCE_DOCKER === "true") {
-    return { kind: "docker", assetPattern: null, image: null };
-  }
+/** Download the release archive for this platform. */
+function detectInstallStrategy() {
+  return detectNativeInstallStrategy();
+}
 
-  if (process.platform === "darwin") {
-    // No official macOS binary — Docker required.
-    return { kind: "docker", assetPattern: null, image: null, dockerRequired: true };
-  }
-
-  const native = detectNativeInstallStrategy();
-  if (native) return native;
-
-  return { kind: "docker", assetPattern: null, image: null };
+function missingPackageError(installDir) {
+  return new Error(
+    `Moonlight Web has no package for ${process.platform}/${process.arch} (${installDir}).`,
+  );
 }
 
 function fetchJson(url) {
@@ -157,20 +159,11 @@ function downloadFile(url, destPath) {
   });
 }
 
-function resolveDockerImage(env = process.env) {
-  const pinned = env.MOONLIGHT_WEB_VERSION?.trim();
-  if (!pinned || pinned === "latest") {
-    return `${DOCKER_IMAGE}:latest`;
-  }
-  const tag = pinned.startsWith("v") ? pinned : `v${pinned.replace(/^v/i, "")}`;
-  return `${DOCKER_IMAGE}:${tag}`;
-}
-
 async function resolveLatestNativeAsset(strategy, env = process.env) {
   const pinned = env.MOONLIGHT_WEB_VERSION?.trim();
   const release = pinned
     ? await fetchJson(
-        `https://api.github.com/repos/MrCreativ3001/moonlight-web-stream/releases/tags/v${pinned.replace(/^v/i, "")}`,
+        `https://api.github.com/repos/${MOONLIGHT_WEB_GITHUB_REPO}/releases/tags/v${pinned.replace(/^v/i, "")}`,
       )
     : await fetchJson(GITHUB_RELEASES_API);
 
@@ -272,50 +265,11 @@ function extractTarGz(archivePath, installDir) {
   }
 }
 
-function pullDockerImage(image) {
-  console.log(`Pulling Moonlight Web Docker image (${image})...`);
-  execFileSync("docker", ["pull", image], {
-    stdio: "inherit",
-    timeout: 600_000,
-  });
-}
-
-async function installViaDockerMoonlightWeb({ metadataPath, installDir, env = process.env }) {
-  await ensureDockerRuntime({ metadataPath, env });
-
-  if (!isDockerDaemonReady()) {
-    throw new Error(
-      "Docker runtime was provisioned but the daemon is not reachable yet. Retry in a minute.",
-    );
-  }
-
-  const image = resolveDockerImage(env);
-  const version = env.MOONLIGHT_WEB_VERSION?.trim() || "latest";
-  const manifest = readInstallManifest(installDir);
-  if (manifest?.kind === "docker" && manifest?.image === image) {
-    return { installDir, executable: null, version: manifest.version || version, kind: "docker", image };
-  }
-
-  pullDockerImage(image);
-  writeInstallManifest(installDir, {
-    version,
-    kind: "docker",
-    image,
-    installedAt: new Date().toISOString(),
-    platform: process.platform,
-    arch: process.arch,
-  });
-  console.log(`Moonlight Web Docker image ready: ${image}`);
-  return { installDir, executable: null, version, kind: "docker", image };
-}
-
 async function ensureMoonlightWebBinary({ metadataPath, env = process.env } = {}) {
+  const installDir = resolveMoonlightWebInstallDir(metadataPath);
+
   if (env.MOONLIGHT_WEB_SKIP_INSTALL === "true") {
-    const installDir = resolveMoonlightWebInstallDir(metadataPath);
     const manifest = readInstallManifest(installDir);
-    if (manifest?.kind === "docker") {
-      return { installDir, executable: null, version: manifest.version || null, kind: "docker", image: manifest.image };
-    }
     const executable = findMoonlightWebExecutable(installDir);
     if (!executable) {
       throw new Error("MOONLIGHT_WEB_SKIP_INSTALL is set but Moonlight Web is not installed");
@@ -323,30 +277,15 @@ async function ensureMoonlightWebBinary({ metadataPath, env = process.env } = {}
     return { installDir, executable, version: manifest?.version || null, kind: "native", image: null };
   }
 
-  const installDir = resolveMoonlightWebInstallDir(metadataPath);
   fs.mkdirSync(installDir, { recursive: true });
 
-  const strategy = detectInstallStrategy(env);
+  const strategy = detectInstallStrategy();
   if (!strategy) {
-    throw new Error(`Moonlight Web auto-install is not supported on ${process.platform}/${process.arch}`);
+    throw missingPackageError(installDir);
   }
 
-  if (strategy.kind === "docker") {
-    return installViaDockerMoonlightWeb({ metadataPath, installDir, env });
-  }
-
-  try {
-    const asset = await resolveLatestNativeAsset(strategy, env);
-    return await installNativeMoonlightWeb({ asset, installDir, env });
-  } catch (error) {
-    if (env.MOONLIGHT_WEB_FORCE_NATIVE === "true") {
-      throw error;
-    }
-    console.warn(
-      `Native Moonlight Web install failed (${error.message || error}). Falling back to Docker.`,
-    );
-    return installViaDockerMoonlightWeb({ metadataPath, installDir, env });
-  }
+  const asset = await resolveLatestNativeAsset(strategy, env);
+  return installNativeMoonlightWeb({ asset, installDir, env });
 }
 
 async function installNativeMoonlightWeb({ asset, installDir }) {
@@ -400,12 +339,9 @@ async function installNativeMoonlightWeb({ asset, installDir }) {
 }
 
 module.exports = {
-  DOCKER_IMAGE,
   resolveMoonlightWebInstallDir,
   detectInstallStrategy,
   findMoonlightWebExecutable,
   ensureMoonlightWebBinary,
   readInstallManifest,
-  isDockerAvailable,
-  resolveDockerImage,
 };

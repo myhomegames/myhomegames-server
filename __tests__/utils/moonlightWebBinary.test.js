@@ -1,6 +1,6 @@
-const { detectInstallStrategy, isDockerAvailable } = require("../../utils/moonlightWebBinary");
+const { detectInstallStrategy } = require("../../utils/moonlightWebBinary");
 const { defaultManagedMoonlightWebUrl } = require("../../utils/streaming");
-const { commandExists, resolveBrewBinary, isDockerDaemonReady } = require("../../utils/dockerRuntime");
+const { commandExists, resolveBrewBinary } = require("../../utils/dockerRuntime");
 
 describe("moonlightWebBinary", () => {
   const originalPlatform = process.platform;
@@ -11,36 +11,44 @@ describe("moonlightWebBinary", () => {
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("defaults to docker on macOS (no native binary)", () => {
+  it("downloads the macOS arm64 tar.gz", () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
-    expect(detectInstallStrategy({}).kind).toBe("docker");
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    const strategy = detectInstallStrategy();
+    expect(strategy.kind).toBe("tar.gz");
+    expect(strategy.assetPattern.test("moonlight-web-aarch64-apple-darwin.tar.gz")).toBe(true);
   });
 
-  it("defaults to native zip on Windows", () => {
+  it("downloads the macOS x64 tar.gz", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    Object.defineProperty(process, "arch", { value: "x64" });
+    const strategy = detectInstallStrategy();
+    expect(strategy.kind).toBe("tar.gz");
+    expect(strategy.assetPattern.test("moonlight-web-x86_64-apple-darwin.tar.gz")).toBe(true);
+  });
+
+  it("downloads the official zip on Windows", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     Object.defineProperty(process, "arch", { value: "x64" });
-    const strategy = detectInstallStrategy({});
+    const strategy = detectInstallStrategy();
     expect(strategy.kind).toBe("zip");
     expect(strategy.assetPattern.test("moonlight-web-x86_64-pc-windows-gnu.zip")).toBe(true);
   });
 
-  it("defaults to native tar.gz on Linux", () => {
+  it("downloads the official tar.gz on Linux x64", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     Object.defineProperty(process, "arch", { value: "x64" });
-    const strategy = detectInstallStrategy({});
+    const strategy = detectInstallStrategy();
     expect(strategy.kind).toBe("tar.gz");
     expect(strategy.assetPattern.test("moonlight-web-x86_64-unknown-linux-gnu.tar.gz")).toBe(true);
   });
 
-  it("uses docker when MOONLIGHT_WEB_FORCE_DOCKER=true", () => {
+  it("downloads the official arm64 tar.gz on Linux", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
-    Object.defineProperty(process, "arch", { value: "x64" });
-    expect(detectInstallStrategy({ MOONLIGHT_WEB_FORCE_DOCKER: "true" }).kind).toBe("docker");
-  });
-
-  it("exposes docker availability helper", () => {
-    expect(typeof isDockerAvailable()).toBe("boolean");
-    expect(typeof isDockerDaemonReady()).toBe("boolean");
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    const strategy = detectInstallStrategy();
+    expect(strategy.kind).toBe("tar.gz");
+    expect(strategy.assetPattern.test("moonlight-web-aarch64-unknown-linux-gnu.tar.gz")).toBe(true);
   });
 });
 

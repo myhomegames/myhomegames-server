@@ -112,6 +112,7 @@ if (envPath) {
 const express = require("express");
 const cors = require("cors");
 const { spawn, execSync } = require("child_process");
+const { openFrontendUrl } = require("./utils/openFrontendBrowser");
 const https = require("https");
 const http = require("http");
 const crypto = require("crypto");
@@ -1223,39 +1224,11 @@ async function maybeStartMoonlightWeb() {
 
 let frontendBrowserOpened = false;
 
-/** Open FRONTEND_URL in the default browser once per process (release .env and local .env). */
+/** Open FRONTEND_URL once per process, unless a tab is already on that page. */
 function openFrontendInBrowser() {
   if (frontendBrowserOpened) return;
-  const raw = String(process.env.FRONTEND_URL || "").trim();
-  if (!raw) return;
-  let target;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return;
-    target = url.toString();
-  } catch {
-    console.warn(`FRONTEND_URL is not a valid URL: ${raw}`);
-    return;
-  }
-  frontendBrowserOpened = true;
-  console.log(`Opening browser at ${target}`);
-  try {
-    const child =
-      process.platform === "darwin"
-        ? spawn("open", [target], { detached: true, stdio: "ignore" })
-        : process.platform === "win32"
-          ? spawn("cmd", ["/c", "start", "", target], {
-              detached: true,
-              stdio: "ignore",
-              windowsHide: true,
-            })
-          : spawn("xdg-open", [target], { detached: true, stdio: "ignore" });
-    child.on("error", (err) => {
-      console.warn(`Could not open browser: ${err.message || err}`);
-    });
-    child.unref();
-  } catch (err) {
-    console.warn(`Could not open browser: ${err?.message || err}`);
+  if (openFrontendUrl(process.env.FRONTEND_URL)) {
+    frontendBrowserOpened = true;
   }
 }
 

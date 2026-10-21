@@ -1,14 +1,12 @@
 "use strict";
 
-const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { requestMoonlightWebJson } = require("./moonlightWebCredentials");
 const { MHG_SUNSHINE_APP_PREFIX } = require("./sunshineApps");
 
-const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
-const CONTAINER_CONFIG_PATH = "/moonlight-web/server/config.json";
+const MOONLIGHT_STATIC_PREFIX = "/moonlight-web/static/";
 
 /** Lower quality + WebRTC video element for Tizen / smart TV browsers.
  *  Do NOT use websocket+canvas: Tizen often paints one frame then freezes while audio plays.
@@ -589,37 +587,36 @@ function listMoonlightUsers(baseUrl, cookie) {
   });
 }
 
-function readDockerMoonlightConfig() {
-  const raw = execFileSync("docker", ["exec", DOCKER_CONTAINER_NAME, "cat", CONTAINER_CONFIG_PATH], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 30_000,
-  });
-  return JSON.parse(raw);
+function moonlightConfigPath(packageRoot) {
+  return path.join(packageRoot, "server", "config.json");
 }
 
-function writeDockerMoonlightConfig(config) {
-  const tmp = path.join(os.tmpdir(), `mhg-moonlight-config-${process.pid}.json`);
-  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  try {
-    execFileSync("docker", ["cp", tmp, `${DOCKER_CONTAINER_NAME}:${CONTAINER_CONFIG_PATH}`], {
-      stdio: "pipe",
-      timeout: 30_000,
-    });
-  } finally {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      // ignore
-    }
+function readPackageMoonlightConfig(packageRoot) {
+  return JSON.parse(fs.readFileSync(moonlightConfigPath(packageRoot), "utf8"));
+}
+
+function writePackageMoonlightConfig(packageRoot, config) {
+  const file = moonlightConfigPath(packageRoot);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+function packageStaticFile(staticRoot, containerPath) {
+  const normalized = String(containerPath || "");
+  if (!normalized.startsWith(MOONLIGHT_STATIC_PREFIX)) {
+    throw new Error(`Unexpected Moonlight static path: ${containerPath}`);
   }
+  return path.join(staticRoot, normalized.slice(MOONLIGHT_STATIC_PREFIX.length));
 }
 
-function restartDockerMoonlight() {
-  execFileSync("docker", ["restart", DOCKER_CONTAINER_NAME], {
-    stdio: "pipe",
-    timeout: 120_000,
-  });
+function copyPackageStaticToTemp(staticRoot, containerPath, hostPath) {
+  fs.copyFileSync(packageStaticFile(staticRoot, containerPath), hostPath);
+}
+
+function copyTempToPackageStatic(staticRoot, hostPath, containerPath) {
+  const dest = packageStaticFile(staticRoot, containerPath);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(hostPath, dest);
 }
 
 /**
@@ -630,7 +627,7 @@ async function ensureMoonlightWebDefaultUser({
   baseUrl,
   cookie,
   username,
-  kind = null,
+  packageRoot = null,
   env = process.env,
 } = {}) {
   if (env.MOONLIGHT_WEB_SKIP_DEFAULT_USER === "true") {
@@ -647,18 +644,18 @@ async function ensureMoonlightWebDefaultUser({
     throw new Error("Moonlight Web admin user id not found");
   }
 
-  if (kind !== "docker") {
-    console.warn(
-      "Moonlight Web default_user_id auto-config is currently supported for Docker installs only.",
-    );
-    return { applied: false, reason: "unsupported-kind", userId: admin.id };
+  if (!packageRoot) {
+    console.warn("Moonlight Web default_user_id needs the installed package directory.");
+    return { applied: false, reason: "missing-package", userId: admin.id };
   }
 
-  let config;
+  let config = {};
   try {
-    config = readDockerMoonlightConfig();
+    config = readPackageMoonlightConfig(packageRoot);
   } catch (error) {
-    throw new Error(`Could not read Moonlight Web config: ${error.message || error}`);
+    if (error?.code !== "ENOENT") {
+      throw new Error(`Could not read Moonlight Web config: ${error.message || error}`);
+    }
   }
 
   const current = config?.web_server?.default_user_id;
@@ -670,9 +667,8 @@ async function ensureMoonlightWebDefaultUser({
     ...(config.web_server || {}),
     default_user_id: Number(admin.id),
   };
-  writeDockerMoonlightConfig(config);
+  writePackageMoonlightConfig(packageRoot, config);
   console.log(`Moonlight Web default_user_id set to ${admin.id} (skip login in embed).`);
-  restartDockerMoonlight();
   return { applied: true, userId: admin.id, restarted: true };
 }
 
@@ -1716,7 +1712,10 @@ function normalizeMoonlightModuleImports(source, alias) {
   return out;
 }
 
-function patchMoonlightStaticFullscreenAssets() {
+function patchMoonlightStaticFullscreenAssets(staticRoot) {
+  if (!staticRoot || !fs.existsSync(staticRoot)) {
+    return { applied: 0 };
+  }
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-fs-"));
   const replacements = [
     {
@@ -2461,10 +2460,7 @@ ${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
     for (const entry of replacements) {
       const hostPath = path.join(tmpDir, entry.file);
       try {
-        execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:${entry.containerPath}`, hostPath], {
-          stdio: "pipe",
-          timeout: 30_000,
-        });
+        copyPackageStaticToTemp(staticRoot, entry.containerPath, hostPath);
       } catch {
         continue;
       }
@@ -2496,10 +2492,7 @@ ${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
       if (!changed) continue;
       body = normalizeMoonlightModuleImports(body, MOONLIGHT_MODULE_ALIAS);
       fs.writeFileSync(hostPath, body, "utf8");
-      execFileSync("docker", ["cp", hostPath, `${DOCKER_CONTAINER_NAME}:${entry.containerPath}`], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
+      copyTempToPackageStatic(staticRoot, hostPath, entry.containerPath);
       applied += 1;
     }
 
@@ -2538,22 +2531,13 @@ ${MOONLIGHT_TV_MODAL_FOCUS_HOOK}`,
     for (const { src, dest } of aliasCopies) {
       const hostSrc = path.join(tmpDir, `alias-src-${path.basename(src)}`);
       try {
-        execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:${src}`, hostSrc], {
-          stdio: "pipe",
-          timeout: 30_000,
-        });
+        copyPackageStaticToTemp(staticRoot, src, hostSrc);
         let aliasBody = normalizeMoonlightModuleImports(fs.readFileSync(hostSrc, "utf8"), MOONLIGHT_MODULE_ALIAS);
         fs.writeFileSync(hostSrc, aliasBody, "utf8");
-        execFileSync("docker", ["cp", hostSrc, `${DOCKER_CONTAINER_NAME}:${dest}`], {
-          stdio: "pipe",
-          timeout: 30_000,
-        });
+        copyTempToPackageStatic(staticRoot, hostSrc, dest);
         // Keep canonical sources in sync when they are nested modules.
         if (src !== "/moonlight-web/static/stream.js") {
-          execFileSync("docker", ["cp", hostSrc, `${DOCKER_CONTAINER_NAME}:${src}`], {
-            stdio: "pipe",
-            timeout: 30_000,
-          });
+          copyTempToPackageStatic(staticRoot, hostSrc, src);
         }
         applied += 1;
       } catch {
@@ -2620,16 +2604,10 @@ try {
 `;
       const bootHost = path.join(tmpDir, MOONLIGHT_BOOT_ENTRY);
       fs.writeFileSync(bootHost, bootSource, "utf8");
-      execFileSync("docker", ["cp", bootHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/${MOONLIGHT_BOOT_ENTRY}`], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
+      copyTempToPackageStatic(staticRoot, bootHost, `/moonlight-web/static/${MOONLIGHT_BOOT_ENTRY}`);
 
       const htmlHost = path.join(tmpDir, "stream-html-publish.html");
-      execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/stream.html`, htmlHost], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
+      copyPackageStaticToTemp(staticRoot, "/moonlight-web/static/stream.html", htmlHost);
       let htmlBody = fs.readFileSync(htmlHost, "utf8");
       // Remove prior MHG script tags / markers, then inject boot + entry once.
       htmlBody = htmlBody
@@ -2665,10 +2643,7 @@ try {
       // Patch styles/index.js so setStyle always uses /styles/*.css (ignores broken baseURI).
       try {
         const stylesHost = path.join(tmpDir, "styles-index.js");
-        execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/styles/index.js`, stylesHost], {
-          stdio: "pipe",
-          timeout: 15_000,
-        });
+        copyPackageStaticToTemp(staticRoot, "/moonlight-web/static/styles/index.js", stylesHost);
         let stylesBody = fs.readFileSync(stylesHost, "utf8");
         if (!stylesBody.includes("MHG: root-absolute styles")) {
           stylesBody = stylesBody.replace(
@@ -2678,28 +2653,19 @@ try {
               "    const absolute = new URL(path, window.location.origin).href;",
           );
           fs.writeFileSync(stylesHost, stylesBody, "utf8");
-          execFileSync("docker", ["cp", stylesHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/styles/index.js`], {
-            stdio: "pipe",
-            timeout: 15_000,
-          });
+          copyTempToPackageStatic(staticRoot, stylesHost, "/moonlight-web/static/styles/index.js");
         }
       } catch {
         // ignore
       }
 
       fs.writeFileSync(htmlHost, htmlBody, "utf8");
-      execFileSync("docker", ["cp", htmlHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/stream.html`], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
-      execFileSync("docker", ["exec", DOCKER_CONTAINER_NAME, "mkdir", "-p", `/moonlight-web/static/${MOONLIGHT_MODULE_ALIAS}`], {
-        stdio: "pipe",
-        timeout: 15_000,
-      });
-      execFileSync(
-        "docker",
-        ["cp", htmlHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/${MOONLIGHT_STREAM_HTML_PATH}`],
-        { stdio: "pipe", timeout: 30_000 },
+      copyTempToPackageStatic(staticRoot, htmlHost, "/moonlight-web/static/stream.html");
+      fs.mkdirSync(path.join(staticRoot, MOONLIGHT_MODULE_ALIAS), { recursive: true });
+      copyTempToPackageStatic(
+        staticRoot,
+        htmlHost,
+        `/moonlight-web/static/${MOONLIGHT_STREAM_HTML_PATH}`,
       );
       applied += 1;
     } catch {
@@ -2709,10 +2675,7 @@ try {
     // Ensure stream entry imports current index alias (no interleaved wrap — boot handles TV).
     try {
       const streamHost = path.join(tmpDir, "stream-entry-publish.js");
-      execFileSync("docker", ["cp", `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/stream.js`, streamHost], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
+      copyPackageStaticToTemp(staticRoot, "/moonlight-web/static/stream.js", streamHost);
       let streamBody = normalizeMoonlightModuleImports(fs.readFileSync(streamHost, "utf8"), MOONLIGHT_MODULE_ALIAS);
       // Strip previous MHG boots / wraps that interleaved imports (breaks some Tizen parsers).
       streamBody = streamBody.replace(/^\/\/ MHG entry[\s\S]*?(?=var __awaiter|import )/m, "");
@@ -2725,14 +2688,11 @@ try {
         streamBody = `// MHG entry ${MOONLIGHT_MODULE_ALIAS}\n` + streamBody;
       }
       fs.writeFileSync(streamHost, streamBody, "utf8");
-      execFileSync("docker", ["cp", streamHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/stream.js`], {
-        stdio: "pipe",
-        timeout: 30_000,
-      });
-      execFileSync(
-        "docker",
-        ["cp", streamHost, `${DOCKER_CONTAINER_NAME}:/moonlight-web/static/${MOONLIGHT_STREAM_ENTRY}`],
-        { stdio: "pipe", timeout: 30_000 },
+      copyTempToPackageStatic(staticRoot, streamHost, "/moonlight-web/static/stream.js");
+      copyTempToPackageStatic(
+        staticRoot,
+        streamHost,
+        `/moonlight-web/static/${MOONLIGHT_STREAM_ENTRY}`,
       );
       applied += 1;
     } catch {
@@ -2748,7 +2708,7 @@ try {
   return { applied };
 }
 
-async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = null } = {}) {
+async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, staticDir = null } = {}) {
   const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
   if (!normalized) throw new Error("Moonlight Web URL is required");
 
@@ -2758,9 +2718,9 @@ async function ensureMoonlightEnterFullscreenDefault({ baseUrl, cookie, kind = n
     roleId: null,
   };
 
-  if (kind === "docker" || kind == null) {
+  if (staticDir) {
     try {
-      const staticResult = patchMoonlightStaticFullscreenAssets();
+      const staticResult = patchMoonlightStaticFullscreenAssets(staticDir);
       result.staticPatched = staticResult.applied;
       if (staticResult.applied > 0) {
         console.log(
@@ -2834,9 +2794,8 @@ module.exports = {
   pickDesktopApp,
   isDesktopMoonlightApp,
   listMoonlightUsers,
-  readDockerMoonlightConfig,
-  writeDockerMoonlightConfig,
-  restartDockerMoonlight,
+  readPackageMoonlightConfig,
+  writePackageMoonlightConfig,
   patchMoonlightStaticFullscreenAssets,
   shouldUseMoonlightTvProfile,
   MOONLIGHT_TV_STREAM_SETTINGS,
