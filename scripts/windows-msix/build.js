@@ -26,10 +26,8 @@ const PUBLISHER = "CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2";
 const PUBLISHER_DISPLAY_NAME = "it.vige";
 const PACKAGE_NAME = "lucastancapiano.myhomegames-server";
 const DISPLAY_NAME = "myhomegames-server";
-
-function readPackageJson() {
-  return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
-}
+/** Store package version. Independent of package.json. */
+const MSIX_VERSION = "1.2.9";
 
 /** MSIX Identity Version is four numeric parts. */
 function msixVersion(version) {
@@ -393,17 +391,16 @@ function packOnWindows(outFile, cerOut) {
 }
 
 /**
- * Stage build/msix-layout and, on Windows, produce a signed build/MyHomeGames-<ver>-win-x64.msix.
+ * Stage build/msix-layout and produce a signed build/MyHomeGames-1.2.9-win-x64.msix.
  * @param {{ ensurePkg?: boolean }} [options]
  */
 function buildWindowsMsix(options = {}) {
   if (options.ensurePkg && !findWinExe()) {
     runPkgWindowsOnly();
   }
-  const packageVersion = readPackageJson().version;
-  const version = msixVersion(packageVersion);
-  const outFile = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}-win-x64.msix`);
-  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}.cer`);
+  const version = msixVersion(MSIX_VERSION);
+  const outFile = path.join(BUILD_DIR, `MyHomeGames-${MSIX_VERSION}-win-x64.msix`);
+  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${MSIX_VERSION}.cer`);
   resetLayout();
   stagePayload();
   buildLauncher();
@@ -430,6 +427,7 @@ function buildWindowsMsix(options = {}) {
 module.exports = {
   PACKAGE_NAME,
   PUBLISHER,
+  MSIX_VERSION,
   msixVersion,
   buildWindowsMsix,
   packSignedMsix,
