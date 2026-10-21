@@ -8,7 +8,6 @@ const {
   ensureMoonlightWebBinary,
   findMoonlightWebExecutable,
   resolveMoonlightWebInstallDir,
-  readInstallManifest,
 } = require("./moonlightWebBinary");
 const {
   probeMoonlightWebReachable,
@@ -24,13 +23,7 @@ const {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
 } = require("./moonlightWebEmbed");
-const {
-  writeMoonlightIceServerScript,
-  writeMoonlightIceServersJson,
-  ensureMoonlightCloudflareTurnIce,
-  resolveIceScriptHostPath,
-  resolveIceJsonHostPath,
-} = require("./moonlightWebTurn");
+const { ensureMoonlightCloudflareTurnIce } = require("./moonlightWebTurn");
 const { moonlightWebPublicUrlFromApiBase } = require("./tunnelHostname");
 
 const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
@@ -39,7 +32,7 @@ const DOCKER_CONTAINER_NAME = "myhomegames-moonlight-web";
 let managedChild = null;
 /** @type {string | null} */
 let managedExecutable = null;
-/** @type {'native' | 'docker' | null} */
+/** @type {'native' | null} */
 let managedKind = null;
 let manageLifecycle = false;
 
@@ -65,112 +58,61 @@ function resolveLanIpHint() {
   return "127.0.0.1";
 }
 
-function dockerContainerRunning(name) {
+function stopDockerMoonlightContainer() {
   try {
-    return (
-      execFileSync("docker", ["inspect", "-f", "{{.State.Running}}", name], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 10_000,
-      }).trim() === "true"
-    );
+    execFileSync("docker", ["rm", "-f", DOCKER_CONTAINER_NAME], {
+      stdio: "pipe",
+      timeout: 30_000,
+    });
+    console.log("Removed the leftover Moonlight Web Docker container.");
   } catch {
-    return false;
+    // Docker is absent, or the container was never created.
   }
 }
 
-function dockerContainerExists(name) {
+function killManagedChild() {
+  if (!managedChild || managedChild.killed) return;
   try {
-    execFileSync("docker", ["inspect", name], { stdio: "pipe", timeout: 10_000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function dockerContainerImage(name) {
-  try {
-    return execFileSync("docker", ["inspect", "-f", "{{.Config.Image}}", name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function startDockerMoonlightWeb({ image, installDir, port, env = process.env }) {
-  const dataDir = path.join(installDir, "docker-data");
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  if (dockerContainerExists(DOCKER_CONTAINER_NAME)) {
-    const currentImage = dockerContainerImage(DOCKER_CONTAINER_NAME);
-    if (currentImage && currentImage !== image) {
+    if (process.platform === "win32") {
+      if (managedChild.pid) {
+        const child = spawn(
+          "taskkill",
+          ["/PID", String(managedChild.pid), "/T", "/F"],
+          { stdio: "ignore", detached: true, windowsHide: true },
+        );
+        child.unref();
+      }
+    } else if (managedChild.pid) {
       try {
-        execFileSync("docker", ["rm", "-f", DOCKER_CONTAINER_NAME], { stdio: "pipe", timeout: 30_000 });
+        process.kill(-managedChild.pid, "SIGTERM");
       } catch {
-        // ignore
+        managedChild.kill("SIGTERM");
       }
     }
+  } catch {
+    // ignore
   }
-
-  if (dockerContainerRunning(DOCKER_CONTAINER_NAME)) {
-    managedKind = "docker";
-    managedExecutable = null;
-    managedChild = null;
-    return { mode: "already-running" };
-  }
-
-  if (dockerContainerExists(DOCKER_CONTAINER_NAME)) {
-    try {
-      execFileSync("docker", ["start", DOCKER_CONTAINER_NAME], { stdio: "pipe", timeout: 60_000 });
-      managedKind = "docker";
-      managedExecutable = null;
-      managedChild = null;
-      return { mode: "started-existing" };
-    } catch {
-      try {
-        execFileSync("docker", ["rm", "-f", DOCKER_CONTAINER_NAME], { stdio: "pipe", timeout: 30_000 });
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const lanIp = env.WEBRTC_NAT_1TO1_HOST?.trim() || resolveLanIpHint();
-  const udpRange = env.MOONLIGHT_WEB_UDP_RANGE?.trim() || "40000-40100";
-  writeMoonlightIceServerScript(installDir);
-  writeMoonlightIceServersJson(installDir, []);
-  const iceScriptHostPath = resolveIceScriptHostPath(installDir);
-  const iceJsonHostPath = resolveIceJsonHostPath(installDir);
-  const args = [
-    "run",
-    "-d",
-    "--name",
-    DOCKER_CONTAINER_NAME,
-    "--add-host",
-    "host.docker.internal:host-gateway",
-    "-p",
-    `${port}:8080`,
-    "-p",
-    `${udpRange}:${udpRange}/udp`,
-    "-e",
-    `WEBRTC_NAT_1TO1_HOST=${lanIp}`,
-    "-v",
-    `${dataDir}:/data`,
-    "-v",
-    `${iceScriptHostPath}:/moonlight-web/server/ice_servers_cf.sh:ro`,
-    "-v",
-    `${iceJsonHostPath}:/moonlight-web/server/ice_servers.json:ro`,
-    image,
-  ];
-
-  execFileSync("docker", args, { stdio: "pipe", timeout: 120_000 });
-  managedKind = "docker";
-  managedExecutable = null;
   managedChild = null;
-  return { mode: "created" };
+}
+
+function moonlightPackageRoot(installDir) {
+  const executable = managedExecutable || findMoonlightWebExecutable(installDir);
+  return executable ? path.dirname(executable) : null;
+}
+
+async function restartManagedNativeMoonlight(port, env, url) {
+  const executable = managedExecutable;
+  if (!executable || !managedChild) {
+    console.warn("Moonlight Web config changed. Restart the web-server process to apply it.");
+    return false;
+  }
+  killManagedChild();
+  startNativeMoonlightWeb(executable, port, env);
+  const ready = await waitForMoonlightWeb(url, 120_000);
+  if (!ready) {
+    console.warn("Moonlight Web did not become ready after restart.");
+  }
+  return ready;
 }
 
 function startNativeMoonlightWeb(executable, port, env = process.env) {
@@ -263,7 +205,15 @@ function persistManagedStreamingSettings({
 
 async function bootstrapMoonlightWebAdminAndPair(
   url,
-  { kind = null, env = process.env, installDir = null, readSettings = null, writeSettings = null } = {},
+  {
+    kind = null,
+    env = process.env,
+    installDir = null,
+    packageRoot = null,
+    port = null,
+    readSettings = null,
+    writeSettings = null,
+  } = {},
 ) {
   try {
     const auth = await ensureMoonlightWebAdminCredentials(url, env);
@@ -274,15 +224,12 @@ async function bootstrapMoonlightWebAdminAndPair(
         baseUrl: url,
         cookie: auth.cookie,
         username: auth.username,
-        kind: effectiveKind,
+        packageRoot,
         env,
       });
       defaultUserId = defaultUser.userId || null;
       if (defaultUser.restarted) {
-        const ready = await waitForMoonlightWeb(url, 120_000);
-        if (!ready) {
-          console.warn("Moonlight Web did not become ready after default_user_id restart.");
-        }
+        await restartManagedNativeMoonlight(port, env, url);
       }
     } catch (error) {
       console.warn(`Could not configure Moonlight Web default user: ${error.message || error}`);
@@ -298,7 +245,7 @@ async function bootstrapMoonlightWebAdminAndPair(
       await ensureMoonlightEnterFullscreenDefault({
         baseUrl: url,
         cookie: apiCookie,
-        kind: effectiveKind,
+        staticDir: packageRoot ? path.join(packageRoot, "static") : null,
       });
     } catch (error) {
       console.warn(
@@ -309,15 +256,12 @@ async function bootstrapMoonlightWebAdminAndPair(
       const httpPort = Number(env.HTTP_PORT || 4000) || 4000;
       const turn = await ensureMoonlightCloudflareTurnIce({
         installDir,
-        kind: effectiveKind,
+        packageRoot,
         httpPort,
         env,
       });
       if (turn.restarted) {
-        const ready = await waitForMoonlightWeb(url, 120_000);
-        if (!ready) {
-          console.warn("Moonlight Web did not become ready after TURN restart.");
-        }
+        await restartManagedNativeMoonlight(port, env, url);
         apiCookie = resolveMoonlightWebApiCookie({
           kind: effectiveKind,
           defaultUserId,
@@ -383,10 +327,12 @@ async function ensureMoonlightWebRunning({
   const publicFromTunnel = moonlightWebPublicUrlFromApiBase(env.API_BASE || "");
   const preferredUrl = publicFromTunnel || streaming.moonlightWebUrl || managedUrl;
   const installDir = resolveMoonlightWebInstallDir(metadataPath);
+  stopDockerMoonlightContainer();
 
   if (await probeMoonlightWebReachable(preferredUrl) || await probeMoonlightWebReachable(managedUrl)) {
     manageLifecycle = true;
-    managedKind = readInstallManifest(installDir)?.kind || null;
+    managedExecutable = managedExecutable || findMoonlightWebExecutable(installDir);
+    managedKind = managedExecutable ? "native" : null;
     console.log("Moonlight Web is already reachable.");
     const persistUrl = publicFromTunnel || streaming.moonlightWebUrl || managedUrl;
     persistManagedStreamingSettings({
@@ -396,9 +342,11 @@ async function ensureMoonlightWebRunning({
       forceUrl: Boolean(publicFromTunnel),
     });
     await bootstrapMoonlightWebAdminAndPair(managedUrl, {
-      kind: managedKind,
+      kind: "native",
       env,
       installDir,
+      packageRoot: moonlightPackageRoot(installDir),
+      port,
       readSettings,
       writeSettings,
     });
@@ -406,20 +354,13 @@ async function ensureMoonlightWebRunning({
   }
 
   const installed = await ensureMoonlightWebBinary({ metadataPath, env });
+  if (!installed.executable) {
+    throw new Error(`Moonlight Web package in ${installed.installDir} has no web-server executable`);
+  }
   manageLifecycle = true;
 
-  console.log(`Starting Moonlight Web (${installed.version || "unknown"}, ${installed.kind})...`);
-
-  if (installed.kind === "docker") {
-    startDockerMoonlightWeb({
-      image: installed.image,
-      installDir: installed.installDir,
-      port,
-      env,
-    });
-  } else {
-    startNativeMoonlightWeb(installed.executable, port, env);
-  }
+  console.log(`Starting Moonlight Web (${installed.version || "unknown"})...`);
+  startNativeMoonlightWeb(installed.executable, port, env);
 
   const ready = await waitForMoonlightWeb(managedUrl);
   const persistUrl = publicFromTunnel || managedUrl;
@@ -432,21 +373,20 @@ async function ensureMoonlightWebRunning({
 
   if (ready) {
     await bootstrapMoonlightWebAdminAndPair(managedUrl, {
-      kind: installed.kind,
+      kind: "native",
       env,
       installDir: installed.installDir,
+      packageRoot: path.dirname(installed.executable),
+      port,
       readSettings,
       writeSettings,
     });
     console.log(`Moonlight Web is ready at ${managedUrl}`);
-    return { started: true, url: persistUrl, kind: installed.kind, ready: true };
+    return { started: true, url: persistUrl, kind: "native", ready: true };
   }
 
-  console.warn(
-    `Moonlight Web was started but is not responding yet at ${managedUrl}. ` +
-      "If using Docker, confirm Docker Desktop is running.",
-  );
-  return { started: true, url: persistUrl, kind: installed.kind, ready: false };
+  console.warn(`Moonlight Web was started but is not responding yet at ${managedUrl}.`);
+  return { started: true, url: persistUrl, kind: "native", ready: false };
 }
 
 function stopManagedMoonlightWeb() {
@@ -458,45 +398,7 @@ function stopManagedMoonlightWeb() {
   }
 
   console.log("Stopping Moonlight Web...");
-
-  // Do not block Ctrl+C on `docker stop` / `docker inspect`.
-  if (managedKind === "docker") {
-    try {
-      const child = spawn("docker", ["kill", DOCKER_CONTAINER_NAME], {
-        stdio: "ignore",
-        detached: true,
-      });
-      child.on("error", () => {});
-      child.unref();
-    } catch {
-      // ignore
-    }
-  }
-
-  if (managedChild && !managedChild.killed) {
-    try {
-      if (process.platform === "win32") {
-        if (managedChild.pid) {
-          const child = spawn(
-            "taskkill",
-            ["/PID", String(managedChild.pid), "/T", "/F"],
-            { stdio: "ignore", detached: true, windowsHide: true },
-          );
-          child.unref();
-        }
-      } else if (managedChild.pid) {
-        try {
-          process.kill(-managedChild.pid, "SIGTERM");
-        } catch {
-          managedChild.kill("SIGTERM");
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  managedChild = null;
+  killManagedChild();
   managedExecutable = null;
   managedKind = null;
   manageLifecycle = false;

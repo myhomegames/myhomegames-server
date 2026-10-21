@@ -222,8 +222,8 @@ async function requestMoonlightWebJson({
 }
 
 /**
- * Prefer anonymous API access for Docker (default_user_id) to avoid stale mlSession cookies
- * after container restarts. Native installs keep the login session when no default user is set.
+ * Prefer anonymous API access when default_user_id is set, so a stale mlSession
+ * is not sent after the web-server restarts. Otherwise keep the login session.
  */
 function resolveMoonlightWebApiCookie({ kind, defaultUserId, sessionCookie } = {}) {
   if (kind === "docker") return "";

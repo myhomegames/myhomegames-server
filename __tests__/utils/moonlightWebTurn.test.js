@@ -3,16 +3,12 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
 const {
   writeMoonlightIceServerScript,
   writeMoonlightIceServersJson,
   resolveIceScriptHostPath,
   resolveIceJsonHostPath,
-  moonlightContainerHasIceBindMounts,
   refreshMoonlightTurnIceServers,
-  CONTAINER_SCRIPT_PATH,
-  CONTAINER_JSON_PATH,
 } = require("../../utils/moonlightWebTurn");
 
 jest.mock("../../utils/cloudflareTurn", () => ({
@@ -22,70 +18,50 @@ jest.mock("../../utils/cloudflareTurn", () => ({
   })),
 }));
 
-jest.mock("child_process", () => ({
-  execFileSync: jest.fn(),
-}));
-
 describe("moonlightWebTurn", () => {
-  beforeEach(() => {
-    execFileSync.mockReset();
-  });
-
-  it("writes an ice_server_script that cats host-minted JSON (no curl)", () => {
+  it("writes an ice_server_script that cats the package JSON (no curl)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ice-"));
     try {
-      const scriptPath = writeMoonlightIceServerScript(dir);
+      const jsonPath = resolveIceJsonHostPath(dir);
+      const scriptPath = writeMoonlightIceServerScript(dir, jsonPath);
       expect(scriptPath).toBe(resolveIceScriptHostPath(dir));
       const body = fs.readFileSync(scriptPath, "utf8");
-      expect(body).toContain(`cat "${CONTAINER_JSON_PATH}"`);
+      expect(body).toContain(`cat "${jsonPath}"`);
       expect(body).not.toContain("curl");
-      expect(CONTAINER_SCRIPT_PATH).toContain("ice_servers_cf.sh");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("writes ice_servers.json for the container bind mount", () => {
+  it("writes ice_servers.json next to the Moonlight package", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ice-json-"));
     try {
       const servers = [{ urls: ["turn:turn.cloudflare.com:3478?transport=udp"], username: "u", credential: "c" }];
       const jsonPath = writeMoonlightIceServersJson(dir, servers);
       expect(jsonPath).toBe(resolveIceJsonHostPath(dir));
       expect(JSON.parse(fs.readFileSync(jsonPath, "utf8"))).toEqual(servers);
-      expect(CONTAINER_JSON_PATH).toContain("ice_servers.json");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("detects bind-mounted ICE files in the Moonlight container", () => {
-    execFileSync.mockReturnValue(
-      JSON.stringify([
-        { Destination: CONTAINER_SCRIPT_PATH },
-        { Destination: CONTAINER_JSON_PATH },
-      ]),
-    );
-    expect(moonlightContainerHasIceBindMounts()).toBe(true);
-  });
-
-  it("refreshes TURN ICE by writing host files only when bind mounts are present", async () => {
+  it("refreshes TURN ICE by writing files into the package server directory", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ice-refresh-"));
-    execFileSync.mockReturnValue(
-      JSON.stringify([
-        { Destination: CONTAINER_SCRIPT_PATH },
-        { Destination: CONTAINER_JSON_PATH },
-      ]),
-    );
+    const packageRoot = path.join(dir, "package");
+    fs.mkdirSync(packageRoot);
     try {
-      const result = await refreshMoonlightTurnIceServers({ installDir: dir, kind: "docker", env: {} });
+      const result = await refreshMoonlightTurnIceServers({
+        installDir: dir,
+        packageRoot,
+        env: {},
+      });
       expect(result.applied).toBe(true);
-      expect(result.viaBindMount).toBe(true);
-      expect(execFileSync).toHaveBeenCalledTimes(1);
-      expect(execFileSync.mock.calls[0][0]).toBe("docker");
-      expect(execFileSync.mock.calls[0][1]).toEqual(
-        expect.arrayContaining(["inspect", "-f", "{{json .Mounts}}", "myhomegames-moonlight-web"]),
-      );
-      expect(fs.existsSync(resolveIceJsonHostPath(dir))).toBe(true);
+      const jsonPath = path.join(packageRoot, "server", "ice_servers.json");
+      const scriptPath = path.join(packageRoot, "server", "ice_servers_cf.sh");
+      expect(result.jsonPath).toBe(jsonPath);
+      expect(result.scriptPath).toBe(scriptPath);
+      expect(fs.existsSync(jsonPath)).toBe(true);
+      expect(fs.readFileSync(scriptPath, "utf8")).toContain(`cat "${jsonPath}"`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
