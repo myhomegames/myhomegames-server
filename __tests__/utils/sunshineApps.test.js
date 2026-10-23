@@ -138,6 +138,45 @@ describe("sunshineApps", () => {
     );
   });
 
+  it("keeps an existing window or application capture when updating the launch command", async () => {
+    const existingList = JSON.stringify([
+      { name: "Desktop", cmd: "" },
+      {
+        name: "MHG: 3-Demon",
+        cmd: "old",
+        capture: "application",
+        "application-id": "com.dosbox-x",
+        "capture-cursor": false,
+      },
+    ]);
+
+    requestJson
+      .mockResolvedValueOnce({ statusCode: 200, body: existingList })
+      .mockResolvedValueOnce({ statusCode: 200, body: "{}" })
+      .mockResolvedValueOnce({ statusCode: 200, body: existingList })
+      .mockResolvedValueOnce({ statusCode: 200, body: existingList })
+      .mockResolvedValueOnce({ statusCode: 200, body: existingList });
+
+    await upsertSunshineStreamingApp({
+      gameTitle: "3-Demon",
+      fullCommandPath: "/games/3demon.sh",
+      env: {},
+    });
+
+    expect(requestJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          name: "MHG: 3-Demon",
+          cmd: "/games/3demon.sh",
+          capture: "application",
+          "application-id": "com.dosbox-x",
+          "capture-cursor": false,
+        }),
+      }),
+    );
+  });
+
   it("removes duplicate entries with the same app name", async () => {
     const duplicateList = JSON.stringify([
       { name: "Desktop" },

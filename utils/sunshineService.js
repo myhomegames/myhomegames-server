@@ -7,6 +7,7 @@ const {
   ensureSunshineBinary,
   findSunshineExecutable,
   resolveMacAppBundle,
+  resolveSunshineAppOverride,
   resolveSunshineInstallDir,
 } = require("./sunshineBinary");
 const { ensureSunshineWebCredentials } = require("./sunshineCredentials");
@@ -126,6 +127,43 @@ function killProcessTree(pid) {
   }
 }
 
+function sunshineListenerCommand(port) {
+  try {
+    const pids = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const pid = pids[0];
+    if (!pid) return null;
+    return execFileSync("ps", ["-p", pid, "-o", "command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function listenerIsOverride(command, override) {
+  if (!command || !override) return false;
+  return (
+    (override.executable && command.includes(override.executable)) ||
+    (override.appPath && command.includes(override.appPath))
+  );
+}
+
+async function waitUntilSunshineDown(streaming, timeoutMs = 8_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!(await probeSunshineReachable(streaming))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+}
+
 function killSunshineByPath(executable) {
   if (!executable) return;
 
@@ -172,8 +210,22 @@ async function ensureSunshineRunning({ metadataPath, readSettings, env = process
   const settings = typeof readSettings === "function" ? readSettings() : {};
   const streaming = readStreamingSettings(settings);
   const installDir = resolveSunshineInstallDir(metadataPath);
+  const override = resolveSunshineAppOverride(env);
 
-  if (await probeSunshineReachable(streaming)) {
+  if (override) {
+    const listener = sunshineListenerCommand(streaming.sunshineHttpsPort);
+    if ((await probeSunshineReachable(streaming)) && listenerIsOverride(listener, override)) {
+      managedSunshineExecutable = override.executable;
+      manageSunshineLifecycle = true;
+      console.log(`Sunshine test app is already running (${override.appPath || override.executable}).`);
+      return { started: false, reason: "already-running", executable: override.executable, streaming };
+    }
+    if (listener) {
+      console.log("Stopping the Sunshine already in use so the test app can take its ports.");
+      killSunshineByPath(listener);
+      await waitUntilSunshineDown(streaming);
+    }
+  } else if (await probeSunshineReachable(streaming)) {
     managedSunshineExecutable = findSunshineExecutable(installDir);
     manageSunshineLifecycle = true;
     console.log("Sunshine is already running.");
@@ -190,7 +242,11 @@ async function ensureSunshineRunning({ metadataPath, readSettings, env = process
     console.warn(`Could not bootstrap Sunshine credentials: ${error.message || error}`);
   }
 
-  console.log(`Starting Sunshine (${version || "unknown"})...`);
+  console.log(
+    override
+      ? `Starting Sunshine test app (${version || "local"}) from ${override.appPath || executable}...`
+      : `Starting Sunshine (${version || "unknown"})...`,
+  );
   startSunshineProcess(executable, env);
 
   const ready = await waitForSunshine(streaming);

@@ -120,6 +120,29 @@ function resolveSunshineUpsertIndex(apps, name) {
   return byName ? byName.index : -1;
 }
 
+const SUNSHINE_CAPTURE_KEYS = [
+  "capture",
+  "application-id",
+  "window-id",
+  "window-title",
+  "capture-cursor",
+];
+
+/**
+ * Keep a window or application capture that was configured on the Sunshine app.
+ * MyHomeGames rewrites the launch command on every stream and must not drop those fields.
+ */
+function captureFieldsFromApp(app) {
+  const fields = {};
+  if (!app || typeof app !== "object") return fields;
+  for (const key of SUNSHINE_CAPTURE_KEYS) {
+    const value = app[key];
+    if (value === undefined || value === null || value === "") continue;
+    fields[key] = value;
+  }
+  return fields;
+}
+
 async function saveSunshineApp(body, env = process.env) {
   const { username, password } = resolveSunshineAuth(env);
   const response = await requestJson({
@@ -146,6 +169,7 @@ async function upsertSunshineStreamingApp({ gameTitle, fullCommandPath, env = pr
   const cmd = buildSunshineLaunchCmd(fullCommandPath);
   const apps = await listSunshineApps(env);
   const index = resolveSunshineUpsertIndex(apps, name);
+  const existing = apps.find((app) => String(app.name) === name);
 
   await saveSunshineApp(
     {
@@ -160,6 +184,7 @@ async function upsertSunshineStreamingApp({ gameTitle, fullCommandPath, env = pr
       "exclude-global-prep-cmd": false,
       "prep-cmd": [],
       detached: [],
+      ...captureFieldsFromApp(existing),
     },
     env,
   );
@@ -189,6 +214,7 @@ module.exports = {
   buildSunshineLaunchCmd,
   parseSunshineAppsPayload,
   resolveSunshineUpsertIndex,
+  captureFieldsFromApp,
   listSunshineApps,
   deleteSunshineApp,
   removeDuplicateSunshineApps,

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { detectPlatformAsset, validateDownloadedArchive, MIN_DMG_BYTES } = require("../../utils/sunshineBinary");
+const { detectPlatformAsset, validateDownloadedArchive, resolveSunshineAppOverride, MIN_DMG_BYTES } = require("../../utils/sunshineBinary");
 
 describe("sunshineBinary", () => {
   const originalPlatform = process.platform;
@@ -77,5 +77,29 @@ describe("sunshineBinary", () => {
 
       expect(() => validateDownloadedArchive(archivePath, "dmg", null)).not.toThrow();
     });
+  });
+
+  it("resolves SUNSHINE_APP to the bundle executable", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sunshine-app-"));
+    const app = path.join(root, "Sunshine.app");
+    const macos = path.join(app, "Contents", "MacOS");
+    fs.mkdirSync(macos, { recursive: true });
+    fs.writeFileSync(path.join(macos, "Sunshine"), "");
+    fs.mkdirSync(path.join(app, "Contents"), { recursive: true });
+    fs.writeFileSync(
+      path.join(app, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleShortVersionString</key><string>0.0.0-test</string>
+</dict></plist>
+`,
+    );
+
+    const resolved = resolveSunshineAppOverride({ SUNSHINE_APP: app });
+    expect(resolved.appPath).toBe(app);
+    expect(resolved.executable).toBe(path.join(macos, "Sunshine"));
+    expect(resolved.version).toBe("0.0.0-test");
+    expect(resolveSunshineAppOverride({})).toBeNull();
   });
 });

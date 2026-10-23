@@ -291,6 +291,56 @@ function attachDmgNonInteractive(dmgPath, mountPoint) {
   }
 }
 
+function readMacAppShortVersion(appPath) {
+  if (!appPath) return null;
+  const plist = path.join(appPath, "Contents", "Info.plist");
+  if (!fs.existsSync(plist)) return null;
+  try {
+    const version = execFileSync(
+      "plutil",
+      ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", plist],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    return version || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Use a local Sunshine.app instead of the managed install.
+ * SUNSHINE_APP may be the .app bundle or the executable inside Contents/MacOS.
+ */
+function resolveSunshineAppOverride(env = process.env) {
+  const raw = String(env.SUNSHINE_APP || "").trim();
+  if (!raw) return null;
+  const resolved = path.resolve(raw);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`SUNSHINE_APP does not exist: ${resolved}`);
+  }
+
+  let appPath = null;
+  let executable = resolved;
+  if (resolved.endsWith(".app")) {
+    appPath = resolved;
+    const named = path.join(resolved, "Contents", "MacOS", "Sunshine");
+    const lower = path.join(resolved, "Contents", "MacOS", "sunshine");
+    if (fs.existsSync(named)) executable = named;
+    else if (fs.existsSync(lower)) executable = lower;
+    else throw new Error(`SUNSHINE_APP has no executable: ${resolved}`);
+  } else {
+    const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;
+    const splitAt = resolved.indexOf(marker);
+    if (splitAt > 0) appPath = resolved.slice(0, splitAt);
+  }
+
+  return {
+    appPath,
+    executable,
+    version: readMacAppShortVersion(appPath) || "local",
+  };
+}
+
 function findSunshineExecutable(installDir) {
   if (!installDir || !fs.existsSync(installDir)) return null;
 
@@ -387,6 +437,15 @@ function installFromDmg(dmgPath, installDir) {
 }
 
 async function ensureSunshineBinary({ metadataPath, env = process.env } = {}) {
+  const override = resolveSunshineAppOverride(env);
+  if (override) {
+    return {
+      installDir: override.appPath || path.dirname(override.executable),
+      executable: override.executable,
+      version: override.version,
+    };
+  }
+
   if (env.SUNSHINE_SKIP_INSTALL === "true") {
     const installDir = resolveSunshineInstallDir(metadataPath);
     const executable = findSunshineExecutable(installDir);
@@ -467,6 +526,7 @@ module.exports = {
   resolveSunshineInstallDir,
   detectPlatformAsset,
   findSunshineExecutable,
+  resolveSunshineAppOverride,
   ensureSunshineBinary,
   readInstallManifest,
   validateDownloadedArchive,
