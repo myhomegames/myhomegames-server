@@ -8,6 +8,7 @@ describe("urlMatchesFrontend", () => {
     expect(urlMatchesFrontend("https://myhomegames.vige.it/app", target)).toBe(true);
     expect(urlMatchesFrontend("https://myhomegames.vige.it/app/#/library", target)).toBe(true);
     expect(urlMatchesFrontend("https://myhomegames.vige.it/app/games?id=1", target)).toBe(true);
+    expect(urlMatchesFrontend(" HTTPS://MyHomeGames.vige.it/app/ ", target)).toBe(true);
   });
 
   it("ignores a different page on the same host", () => {
