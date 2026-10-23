@@ -6,7 +6,7 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 
-const MOONLIGHT_WEB_GITHUB_REPO = "flashboss/moonlight-web-stream";
+const MOONLIGHT_WEB_GITHUB_REPO = "MrCreativ3001/moonlight-web-stream";
 const GITHUB_RELEASES_API = `https://api.github.com/repos/${MOONLIGHT_WEB_GITHUB_REPO}/releases/latest`;
 const INSTALL_MANIFEST = "install.json";
 const MIN_ARCHIVE_BYTES = 1024 * 1024;
@@ -31,7 +31,7 @@ function writeInstallManifest(installDir, manifest) {
   fs.writeFileSync(path.join(installDir, INSTALL_MANIFEST), JSON.stringify(manifest, null, 2), "utf8");
 }
 
-/** GitHub release archives from the fork that also publishes macOS builds. */
+/** GitHub release archives. v3.0.0 and later include macOS builds. */
 function detectNativeInstallStrategy() {
   if (process.platform === "win32") {
     return {
