@@ -6,8 +6,9 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 
+const { releaseAssetName, resolveGithubReleaseAsset } = require("./githubRelease");
+
 const MOONLIGHT_WEB_GITHUB_REPO = "MrCreativ3001/moonlight-web-stream";
-const GITHUB_RELEASES_API = `https://api.github.com/repos/${MOONLIGHT_WEB_GITHUB_REPO}/releases/latest`;
 const INSTALL_MANIFEST = "install.json";
 const MIN_ARCHIVE_BYTES = 1024 * 1024;
 
@@ -87,41 +88,6 @@ function missingPackageError(installDir) {
   );
 }
 
-function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    const request = https.get(
-      url,
-      {
-        headers: {
-          "User-Agent": "myhomegames-server",
-          Accept: "application/vnd.github+json",
-        },
-      },
-      (response) => {
-        let body = "";
-        response.on("data", (chunk) => {
-          body += chunk;
-        });
-        response.on("end", () => {
-          if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-            try {
-              resolve(JSON.parse(body));
-            } catch (error) {
-              reject(error);
-            }
-            return;
-          }
-          reject(new Error(`HTTP ${response.statusCode} for ${url}`));
-        });
-      },
-    );
-    request.on("error", reject);
-    request.setTimeout(30_000, () => {
-      request.destroy(new Error(`Timed out fetching ${url}`));
-    });
-  });
-}
-
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
@@ -161,26 +127,17 @@ function downloadFile(url, destPath) {
 
 async function resolveLatestNativeAsset(strategy, env = process.env) {
   const pinned = env.MOONLIGHT_WEB_VERSION?.trim();
-  const release = pinned
-    ? await fetchJson(
-        `https://api.github.com/repos/${MOONLIGHT_WEB_GITHUB_REPO}/releases/tags/v${pinned.replace(/^v/i, "")}`,
-      )
-    : await fetchJson(GITHUB_RELEASES_API);
-
-  const tag = String(release.tag_name || "").replace(/^v/i, "");
-  const assets = Array.isArray(release.assets) ? release.assets : [];
-  const asset = assets.find((item) => strategy.assetPattern.test(item.name));
-  if (!asset?.browser_download_url) {
+  const assetName = releaseAssetName(strategy.assetPattern);
+  if (!assetName) {
     throw new Error(`No Moonlight Web release asset found for ${process.platform}/${process.arch}`);
   }
-
-  return {
-    version: tag,
-    name: asset.name,
-    url: asset.browser_download_url,
-    kind: strategy.kind,
-    size: typeof asset.size === "number" ? asset.size : null,
-  };
+  const asset = await resolveGithubReleaseAsset({
+    repo: MOONLIGHT_WEB_GITHUB_REPO,
+    assetName,
+    tag: pinned ? `v${pinned.replace(/^v/i, "")}` : null,
+    env,
+  });
+  return { ...asset, kind: strategy.kind };
 }
 
 function findMoonlightWebExecutable(installDir) {
@@ -284,7 +241,26 @@ async function ensureMoonlightWebBinary({ metadataPath, env = process.env } = {}
     throw missingPackageError(installDir);
   }
 
-  const asset = await resolveLatestNativeAsset(strategy, env);
+  let asset;
+  try {
+    asset = await resolveLatestNativeAsset(strategy, env);
+  } catch (error) {
+    const manifest = readInstallManifest(installDir);
+    const executable = findMoonlightWebExecutable(installDir);
+    if (manifest?.version && executable) {
+      console.warn(
+        `Could not check Moonlight Web releases (${error.message}). Using installed ${manifest.version}.`,
+      );
+      return {
+        installDir,
+        executable,
+        version: manifest.version,
+        kind: "native",
+        image: null,
+      };
+    }
+    throw error;
+  }
   return installNativeMoonlightWeb({ asset, installDir, env });
 }
 
@@ -318,6 +294,7 @@ async function installNativeMoonlightWeb({ asset, installDir }) {
   if (process.platform !== "win32") {
     try {
       fs.chmodSync(executable, 0o755);
+      // v2 shipped a sibling streamer process. v3 links WebRTC into web-server.
       const streamer = path.join(path.dirname(executable), "streamer");
       if (fs.existsSync(streamer)) fs.chmodSync(streamer, 0o755);
     } catch {

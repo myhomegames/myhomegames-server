@@ -601,6 +601,76 @@ function writePackageMoonlightConfig(packageRoot, config) {
   fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
+/**
+ * Moonlight Web 3 rejects a partial web_server object: fields such as
+ * first_login_create_admin are required when the section is present, and
+ * default_user_id no longer belongs in config.json.
+ * A web_server section that only held that legacy id is removed so the
+ * binary can use its own defaults.
+ */
+function repairMoonlightWebV3Config(packageRoot, version = null) {
+  if (!packageRoot) return false;
+  let resolved = version;
+  if (!resolved) {
+    try {
+      const manifestPath = path.join(packageRoot, "..", "install.json");
+      resolved = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
+    } catch {
+      resolved = null;
+    }
+  }
+  const major = Number(String(resolved || "").split(".")[0]);
+  if (!(major >= 3)) return false;
+
+  let config;
+  try {
+    config = readPackageMoonlightConfig(packageRoot);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+
+  const next = { ...config };
+  let changed = false;
+  if (next.web_server && typeof next.web_server === "object") {
+    const web = { ...next.web_server };
+    if ("default_user_id" in web || "default_role_id" in web) {
+      delete web.default_user_id;
+      delete web.default_role_id;
+      changed = true;
+    }
+    if (Object.keys(web).length === 0) {
+      delete next.web_server;
+      changed = true;
+    } else if (
+      web.first_login_create_admin == null ||
+      web.first_login_assign_global_hosts == null ||
+      !("certificate" in web) ||
+      !("forwarded_header" in web)
+    ) {
+      next.web_server = {
+        ...web,
+        certificate: "certificate" in web ? web.certificate : null,
+        forwarded_header: "forwarded_header" in web ? web.forwarded_header : null,
+        first_login_create_admin: web.first_login_create_admin ?? true,
+        first_login_assign_global_hosts: web.first_login_assign_global_hosts ?? true,
+      };
+      changed = true;
+    } else if (changed) {
+      next.web_server = web;
+    }
+  }
+  if (next.webrtc && typeof next.webrtc === "object" && "network_types" in next.webrtc) {
+    const webrtc = { ...next.webrtc };
+    delete webrtc.network_types;
+    next.webrtc = webrtc;
+    changed = true;
+  }
+  if (!changed) return false;
+  writePackageMoonlightConfig(packageRoot, next);
+  return true;
+}
+
 function packageStaticFile(staticRoot, containerPath) {
   const normalized = String(containerPath || "");
   if (!normalized.startsWith(MOONLIGHT_STATIC_PREFIX)) {
@@ -619,9 +689,60 @@ function copyTempToPackageStatic(staticRoot, hostPath, containerPath) {
   fs.copyFileSync(hostPath, dest);
 }
 
+function moonlightRouteMissing(error) {
+  return /\bfailed \(404\)/.test(String(error?.message || error || ""));
+}
+
+/**
+ * Moonlight Web 3 stores default_user_id in data.json. Older builds read it from
+ * config.json and only pick it up after a restart.
+ */
+function clearLegacyDefaultUserFromConfig(packageRoot) {
+  if (!packageRoot) return false;
+  let config;
+  try {
+    config = readPackageMoonlightConfig(packageRoot);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  if (config?.web_server?.default_user_id == null) return false;
+  delete config.web_server.default_user_id;
+  if (config.web_server && Object.keys(config.web_server).length === 0) {
+    delete config.web_server;
+  }
+  writePackageMoonlightConfig(packageRoot, config);
+  return true;
+}
+
+function writeLegacyDefaultUserConfig(packageRoot, userId) {
+  if (!packageRoot) {
+    console.warn("Moonlight Web default_user_id needs the installed package directory.");
+    return false;
+  }
+  let config = {};
+  try {
+    config = readPackageMoonlightConfig(packageRoot);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw new Error(`Could not read Moonlight Web config: ${error.message || error}`);
+    }
+  }
+  const current = config?.web_server?.default_user_id;
+  if (Number(current) === Number(userId)) return false;
+  config.web_server = {
+    ...(config.web_server || {}),
+    default_user_id: Number(userId),
+  };
+  writePackageMoonlightConfig(packageRoot, config);
+  return true;
+}
+
 /**
  * Configure Moonlight Web so unauthenticated browsers use the admin user
  * (skips the login modal in the embed iframe).
+ * v3: PUT /api/user/default persists data.json immediately.
+ * v2: fall back to config.json when that route does not exist.
  */
 async function ensureMoonlightWebDefaultUser({
   baseUrl,
@@ -634,7 +755,8 @@ async function ensureMoonlightWebDefaultUser({
     return { applied: false, reason: "skipped" };
   }
 
-  const users = await listMoonlightUsers(baseUrl, cookie);
+  const normalized = String(baseUrl || "").trim().replace(/\/$/, "");
+  const users = await listMoonlightUsers(normalized, cookie);
   const preferredName = String(username || "").trim();
   const admin =
     users.find((user) => preferredName && user.name === preferredName) ||
@@ -643,33 +765,55 @@ async function ensureMoonlightWebDefaultUser({
   if (!admin?.id) {
     throw new Error("Moonlight Web admin user id not found");
   }
+  const userId = Number(admin.id);
 
-  if (!packageRoot) {
-    console.warn("Moonlight Web default_user_id needs the installed package directory.");
-    return { applied: false, reason: "missing-package", userId: admin.id };
+  let routeMissing = false;
+  try {
+    const current = await requestMoonlightWebJson({
+      baseUrl: normalized,
+      urlString: `${normalized}/api/user/default`,
+      method: "GET",
+      cookie,
+      timeoutMs: 30_000,
+    });
+    const parsed = JSON.parse(current.body || "{}");
+    if (Number(parsed.id) === userId) {
+      clearLegacyDefaultUserFromConfig(packageRoot);
+      return { applied: false, reason: "already-configured", userId };
+    }
+  } catch (error) {
+    if (!moonlightRouteMissing(error)) throw error;
+    routeMissing = true;
   }
 
-  let config = {};
-  try {
-    config = readPackageMoonlightConfig(packageRoot);
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw new Error(`Could not read Moonlight Web config: ${error.message || error}`);
+  if (!routeMissing) {
+    try {
+      await requestMoonlightWebJson({
+        baseUrl: normalized,
+        urlString: `${normalized}/api/user/default`,
+        method: "PUT",
+        body: { id: userId },
+        cookie,
+        timeoutMs: 30_000,
+      });
+      clearLegacyDefaultUserFromConfig(packageRoot);
+      console.log(`Moonlight Web default_user_id set to ${userId} (skip login in embed).`);
+      return { applied: true, userId, restarted: false };
+    } catch (error) {
+      if (!moonlightRouteMissing(error)) throw error;
     }
   }
 
-  const current = config?.web_server?.default_user_id;
-  if (Number(current) === Number(admin.id)) {
-    return { applied: false, reason: "already-configured", userId: admin.id };
+  const wrote = writeLegacyDefaultUserConfig(packageRoot, userId);
+  if (!wrote) {
+    return {
+      applied: false,
+      reason: packageRoot ? "already-configured" : "missing-package",
+      userId,
+    };
   }
-
-  config.web_server = {
-    ...(config.web_server || {}),
-    default_user_id: Number(admin.id),
-  };
-  writePackageMoonlightConfig(packageRoot, config);
-  console.log(`Moonlight Web default_user_id set to ${admin.id} (skip login in embed).`);
-  return { applied: true, userId: admin.id, restarted: true };
+  console.log(`Moonlight Web default_user_id set to ${userId} (skip login in embed).`);
+  return { applied: true, userId, restarted: true };
 }
 
 async function listMoonlightApps(baseUrl, cookie, hostId) {
@@ -1712,9 +1856,132 @@ function normalizeMoonlightModuleImports(source, alias) {
   return out;
 }
 
+/** v3 ships one webpack bundle. v2 shipped ES modules under static/stream/. */
+function moonlightStaticIsBundled(staticRoot) {
+  const streamJs = path.join(staticRoot, "stream.js");
+  if (!fs.existsSync(streamJs)) return false;
+  if (fs.existsSync(path.join(staticRoot, "stream", "index.js"))) return false;
+  const source = fs.readFileSync(streamJs, "utf8");
+  return source.includes("/host/stream/web_socket") && !source.includes("import { Stream }");
+}
+
+const BUNDLED_FULLSCREEN_STOCK =
+  "this.autoEnterFullscreenOnStart=s.enterFullscreenOnStreamStart";
+const BUNDLED_FULLSCREEN_PATCHED = "this.autoEnterFullscreenOnStart=true";
+const BUNDLED_EXIT_STOCK =
+  'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}))';
+const BUNDLED_EXIT_PATCHED =
+  'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){try{const mhgStop=new URLSearchParams(location.search).get("mhgStop");if(mhgStop){try{yield fetch(mhgStop,{method:"POST",mode:"cors",keepalive:true,credentials:"omit"})}catch(_e){try{yield fetch(mhgStop,{method:"GET",mode:"cors",keepalive:true,credentials:"omit"})}catch(_e2){}}}}catch(_mhg){}const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}))';
+
+function bundledMoonlightPreamble() {
+  return `<script id="mhg-v3-boot">
+// MHG v3: TV profile via mlSettings, and stop the home game when the page is left.
+(function () {
+  try {
+    var q = new URLSearchParams(location.search);
+    var ua = String((navigator && navigator.userAgent) || "").toLowerCase();
+    var isTv = q.get("mhgProfile") === "tv" || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua);
+    if (isTv) {
+      window.__MHG_TV__ = true;
+      var current = {};
+      try { current = JSON.parse(localStorage.getItem("mlSettings") || "{}") || {}; } catch (_e) { current = {}; }
+      var tv = ${MOONLIGHT_TV_SETTINGS_JSON};
+      localStorage.setItem("mlSettings", JSON.stringify(Object.assign({}, current, tv)));
+    }
+  } catch (_tv) {}
+  try {
+    var stop = new URLSearchParams(location.search).get("mhgStop");
+    if (!stop) return;
+    var sent = false;
+    var send = function () {
+      if (sent) return;
+      sent = true;
+      try { if (navigator.sendBeacon) navigator.sendBeacon(stop); } catch (_b) {}
+      try {
+        fetch(stop, { method: "POST", mode: "cors", keepalive: true, credentials: "omit" }).catch(function () {
+          fetch(stop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(function () {});
+        });
+      } catch (_f) {}
+    };
+    window.addEventListener("pagehide", send);
+    window.addEventListener("popstate", send);
+  } catch (_leave) {}
+})();
+</script>
+<script src="/stream.js?${MOONLIGHT_MODULE_CACHE_BUST}"></script>
+`;
+}
+
+/**
+ * v3 stream.html must load the webpack bundle once, as a classic script.
+ * The v2 module graph (stream/index.js, mhg-boot) is not in this package.
+ */
+function repairBundledStreamHtml(html) {
+  let body = String(html || "");
+  body = body
+    .replace(/<!-- mhg-entry=mhg\d+ -->\s*/g, "")
+    .replace(/<script type="module" src="[^"]*(?:mhg-boot|stream\.mhg\d+)[^"]*"><\/script>\s*/g, "")
+    .replace(/<script id="mhg-v3-boot">[\s\S]*?<\/script>\s*/g, "")
+    .replace(/<script src=(?:"|')?\/?stream(?:\.mhg\d+)?\.js(?:\?[^"'\s>]*)?(?:"|')?><\/script>\s*/g, "");
+  if (!/<base\s/i.test(body)) {
+    body = body.replace(/<head([^>]*)>/i, '<head$1><base href="/">');
+  }
+  const scripts = bundledMoonlightPreamble();
+  if (body.includes("</body>")) {
+    body = body.replace("</body>", `${scripts}</body>`);
+  } else {
+    body += scripts;
+  }
+  return body;
+}
+
+function patchBundledMoonlightStatic(staticRoot) {
+  let applied = 0;
+  const streamPath = path.join(staticRoot, "stream.js");
+  const source = fs.readFileSync(streamPath, "utf8");
+  let next = source.replace(/^\/\/ MHG entry mhg\d+\n/, "");
+  if (next.includes(BUNDLED_FULLSCREEN_STOCK)) {
+    next = next.replace(BUNDLED_FULLSCREEN_STOCK, BUNDLED_FULLSCREEN_PATCHED);
+  }
+  if (next.includes(BUNDLED_EXIT_STOCK)) {
+    next = next.replace(BUNDLED_EXIT_STOCK, BUNDLED_EXIT_PATCHED);
+  }
+  if (next !== source) {
+    fs.writeFileSync(streamPath, next);
+    applied += 1;
+  }
+
+  for (const leftover of [MOONLIGHT_BOOT_ENTRY, MOONLIGHT_STREAM_ENTRY]) {
+    const file = path.join(staticRoot, leftover);
+    if (!fs.existsSync(file)) continue;
+    fs.unlinkSync(file);
+    applied += 1;
+  }
+
+  const htmlPath = path.join(staticRoot, "stream.html");
+  if (!fs.existsSync(htmlPath)) return { applied };
+  const repaired = repairBundledStreamHtml(fs.readFileSync(htmlPath, "utf8"));
+  if (repaired !== fs.readFileSync(htmlPath, "utf8")) {
+    fs.writeFileSync(htmlPath, repaired);
+    applied += 1;
+  }
+  const versionedDir = path.join(staticRoot, MOONLIGHT_MODULE_ALIAS);
+  fs.mkdirSync(versionedDir, { recursive: true });
+  const versionedPath = path.join(versionedDir, "stream.html");
+  const currentVersioned = fs.existsSync(versionedPath) ? fs.readFileSync(versionedPath, "utf8") : "";
+  if (currentVersioned !== repaired) {
+    fs.writeFileSync(versionedPath, repaired);
+    applied += 1;
+  }
+  return { applied };
+}
+
 function patchMoonlightStaticFullscreenAssets(staticRoot) {
   if (!staticRoot || !fs.existsSync(staticRoot)) {
     return { applied: 0 };
+  }
+  if (moonlightStaticIsBundled(staticRoot)) {
+    return patchBundledMoonlightStatic(staticRoot);
   }
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-fs-"));
   const replacements = [
@@ -2796,6 +3063,7 @@ module.exports = {
   listMoonlightUsers,
   readPackageMoonlightConfig,
   writePackageMoonlightConfig,
+  repairMoonlightWebV3Config,
   patchMoonlightStaticFullscreenAssets,
   shouldUseMoonlightTvProfile,
   MOONLIGHT_TV_STREAM_SETTINGS,

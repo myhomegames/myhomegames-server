@@ -22,6 +22,7 @@ const { listMoonlightHosts, hostLooksPaired } = require("./moonlightWebPairing")
 const {
   ensureMoonlightWebDefaultUser,
   ensureMoonlightEnterFullscreenDefault,
+  repairMoonlightWebV3Config,
 } = require("./moonlightWebEmbed");
 const { ensureMoonlightCloudflareTurnIce } = require("./moonlightWebTurn");
 const { moonlightWebPublicUrlFromApiBase } = require("./tunnelHostname");
@@ -115,23 +116,42 @@ async function restartManagedNativeMoonlight(port, env, url) {
   return ready;
 }
 
-function startNativeMoonlightWeb(executable, port, env = process.env) {
+function startNativeMoonlightWeb(executable, port, env = process.env, version = null) {
   const cwd = path.dirname(executable);
+  try {
+    if (repairMoonlightWebV3Config(cwd, version)) {
+      console.log("Repaired Moonlight Web config.json for v3.");
+    }
+  } catch (error) {
+    console.warn(`Could not repair Moonlight Web config: ${error.message || error}`);
+  }
   const childEnv = { ...process.env, ...env };
+  if (!childEnv.BIND_ADDRESS) {
+    childEnv.BIND_ADDRESS = `0.0.0.0:${port}`;
+  }
   if (!childEnv.WEB_SERVER_BIND_ADDRESS) {
-    childEnv.WEB_SERVER_BIND_ADDRESS = `0.0.0.0:${port}`;
+    childEnv.WEB_SERVER_BIND_ADDRESS = childEnv.BIND_ADDRESS;
   }
 
   const child = spawn(executable, [], {
     cwd: fs.existsSync(cwd) ? cwd : undefined,
     detached: process.platform !== "win32",
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     env: childEnv,
   });
 
+  const logStream = (chunk) => {
+    const line = String(chunk || "").trim();
+    if (line) console.error(`Moonlight Web: ${line}`);
+  };
+  child.stdout?.on("data", logStream);
+  child.stderr?.on("data", logStream);
   child.on("error", (error) => {
     console.error("Moonlight Web process error:", error.message || error);
+  });
+  child.on("exit", (code) => {
+    if (code) console.error(`Moonlight Web exited (${code}).`);
   });
   if (process.platform !== "win32") child.unref();
 
@@ -145,7 +165,8 @@ async function waitForMoonlightWeb(url, timeoutMs = 120_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await probeMoonlightWebReachable(url)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (managedChild && managedChild.exitCode != null) return false;
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
 }
@@ -360,7 +381,7 @@ async function ensureMoonlightWebRunning({
   manageLifecycle = true;
 
   console.log(`Starting Moonlight Web (${installed.version || "unknown"})...`);
-  startNativeMoonlightWeb(installed.executable, port, env);
+  startNativeMoonlightWeb(installed.executable, port, env, installed.version);
 
   const ready = await waitForMoonlightWeb(managedUrl);
   const persistUrl = publicFromTunnel || managedUrl;
