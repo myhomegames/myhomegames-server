@@ -26,10 +26,13 @@ const PUBLISHER = "CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2";
 const PUBLISHER_DISPLAY_NAME = "it.vige";
 const PACKAGE_NAME = "lucastancapiano.myhomegames-server";
 const DISPLAY_NAME = "myhomegames-server";
-/** Store package version. Independent of package.json. */
-const MSIX_VERSION = "1.2.9";
 
-/** MSIX Identity Version is four numeric parts. */
+/** Same version as the server (`package.json`). */
+function packageVersion() {
+  return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8")).version;
+}
+
+/** MSIX Identity Version is four numeric parts (prerelease suffixes are dropped). */
 function msixVersion(version) {
   const core = String(version).split("-")[0];
   const parts = core.split(".").map((n) => {
@@ -391,20 +394,21 @@ function packOnWindows(outFile, cerOut) {
 }
 
 /**
- * Stage build/msix-layout and produce a signed build/MyHomeGames-1.2.9-win-x64.msix.
+ * Stage build/msix-layout and produce a signed build/MyHomeGames-<package.json version>-win-x64.msix.
  * @param {{ ensurePkg?: boolean }} [options]
  */
 function buildWindowsMsix(options = {}) {
   if (options.ensurePkg && !findWinExe()) {
     runPkgWindowsOnly();
   }
-  const version = msixVersion(MSIX_VERSION);
-  const outFile = path.join(BUILD_DIR, `MyHomeGames-${MSIX_VERSION}-win-x64.msix`);
-  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${MSIX_VERSION}.cer`);
+  const pkgVersion = packageVersion();
+  const identityVersion = msixVersion(pkgVersion);
+  const outFile = path.join(BUILD_DIR, `MyHomeGames-${pkgVersion}-win-x64.msix`);
+  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${pkgVersion}.cer`);
   resetLayout();
   stagePayload();
   buildLauncher();
-  fs.writeFileSync(path.join(LAYOUT_DIR, "AppxManifest.xml"), manifestXml(version));
+  fs.writeFileSync(path.join(LAYOUT_DIR, "AppxManifest.xml"), manifestXml(identityVersion));
   const assets = path.join(LAYOUT_DIR, "Assets");
   writeLogo(path.join(assets, "Square44x44Logo.png"), 44);
   writeLogo(path.join(assets, "Square150x150Logo.png"), 150);
@@ -416,7 +420,7 @@ function buildWindowsMsix(options = {}) {
     packSignedMsix(LAYOUT_DIR, outFile, cerOut);
   }
 
-  console.log(`✅ Windows MSIX: ${path.basename(outFile)}`);
+  console.log(`✅ Windows MSIX: ${path.basename(outFile)} (Identity ${identityVersion})`);
   console.log(`   Public cert: ${cerOut}`);
   console.log("   On Windows, enable sideload (or Developer Mode), then:");
   console.log(`   Import-Certificate -FilePath ${path.basename(cerOut)} -CertStoreLocation Cert:\\CurrentUser\\TrustedPeople`);
@@ -427,7 +431,7 @@ function buildWindowsMsix(options = {}) {
 module.exports = {
   PACKAGE_NAME,
   PUBLISHER,
-  MSIX_VERSION,
+  packageVersion,
   msixVersion,
   buildWindowsMsix,
   packSignedMsix,
