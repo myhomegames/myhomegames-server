@@ -29,8 +29,8 @@ const MOONLIGHT_TV_STREAM_SETTINGS = {
 const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
 
 /** Cache-bust nested Moonlight ES modules (Tizen keeps bare import URLs forever). */
-const MOONLIGHT_MODULE_CACHE_BUST = "mhg=41";
-const MOONLIGHT_MODULE_ALIAS = "mhg41";
+const MOONLIGHT_MODULE_CACHE_BUST = "mhg=42";
+const MOONLIGHT_MODULE_ALIAS = "mhg42";
 /** Physical entry script — Tizen ignores ?query on modules and often caches stream.html body. */
 const MOONLIGHT_STREAM_ENTRY = `stream.${MOONLIGHT_MODULE_ALIAS}.js`;
 /**
@@ -1920,6 +1920,14 @@ const BUNDLED_AUDIO_UNMUTE_STOCK = "onUserInteraction(){this.audioElement.muted=
 const BUNDLED_AUDIO_UNMUTE_PATCHED =
   "onUserInteraction(){this.audioElement.muted=!1;try{this.audioElement.play()}catch(_mhgAud){}}";
 /**
+ * ScummVM (and other slow hosts) attach the audio track after the first play() attempt.
+ * Tizen then stays silent unless play() runs again when setTrack fires.
+ */
+const BUNDLED_AUDIO_SET_TRACK_STOCK =
+  "setTrack(e){this.oldTrack&&(this.stream.removeTrack(this.oldTrack),this.oldTrack=null),this.stream.addTrack(e),this.oldTrack=e}";
+const BUNDLED_AUDIO_SET_TRACK_PATCHED =
+  'setTrack(e){this.oldTrack&&(this.stream.removeTrack(this.oldTrack),this.oldTrack=null),this.stream.addTrack(e),this.oldTrack=e;if(typeof window!=="undefined"&&window.__MHG_TV__)try{this.audioElement.muted=!1;this.audioElement.volume=1;var _mhgAp=this.audioElement.play();_mhgAp&&_mhgAp.catch&&_mhgAp.catch(function(){})}catch(_mhgAud2){}}';
+/**
  * Tizen / TV iframes disallow getUserMedia(mic). Do not call the API on TV —
  * desktop keeps microphone; Moonlight's own failure logs stay intact if it runs.
  */
@@ -2169,17 +2177,34 @@ function bundledMoonlightPreamble() {
         document.querySelectorAll("audio,video").forEach(function (el) {
           try {
             el.muted = false;
+            try { el.volume = 1; } catch (_v) {}
+            try { el.playsInline = true; } catch (_pi) {}
             var p = el.play();
             if (p && typeof p.catch === "function") p.catch(function () {});
           } catch (_e) {}
         });
+        // Resume Web Audio graphs used by some Moonlight audio pipelines.
+        try {
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (AC && unlockMedia._ctx) unlockMedia._ctx.resume();
+          else if (AC) {
+            unlockMedia._ctx = new AC();
+            unlockMedia._ctx.resume();
+          }
+        } catch (_ac) {}
       } catch (_u) {}
     }
     document.addEventListener("keydown", unlockMedia, true);
     document.addEventListener("keyup", unlockMedia, true);
-    // Do not call requestFullscreen here: on Tizen it rejects with
-    // TypeError "disallowed by permissions policy" and Moonlight toasts it.
-    setTimeout(unlockMedia, 1200);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) unlockMedia();
+    });
+    // ScummVM etc. often start audio after the first gesture/timeout; keep retrying.
+    setTimeout(unlockMedia, 800);
+    setTimeout(unlockMedia, 2000);
+    setTimeout(unlockMedia, 5000);
+    var keepAlive = setInterval(unlockMedia, 3000);
+    setTimeout(function () { try { clearInterval(keepAlive); } catch (_c) {} }, 90000);
   } catch (_tvUi) {}
 })();
 </script>
@@ -2250,6 +2275,12 @@ function patchBundledMoonlightStatic(staticRoot) {
   }
   if (next.includes(BUNDLED_AUDIO_UNMUTE_STOCK)) {
     next = next.replace(BUNDLED_AUDIO_UNMUTE_STOCK, BUNDLED_AUDIO_UNMUTE_PATCHED);
+  }
+  if (
+    next.includes(BUNDLED_AUDIO_SET_TRACK_STOCK) &&
+    !next.includes(BUNDLED_AUDIO_SET_TRACK_PATCHED)
+  ) {
+    next = next.replace(BUNDLED_AUDIO_SET_TRACK_STOCK, BUNDLED_AUDIO_SET_TRACK_PATCHED);
   }
   if (next.includes(BUNDLED_MIC_CALL_DISABLED)) {
     next = next.replace(BUNDLED_MIC_CALL_DISABLED, BUNDLED_MIC_CALL_PATCHED);

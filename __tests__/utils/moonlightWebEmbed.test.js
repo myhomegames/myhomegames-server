@@ -198,6 +198,7 @@ describe("moonlightWebEmbed", () => {
       "this.audioElement.autoplay=!0,this.audioElement.muted=!0,this.audioElement.srcObject=this.stream",
       "onUserInteraction(){this.audioElement.muted=!1}",
       "onUserInteraction(){if(this.tryRequestMicrophone(),",
+      "setTrack(e){this.oldTrack&&(this.stream.removeTrack(this.oldTrack),this.oldTrack=null),this.stream.addTrack(e),this.oldTrack=e}",
       'catch(e){return null===(t=this.logger)||void 0===t||t.debug(`Failed to aquire microphone: ${e}`),void d("Failed to aquire microphone!")}',
       'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
       'const e=()=>{document.removeEventListener("pointerlockerror",e),t.requestPointerLock()};',
@@ -255,7 +256,7 @@ describe("moonlightWebEmbed", () => {
 
     const html = fs.readFileSync(path.join(staticRoot, "stream.html"), "utf8");
     expect(html).not.toContain("type=\"module\"");
-    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=41"><\\/script>`, "g"))).toHaveLength(1);
+    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=42"><\\/script>`, "g"))).toHaveLength(1);
     expect(html).toContain('id="mhg-v3-boot"');
     expect(html).toContain("mlSettings");
     expect(html).toContain("tv-modal-focus");
@@ -263,11 +264,14 @@ describe("moonlightWebEmbed", () => {
     expect(html).toContain("data-mhg-tv");
     expect(html).toContain("100vw");
     expect(html).toContain("unlockMedia");
+    expect(html).toContain("setInterval(unlockMedia");
     expect(html).toContain('proto.requestFullscreen = noopResolved');
     expect(html).toContain("enterFullscreenOnStreamStart\":false");
     expect(html).not.toContain("req.call(el");
     expect(html).not.toContain("innerHTML = \"\"");
     expect(js).toContain(".catch(function(){}),0)");
+    expect(js).toContain("this.audioElement.volume=1");
+    expect(js).toContain("this.stream.addTrack(e),this.oldTrack=e;if(typeof window");
     const versioned = fs.readFileSync(
       path.join(staticRoot, MOONLIGHT_MODULE_ALIAS, "stream.html"),
       "utf8",
