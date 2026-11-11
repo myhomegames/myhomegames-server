@@ -913,12 +913,12 @@ setTwitchCredentialsMetadataPath(METADATA_PATH);
 // Endpoint: get settings (public)
 app.get("/settings", (req, res) => {
   const settings = readSettings();
-  const { resolveAiIdentifyConfig } = require("./utils/aiGameIdentify");
+  const { isAiFolderImportEnabled } = require("./utils/aiGameIdentify");
   res.json({
     ...settings,
     cloudflareTunnelEnabled: isCloudflareTunnelEnabled(),
-    // Folder import UI/API is AI-only; expose readiness so the SPA can hide the control.
-    aiFolderImportEnabled: Boolean(resolveAiIdentifyConfig().enabled),
+    // Folder import UI/API is AI-only. Tunnel: Worker sends X-MHG-Ai-Configured (no key in JSON).
+    aiFolderImportEnabled: isAiFolderImportEnabled(req),
   });
 });
 

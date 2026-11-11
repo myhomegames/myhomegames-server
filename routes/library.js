@@ -2365,9 +2365,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
    */
   app.post("/games/pick-import-folder", requireToken, async (req, res) => {
     const { resolveAiIdentifyConfig } = require("../utils/aiGameIdentify");
-    if (!resolveAiIdentifyConfig().enabled) {
+    if (!resolveAiIdentifyConfig(process.env, { req }).enabled) {
       return res.status(503).json({
-        error: "AI game identification is not configured. Set OPENAI_API_KEY to enable folder import.",
+        error:
+          "AI game identification is not configured. Set OPENAI_API_KEY on the server or Cloudflare Worker.",
       });
     }
 
@@ -2421,10 +2422,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const { getIGDBAccessToken, runIGDBSearch } = require("./igdb");
     const { formatIGDBReleaseDate } = require("../utils/dateUtils");
 
-    const aiConfig = resolveAiIdentifyConfig();
+    const aiConfig = resolveAiIdentifyConfig(process.env, { req });
     if (!aiConfig.enabled) {
       return res.status(503).json({
-        error: "AI game identification is not configured. Set OPENAI_API_KEY to enable folder import.",
+        error:
+          "AI game identification is not configured. Set OPENAI_API_KEY on the server or Cloudflare Worker.",
       });
     }
 
@@ -2456,7 +2458,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           : [path.relative(folderPath, unitRoot) || c.sourceName],
       };
     });
-    const aiIdentify = await identifyGamesWithAi(candidatesForAi);
+    const aiIdentify = await identifyGamesWithAi(candidatesForAi, {
+      apiKey: aiConfig.apiKey,
+      baseURL: aiConfig.baseURL,
+      model: aiConfig.model,
+      enabled: true,
+      batchSize: aiConfig.batchSize,
+      maxTreeLines: aiConfig.maxTreeLines,
+      maxPromptChars: aiConfig.maxPromptChars,
+    });
     if (!aiIdentify.used || aiIdentify.error) {
       console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
       return res.status(502).json({

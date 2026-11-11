@@ -1,11 +1,20 @@
 const {
   parseIdentifyResponse,
   resolveAiIdentifyConfig,
+  isAiFolderImportEnabled,
   resolveCandidateTitle,
   identifyGamesWithAi,
   packBatches,
   isRequestTooLargeError,
 } = require("../../utils/aiGameIdentify");
+
+function mockReq(headers) {
+  return {
+    header(name) {
+      return headers[name] || headers[name.toLowerCase()] || "";
+    },
+  };
+}
 
 describe("resolveAiIdentifyConfig", () => {
   test("disabled without API key", () => {
@@ -21,6 +30,61 @@ describe("resolveAiIdentifyConfig", () => {
     expect(cfg.enabled).toBe(true);
     expect(cfg.model).toBe("gpt-4o-mini");
     expect(cfg.batchSize).toBe(4);
+  });
+
+  test("tunnel mode uses gateway headers only (ignores env key)", () => {
+    const cfg = resolveAiIdentifyConfig(
+      {
+        CLOUDFLARE_TUNNEL_ENABLED: "true",
+        OPENAI_API_KEY: "sk-env-should-be-ignored",
+      },
+      {
+        req: mockReq({
+          "X-OpenAI-Api-Key": "sk-from-worker",
+          "X-OpenAI-Base-Url": "https://api.groq.com/openai/v1",
+          "X-OpenAI-Model": "openai/gpt-oss-20b",
+        }),
+      }
+    );
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.apiKey).toBe("sk-from-worker");
+    expect(cfg.baseURL).toBe("https://api.groq.com/openai/v1");
+    expect(cfg.model).toBe("openai/gpt-oss-20b");
+    expect(cfg.source).toBe("gateway-headers");
+  });
+
+  test("tunnel mode without headers is disabled even if env has a key", () => {
+    const cfg = resolveAiIdentifyConfig(
+      {
+        CLOUDFLARE_TUNNEL_ENABLED: "true",
+        OPENAI_API_KEY: "sk-env-only",
+      },
+      { req: mockReq({}) }
+    );
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.apiKey).toBeNull();
+  });
+});
+
+describe("isAiFolderImportEnabled", () => {
+  test("tunnel uses X-MHG-Ai-Configured without exposing a key", () => {
+    expect(
+      isAiFolderImportEnabled(mockReq({ "X-MHG-Ai-Configured": "true" }), {
+        CLOUDFLARE_TUNNEL_ENABLED: "true",
+      })
+    ).toBe(true);
+    expect(
+      isAiFolderImportEnabled(mockReq({ "X-MHG-Ai-Configured": "false" }), {
+        CLOUDFLARE_TUNNEL_ENABLED: "true",
+      })
+    ).toBe(false);
+  });
+
+  test("local uses env key", () => {
+    expect(
+      isAiFolderImportEnabled(mockReq({}), { OPENAI_API_KEY: "sk-local" })
+    ).toBe(true);
+    expect(isAiFolderImportEnabled(mockReq({}), { OPENAI_API_KEY: "" })).toBe(false);
   });
 });
 

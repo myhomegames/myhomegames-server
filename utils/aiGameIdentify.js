@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 /** Small batches keep Groq free-tier TPM (~8k) and similar request caps happy. */
@@ -13,24 +14,68 @@ const DEFAULT_MAX_TREE_LINES = 12;
  */
 const DEFAULT_MAX_PROMPT_CHARS = 14000;
 
+function readHeader(req, name) {
+  if (!req) return "";
+  if (typeof req.header === "function") return String(req.header(name) || "").trim();
+  const headers = req.headers || {};
+  const lower = name.toLowerCase();
+  const raw = headers[name] ?? headers[lower];
+  return String(Array.isArray(raw) ? raw[0] : raw || "").trim();
+}
+
 /**
- * Resolve OpenAI-compatible credentials from env (or injected options).
- * Works with OpenAI, Azure OpenAI-compatible gateways, Groq, OpenRouter, Ollama, etc.
+ * Headers injected by the Cloudflare Worker (never trust browser-supplied values alone
+ * on public paths; the Worker strips spoofed headers before inject).
+ */
+function readOpenAiHeaders(req) {
+  return {
+    apiKey: readHeader(req, "X-OpenAI-Api-Key"),
+    baseURL: readHeader(req, "X-OpenAI-Base-Url"),
+    model: readHeader(req, "X-OpenAI-Model"),
+    configuredFlag: readHeader(req, "X-MHG-Ai-Configured").toLowerCase(),
+  };
+}
+
+/**
+ * Resolve OpenAI-compatible credentials.
+ * Tunnel enabled: only X-OpenAI-* headers from the API gateway (same pattern as Twitch).
+ * Tunnel disabled: explicit options → request headers → OPENAI_* / MHG_AI_* env.
  */
 function resolveAiIdentifyConfig(env = process.env, options = {}) {
-  const apiKey =
-    (typeof options.apiKey === "string" && options.apiKey.trim()) ||
-    String(env.OPENAI_API_KEY || env.MHG_AI_API_KEY || "").trim();
-  const baseURL =
-    (typeof options.baseURL === "string" && options.baseURL.trim()) ||
-    String(env.OPENAI_BASE_URL || env.MHG_AI_BASE_URL || "").trim() ||
-    undefined;
-  const model =
-    (typeof options.model === "string" && options.model.trim()) ||
-    String(env.OPENAI_MODEL || env.MHG_AI_MODEL || "").trim() ||
-    DEFAULT_MODEL;
+  const header = readOpenAiHeaders(options.req);
+  const tunnel = isCloudflareTunnelEnabled(env);
+
+  let apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+  let baseURL = typeof options.baseURL === "string" ? options.baseURL.trim() : "";
+  let model = typeof options.model === "string" ? options.model.trim() : "";
+
+  if (tunnel) {
+    apiKey = apiKey || header.apiKey;
+    baseURL = baseURL || header.baseURL;
+    model = model || header.model;
+  } else {
+    apiKey =
+      apiKey ||
+      header.apiKey ||
+      String(env.OPENAI_API_KEY || env.MHG_AI_API_KEY || "").trim();
+    baseURL =
+      baseURL ||
+      header.baseURL ||
+      String(env.OPENAI_BASE_URL || env.MHG_AI_BASE_URL || "").trim();
+    model =
+      model ||
+      header.model ||
+      String(env.OPENAI_MODEL || env.MHG_AI_MODEL || "").trim();
+  }
+
+  baseURL = baseURL || undefined;
+  model = model || DEFAULT_MODEL;
+
   const enabledFlag = String(env.MHG_AI_GAME_IDENTIFY || "true").trim().toLowerCase();
-  const enabled = options.enabled != null ? Boolean(options.enabled) : enabledFlag !== "false" && enabledFlag !== "0";
+  const enabled =
+    options.enabled != null
+      ? Boolean(options.enabled)
+      : enabledFlag !== "false" && enabledFlag !== "0";
 
   const batchFromEnv = Number(env.MHG_AI_BATCH_SIZE);
   const batchSize = Number.isFinite(options.batchSize)
@@ -61,7 +106,24 @@ function resolveAiIdentifyConfig(env = process.env, options = {}) {
     batchSize: Math.max(1, batchSize),
     maxTreeLines: Math.max(2, maxTreeLines),
     maxPromptChars: Math.max(2000, maxPromptChars),
+    source: tunnel ? "gateway-headers" : apiKey ? "local" : "none",
   };
+}
+
+/**
+ * Whether the Add Game "Import from folder" control should be shown.
+ * Tunnel: Worker sets X-MHG-Ai-Configured (key never appears in JSON).
+ * Local: OPENAI_API_KEY (or alias) present in env / headers.
+ */
+function isAiFolderImportEnabled(req, env = process.env) {
+  if (isCloudflareTunnelEnabled(env)) {
+    const flag = readHeader(req, "X-MHG-Ai-Configured").toLowerCase();
+    if (flag === "true" || flag === "1") return true;
+    if (flag === "false" || flag === "0") return false;
+    // Fallback if /settings was not routed through the Worker yet.
+    return Boolean(readHeader(req, "X-OpenAI-Api-Key"));
+  }
+  return Boolean(resolveAiIdentifyConfig(env, { req }).enabled);
 }
 
 function truncateTree(tree, maxLines) {
@@ -325,6 +387,7 @@ module.exports = {
   DEFAULT_MAX_TREE_LINES,
   DEFAULT_MAX_PROMPT_CHARS,
   resolveAiIdentifyConfig,
+  isAiFolderImportEnabled,
   parseIdentifyResponse,
   identifyGamesWithAi,
   resolveCandidateTitle,
@@ -332,4 +395,5 @@ module.exports = {
   packBatches,
   truncateTree,
   isRequestTooLargeError,
+  readOpenAiHeaders,
 };
