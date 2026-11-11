@@ -27,8 +27,8 @@ const MOONLIGHT_TV_STREAM_SETTINGS = {
 const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
 
 /** Cache-bust nested Moonlight ES modules (Tizen keeps bare import URLs forever). */
-const MOONLIGHT_MODULE_CACHE_BUST = "mhg=33";
-const MOONLIGHT_MODULE_ALIAS = "mhg33";
+const MOONLIGHT_MODULE_CACHE_BUST = "mhg=40";
+const MOONLIGHT_MODULE_ALIAS = "mhg40";
 /** Physical entry script — Tizen ignores ?query on modules and often caches stream.html body. */
 const MOONLIGHT_STREAM_ENTRY = `stream.${MOONLIGHT_MODULE_ALIAS}.js`;
 /**
@@ -1868,14 +1868,95 @@ function moonlightStaticIsBundled(staticRoot) {
 const BUNDLED_FULLSCREEN_STOCK =
   "this.autoEnterFullscreenOnStart=s.enterFullscreenOnStreamStart";
 const BUNDLED_FULLSCREEN_PATCHED = "this.autoEnterFullscreenOnStart=true";
+/** 3.0.1+ may already inline true; also catch the settings-property form. */
+const BUNDLED_FULLSCREEN_STOCK_ALT =
+  "this.autoEnterFullscreenOnStart=s.enterFullscreenOnStreamStart,";
 const BUNDLED_EXIT_STOCK =
   'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}))';
 const BUNDLED_EXIT_PATCHED =
   'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){try{const mhgStop=new URLSearchParams(location.search).get("mhgStop");if(mhgStop){try{yield fetch(mhgStop,{method:"POST",mode:"cors",keepalive:true,credentials:"omit"})}catch(_e){try{yield fetch(mhgStop,{method:"GET",mode:"cors",keepalive:true,credentials:"omit"})}catch(_e2){}}}}catch(_mhg){}const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}))';
+/**
+ * Moonlight 3.0.x connection modal waits onFinish for `ml-connected`, but that event is never
+ * dispatched. connectionComplete only calls j(null), which hides the overlay without settling
+ * onFinish — on Tizen the "Connection Complete" screen stays and Close is not D-pad focusable.
+ */
+const BUNDLED_CONN_COMPLETE_STOCK =
+  '"connectionComplete"==l.type){const e=bu.stream.connectionComplete;this.text.innerText=e,this.debugLog(e),j(null)}';
+/** Do not clear #modal-parent (Tizen can throw SecurityError / freeze if Moonlight still owns those nodes). */
+const BUNDLED_CONN_COMPLETE_PATCHED =
+  '"connectionComplete"==l.type){const e=bu.stream.connectionComplete;this.text.innerText=e,this.debugLog(e);try{this.eventTarget.dispatchEvent(new Event("ml-connected"))}catch(_mhgConn){}try{var _mhgO=document.getElementById("modal-overlay");_mhgO&&_mhgO.classList.add("modal-disabled")}catch(_mhgDom){}j(null)}';
+/** Previous patch that wiped modal-parent — migrate away. */
+const BUNDLED_CONN_COMPLETE_PATCHED_LEGACY =
+  '"connectionComplete"==l.type){const e=bu.stream.connectionComplete;this.text.innerText=e,this.debugLog(e);try{this.eventTarget.dispatchEvent(new Event("ml-connected"))}catch(_mhgConn){}try{var _mhgO=document.getElementById("modal-overlay");_mhgO&&_mhgO.classList.add("modal-disabled");var _mhgP=document.getElementById("modal-parent");_mhgP&&(_mhgP.innerHTML="")}catch(_mhgDom){}j(null)}';
+const BUNDLED_ON_CLOSE_STOCK = "onClose(){j(null)}";
+const BUNDLED_ON_CLOSE_PATCHED =
+  'onClose(){try{this.eventTarget.dispatchEvent(new Event("ml-connected"))}catch(_mhgClose){}try{var _mhgO=document.getElementById("modal-overlay");_mhgO&&_mhgO.classList.add("modal-disabled")}catch(_mhgDom){}j(null)}';
+const BUNDLED_ON_CLOSE_PATCHED_LEGACY =
+  'onClose(){try{this.eventTarget.dispatchEvent(new Event("ml-connected"))}catch(_mhgClose){}try{var _mhgO=document.getElementById("modal-overlay");_mhgO&&_mhgO.classList.add("modal-disabled");var _mhgP=document.getElementById("modal-parent");_mhgP&&(_mhgP.innerHTML="")}catch(_mhgDom){}j(null)}';
+const BUNDLED_GAMEPADS_STOCK = "registerBufferedControllers(){const e=navigator.getGamepads();";
+const BUNDLED_GAMEPADS_PATCHED =
+  "registerBufferedControllers(){let e=[];try{e=navigator.getGamepads()||[]}catch(_mhgGp){return}";
+/** Tizen Permissions-Policy: bare getGamepads() throws SecurityError and freezes the stream UI. */
+const BUNDLED_GAMEPADS_POLL_STOCK =
+  "const n=navigator.getGamepads()[t.gamepadIndex];if(!n)continue;";
+const BUNDLED_GAMEPADS_POLL_PATCHED =
+  "let n;try{n=navigator.getGamepads()[t.gamepadIndex]}catch(_mhgGp){return}if(!n)continue;";
+const BUNDLED_GAMEPADS_RUMBLE_STOCK =
+  "const r=this.gamepadRumbleCurrent[n],o=navigator.getGamepads()[n];";
+const BUNDLED_GAMEPADS_RUMBLE_PATCHED =
+  "const r=this.gamepadRumbleCurrent[n];let o;try{o=navigator.getGamepads()[n]}catch(_mhgGp){o=null}";
+const BUNDLED_GAMEPADS_INIT_STOCK =
+  "for(const e of navigator.getGamepads())null!=e&&this.onGamepadAdd(e)";
+const BUNDLED_GAMEPADS_INIT_PATCHED =
+  "try{for(const e of navigator.getGamepads()||[])null!=e&&this.onGamepadAdd(e)}catch(_mhgGp){}";
+/** WebRTC <audio> starts muted; unmute immediately on smart TV. */
+const BUNDLED_AUDIO_MUTED_STOCK =
+  "this.audioElement.autoplay=!0,this.audioElement.muted=!0,this.audioElement.srcObject=this.stream";
+const BUNDLED_AUDIO_MUTED_PATCHED =
+  'this.audioElement.autoplay=!0,this.audioElement.muted=!(typeof window!=="undefined"&&window.__MHG_TV__),this.audioElement.srcObject=this.stream';
+const BUNDLED_AUDIO_UNMUTE_STOCK = "onUserInteraction(){this.audioElement.muted=!1}";
+const BUNDLED_AUDIO_UNMUTE_PATCHED =
+  "onUserInteraction(){this.audioElement.muted=!1;try{this.audioElement.play()}catch(_mhgAud){}}";
+/**
+ * Tizen / TV iframes disallow getUserMedia(mic). Do not call the API on TV —
+ * desktop keeps microphone; Moonlight's own failure logs stay intact if it runs.
+ */
+const BUNDLED_MIC_CALL_STOCK = "onUserInteraction(){if(this.tryRequestMicrophone(),";
+const BUNDLED_MIC_CALL_DISABLED = "onUserInteraction(){if(0&&this.tryRequestMicrophone(),";
+const BUNDLED_MIC_CALL_PATCHED =
+  'onUserInteraction(){if(!(typeof window!=="undefined"&&window.__MHG_TV__)&&this.tryRequestMicrophone(),';
+/** Inside tryRequestMicrophone: bail on TV before getUserMedia. */
+const BUNDLED_MIC_GUARD_STOCK = "if(this.microphoneTrack||this.triedToAquire)return";
+const BUNDLED_MIC_GUARD_PATCHED =
+  'if((typeof window!=="undefined"&&window.__MHG_TV__)||this.microphoneTrack||this.triedToAquire)return';
+const BUNDLED_MIC_GUARD_TV_APPLIED =
+  'if((typeof window!=="undefined"&&window.__MHG_TV__)||this.microphoneTrack||this.triedToAquire)return';
+/** Undo prior "silence mic failure logs" patch — restore Moonlight logging. */
+const BUNDLED_MIC_FAIL_SILENCED =
+  "getUserMedia({audio:!0})}catch(e){return}this.microphoneTrack";
+const BUNDLED_MIC_FAIL_RESTORED =
+  "getUserMedia({audio:!0})}catch(e){return null===(t=this.logger)||void 0===t||t.debug(`Failed to aquire microphone: ${e}`),void d(\"Failed to aquire microphone!\")}this.microphoneTrack";
+/**
+ * Undo prior catch-all pointer-lock swallow — keep Moonlight's NotSupportedError
+ * fallback. TV never enters this path (see SKIP below); iframe allow adds pointer-lock.
+ */
+const BUNDLED_POINTER_LOCK_THROW_STOCK =
+  'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}';
+const BUNDLED_POINTER_LOCK_THROW_SILENCED =
+  "catch(e){try{t.requestPointerLock()}catch(_mhgPl){}}";
+const BUNDLED_POINTER_LOCK_ERR_STOCK =
+  'const e=()=>{document.removeEventListener("pointerlockerror",e),t.requestPointerLock()};';
+const BUNDLED_POINTER_LOCK_ERR_SILENCED =
+  'const e=()=>{document.removeEventListener("pointerlockerror",e);try{t.requestPointerLock()}catch(_mhgPl){}};';
+/** TV has no mouse cursor — do not request pointer lock (Permissions-Policy / unused). */
+const BUNDLED_POINTER_LOCK_SKIP_STOCK =
+  "requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){this.previousMouseMode=this.inputConfig.mouseMode;";
+const BUNDLED_POINTER_LOCK_SKIP_PATCHED =
+  'requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){if(typeof window!=="undefined"&&window.__MHG_TV__)return;this.previousMouseMode=this.inputConfig.mouseMode;';
 
 function bundledMoonlightPreamble() {
   return `<script id="mhg-v3-boot">
-// MHG v3: TV profile via mlSettings, and stop the home game when the page is left.
+// MHG v3: TV profile via mlSettings, dismiss Connection Complete, D-pad Close, leave stop.
 (function () {
   try {
     var q = new URLSearchParams(location.search);
@@ -1891,10 +1972,9 @@ function bundledMoonlightPreamble() {
   } catch (_tv) {}
   try {
     var stop = new URLSearchParams(location.search).get("mhgStop");
-    if (!stop) return;
     var sent = false;
-    var send = function () {
-      if (sent) return;
+    var sendStop = function () {
+      if (!stop || sent) return;
       sent = true;
       try { if (navigator.sendBeacon) navigator.sendBeacon(stop); } catch (_b) {}
       try {
@@ -1902,10 +1982,170 @@ function bundledMoonlightPreamble() {
           fetch(stop, { method: "GET", mode: "cors", keepalive: true, credentials: "omit" }).catch(function () {});
         });
       } catch (_f) {}
+      try {
+        var msg = { type: "mhg-moonlight-exit" };
+        if (window.opener && !window.opener.closed) window.opener.postMessage(msg, "*");
+        if (window.parent && window.parent !== window) window.parent.postMessage(msg, "*");
+      } catch (_m) {}
     };
-    window.addEventListener("pagehide", send);
-    window.addEventListener("popstate", send);
+    if (stop) {
+      window.addEventListener("pagehide", sendStop);
+      window.addEventListener("popstate", sendStop);
+    }
+    // Tizen Back: stop Sunshine and return one history step (do not Exit/window.close).
+    window.addEventListener("keydown", function (ev) {
+      var code = ev.keyCode || ev.which || 0;
+      var key = ev.key || "";
+      var isBack = code === 10009 || code === 461 || key === "BrowserBack" || key === "GoBack" || key === "XF86Back";
+      if (!isBack) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      sendStop();
+      try { history.back(); } catch (_h) {}
+    }, true);
   } catch (_leave) {}
+  // Tizen: fill the screen (requestFullscreen often fails), D-pad on modal + sidebar.
+  try {
+    var q2 = new URLSearchParams(location.search);
+    var ua2 = String((navigator && navigator.userAgent) || "").toLowerCase();
+    var tvUi = q2.get("mhgProfile") === "tv" || window.__MHG_TV__ === true
+      || /tizen|webos|web0s|smart-tv|smarttv|viera|bravia|hbbtv|vidaa|netcast/.test(ua2);
+    if (!tvUi) return;
+    try { document.documentElement.setAttribute("data-mhg-tv", "1"); } catch (_a) {}
+    var style = document.createElement("style");
+    style.setAttribute("data-mhg", "tv-modal-focus");
+    style.textContent = "html[data-mhg-tv='1']{--stream-video-height:100vh;--stream-video-middle:50%;}"
+      + "html[data-mhg-tv='1'] .video-stream,html[data-mhg-tv='1'] video.video-stream,html[data-mhg-tv='1'] canvas.video-stream{"
+      + "top:50% !important;left:50% !important;width:100vw !important;height:100vh !important;"
+      + "max-width:100vw !important;max-height:100vh !important;object-fit:contain !important;}"
+      + "html[data-mhg-tv='1'] #root,html[data-mhg-tv='1'] body.stream{width:100vw;height:100vh;overflow:hidden;}"
+      + ".modal-video-connect button,#sidebar-button,.sidebar-stream button,.sidebar-stream-buttons button,"
+      + "#sidebar-parent select,#sidebar-parent .select-polyfill-display{"
+      + "outline:3px solid transparent;outline-offset:4px;}"
+      + ".modal-video-connect button:focus,.modal-video-connect button.mhg-tv-focus,"
+      + "#sidebar-button:focus,#sidebar-button.mhg-tv-focus,"
+      + ".sidebar-stream button:focus,.sidebar-stream button.mhg-tv-focus,"
+      + ".sidebar-stream-buttons button:focus,.sidebar-stream-buttons button.mhg-tv-focus,"
+      + "#sidebar-parent select:focus,#sidebar-parent select.mhg-tv-focus,"
+      + "#sidebar-parent .select-polyfill-display:focus,#sidebar-parent .select-polyfill-display.mhg-tv-focus{"
+      + "outline-color:#E5A00D !important;background:#fff !important;color:#000 !important;}";
+    document.documentElement.appendChild(style);
+    var chromeNav = false;
+    function chromeItems() {
+      var list = [];
+      var modal = document.querySelector(".modal-video-connect");
+      if (modal) {
+        modal.querySelectorAll("button").forEach(function (b) { list.push(b); });
+        return list;
+      }
+      var sidebarBtn = document.getElementById("sidebar-button");
+      var sidebarRoot = document.getElementById("sidebar-root");
+      var sidebarOpen = !!(sidebarRoot && sidebarRoot.classList.contains("sidebar-show"));
+      if (sidebarBtn) list.push(sidebarBtn);
+      if (sidebarOpen && sidebarRoot) {
+        sidebarRoot.querySelectorAll(
+          "#sidebar-parent button, .sidebar-stream-buttons button, #sidebar-parent select, #sidebar-parent .select-polyfill-display"
+        ).forEach(function (el) {
+          if (el !== sidebarBtn && list.indexOf(el) < 0) list.push(el);
+        });
+      }
+      return list;
+    }
+    function focusEl(el) {
+      if (!el) return;
+      chromeNav = true;
+      document.querySelectorAll(".mhg-tv-focus").forEach(function (n) { n.classList.remove("mhg-tv-focus"); });
+      el.classList.add("mhg-tv-focus");
+      try { el.focus(); } catch (_f) {}
+    }
+    function releaseChrome() {
+      chromeNav = false;
+      document.querySelectorAll(".mhg-tv-focus").forEach(function (n) { n.classList.remove("mhg-tv-focus"); });
+      var input = document.getElementById("input");
+      if (input) try { input.focus(); } catch (_i) {}
+    }
+    function ensureChromeFocus() {
+      var modal = document.querySelector(".modal-video-connect");
+      var sidebarRoot = document.getElementById("sidebar-root");
+      var sidebarOpen = !!(sidebarRoot && sidebarRoot.classList.contains("sidebar-show"));
+      if (!modal && !sidebarOpen) {
+        if (chromeNav) releaseChrome();
+        return;
+      }
+      var items = chromeItems();
+      if (!items.length) return;
+      var cur = items.findIndex(function (el) {
+        return el === document.activeElement || el.classList.contains("mhg-tv-focus");
+      });
+      if (cur < 0) focusEl(modal ? items[items.length - 1] : items[0]);
+    }
+    document.addEventListener("keydown", function (ev) {
+      var key = ev.key || "";
+      var code = ev.keyCode || 0;
+      var isUp = key === "ArrowUp" || code === 38;
+      var isDown = key === "ArrowDown" || code === 40;
+      var isLeft = key === "ArrowLeft" || code === 37;
+      var isRight = key === "ArrowRight" || code === 39;
+      var isEnter = key === "Enter" || code === 13 || code === 65376 || code === 29443;
+      if (!(isUp || isDown || isLeft || isRight || isEnter)) return;
+      var modal = document.querySelector(".modal-video-connect");
+      var sidebarRoot = document.getElementById("sidebar-root");
+      var sidebarOpen = !!(sidebarRoot && sidebarRoot.classList.contains("sidebar-show"));
+      var items = chromeItems();
+      // Gameplay: only Left opens the Moonlight sidebar chrome; other keys go to the stream.
+      if (!modal && !sidebarOpen && !chromeNav) {
+        if (isLeft) {
+          var sb = document.getElementById("sidebar-button");
+          if (sb) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            focusEl(sb);
+          }
+        }
+        return;
+      }
+      if (!items.length) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var idx = items.findIndex(function (el) {
+        return el === document.activeElement || el.classList.contains("mhg-tv-focus");
+      });
+      if (idx < 0) idx = 0;
+      if (isUp || isLeft) idx = Math.max(0, idx - 1);
+      if (isDown || isRight) idx = Math.min(items.length - 1, idx + 1);
+      if (isEnter) {
+        try { items[idx].click(); } catch (_c2) {}
+        setTimeout(ensureChromeFocus, 50);
+        return;
+      }
+      focusEl(items[idx]);
+    }, true);
+    var obs = new MutationObserver(function () { ensureChromeFocus(); });
+    obs.observe(document.documentElement, { childList: true, subtree: true });
+    setTimeout(ensureChromeFocus, 800);
+    function unlockMedia() {
+      try {
+        document.querySelectorAll("audio,video").forEach(function (el) {
+          try {
+            el.muted = false;
+            var p = el.play();
+            if (p && typeof p.catch === "function") p.catch(function () {});
+          } catch (_e) {}
+        });
+      } catch (_u) {}
+    }
+    document.addEventListener("keydown", unlockMedia, true);
+    document.addEventListener("keyup", unlockMedia, true);
+    // Best-effort fullscreen; CSS above fills the viewport when the API is missing.
+    setTimeout(function () {
+      try {
+        var el = document.body;
+        var req = el && (el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen);
+        if (req) req.call(el, { navigationUI: "hide" });
+      } catch (_fs) {}
+      unlockMedia();
+    }, 1200);
+  } catch (_tvUi) {}
 })();
 </script>
 <script src="/stream.js?${MOONLIGHT_MODULE_CACHE_BUST}"></script>
@@ -1942,9 +2182,65 @@ function patchBundledMoonlightStatic(staticRoot) {
   let next = source.replace(/^\/\/ MHG entry mhg\d+\n/, "");
   if (next.includes(BUNDLED_FULLSCREEN_STOCK)) {
     next = next.replace(BUNDLED_FULLSCREEN_STOCK, BUNDLED_FULLSCREEN_PATCHED);
+  } else if (next.includes(BUNDLED_FULLSCREEN_STOCK_ALT)) {
+    next = next.replace(BUNDLED_FULLSCREEN_STOCK_ALT, `${BUNDLED_FULLSCREEN_PATCHED},`);
   }
   if (next.includes(BUNDLED_EXIT_STOCK)) {
     next = next.replace(BUNDLED_EXIT_STOCK, BUNDLED_EXIT_PATCHED);
+  }
+  if (next.includes(BUNDLED_CONN_COMPLETE_STOCK)) {
+    next = next.replace(BUNDLED_CONN_COMPLETE_STOCK, BUNDLED_CONN_COMPLETE_PATCHED);
+  } else if (next.includes(BUNDLED_CONN_COMPLETE_PATCHED_LEGACY)) {
+    next = next.replace(BUNDLED_CONN_COMPLETE_PATCHED_LEGACY, BUNDLED_CONN_COMPLETE_PATCHED);
+  }
+  if (next.includes(BUNDLED_ON_CLOSE_PATCHED_LEGACY)) {
+    next = next.replace(BUNDLED_ON_CLOSE_PATCHED_LEGACY, BUNDLED_ON_CLOSE_PATCHED);
+  } else if (next.includes(BUNDLED_ON_CLOSE_STOCK) && !next.includes(BUNDLED_ON_CLOSE_PATCHED)) {
+    next = next.replace(BUNDLED_ON_CLOSE_STOCK, BUNDLED_ON_CLOSE_PATCHED);
+  }
+  if (next.includes(BUNDLED_GAMEPADS_STOCK)) {
+    next = next.replace(BUNDLED_GAMEPADS_STOCK, BUNDLED_GAMEPADS_PATCHED);
+  }
+  if (next.includes(BUNDLED_GAMEPADS_POLL_STOCK)) {
+    next = next.replace(BUNDLED_GAMEPADS_POLL_STOCK, BUNDLED_GAMEPADS_POLL_PATCHED);
+  }
+  if (next.includes(BUNDLED_GAMEPADS_RUMBLE_STOCK)) {
+    next = next.replace(BUNDLED_GAMEPADS_RUMBLE_STOCK, BUNDLED_GAMEPADS_RUMBLE_PATCHED);
+  }
+  if (next.includes(BUNDLED_GAMEPADS_INIT_STOCK)) {
+    next = next.replace(BUNDLED_GAMEPADS_INIT_STOCK, BUNDLED_GAMEPADS_INIT_PATCHED);
+  }
+  if (next.includes(BUNDLED_AUDIO_MUTED_STOCK)) {
+    next = next.replace(BUNDLED_AUDIO_MUTED_STOCK, BUNDLED_AUDIO_MUTED_PATCHED);
+  }
+  if (next.includes(BUNDLED_AUDIO_UNMUTE_STOCK)) {
+    next = next.replace(BUNDLED_AUDIO_UNMUTE_STOCK, BUNDLED_AUDIO_UNMUTE_PATCHED);
+  }
+  if (next.includes(BUNDLED_MIC_CALL_DISABLED)) {
+    next = next.replace(BUNDLED_MIC_CALL_DISABLED, BUNDLED_MIC_CALL_PATCHED);
+  } else if (
+    next.includes(BUNDLED_MIC_CALL_STOCK) &&
+    !next.includes(BUNDLED_MIC_CALL_PATCHED)
+  ) {
+    next = next.replace(BUNDLED_MIC_CALL_STOCK, BUNDLED_MIC_CALL_PATCHED);
+  }
+  if (next.includes(BUNDLED_MIC_GUARD_STOCK) && !next.includes(BUNDLED_MIC_GUARD_TV_APPLIED)) {
+    next = next.replace(BUNDLED_MIC_GUARD_STOCK, BUNDLED_MIC_GUARD_PATCHED);
+  }
+  if (next.includes(BUNDLED_MIC_FAIL_SILENCED)) {
+    next = next.replace(BUNDLED_MIC_FAIL_SILENCED, BUNDLED_MIC_FAIL_RESTORED);
+  }
+  if (next.includes(BUNDLED_POINTER_LOCK_THROW_SILENCED)) {
+    next = next.replace(BUNDLED_POINTER_LOCK_THROW_SILENCED, BUNDLED_POINTER_LOCK_THROW_STOCK);
+  }
+  if (next.includes(BUNDLED_POINTER_LOCK_ERR_SILENCED)) {
+    next = next.replace(BUNDLED_POINTER_LOCK_ERR_SILENCED, BUNDLED_POINTER_LOCK_ERR_STOCK);
+  }
+  if (
+    next.includes(BUNDLED_POINTER_LOCK_SKIP_STOCK) &&
+    !next.includes(BUNDLED_POINTER_LOCK_SKIP_PATCHED)
+  ) {
+    next = next.replace(BUNDLED_POINTER_LOCK_SKIP_STOCK, BUNDLED_POINTER_LOCK_SKIP_PATCHED);
   }
   if (next !== source) {
     fs.writeFileSync(streamPath, next);

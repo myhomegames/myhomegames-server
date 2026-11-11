@@ -185,22 +185,39 @@ describe("moonlightWebEmbed", () => {
   it("patches the v3 webpack bundle without loading the old module graph", () => {
     const staticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-static-"));
     const bundle = [
-      "// MHG entry mhg33",
+      `// MHG entry ${MOONLIGHT_MODULE_ALIAS}`,
       '(()=>{"use strict";',
       "this.autoEnterFullscreenOnStart=s.enterFullscreenOnStreamStart;",
       'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}));',
+      '"connectionComplete"==l.type){const e=bu.stream.connectionComplete;this.text.innerText=e,this.debugLog(e),j(null)}',
+      "onClose(){j(null)}",
+      "registerBufferedControllers(){const e=navigator.getGamepads();",
+      "const n=navigator.getGamepads()[t.gamepadIndex];if(!n)continue;",
+      "const r=this.gamepadRumbleCurrent[n],o=navigator.getGamepads()[n];",
+      "for(const e of navigator.getGamepads())null!=e&&this.onGamepadAdd(e)",
+      "this.audioElement.autoplay=!0,this.audioElement.muted=!0,this.audioElement.srcObject=this.stream",
+      "onUserInteraction(){this.audioElement.muted=!1}",
+      "onUserInteraction(){if(this.tryRequestMicrophone(),",
+      'catch(e){return null===(t=this.logger)||void 0===t||t.debug(`Failed to aquire microphone: ${e}`),void d("Failed to aquire microphone!")}',
+      'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
+      'const e=()=>{document.removeEventListener("pointerlockerror",e),t.requestPointerLock()};',
+      "requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){this.previousMouseMode=this.inputConfig.mouseMode;",
+      "navigator.mediaDevices.getUserMedia({audio:!0})",
       '"/host/stream/web_socket"',
       "})();",
       "",
     ].join("\n");
     fs.writeFileSync(path.join(staticRoot, "stream.js"), bundle);
-    fs.writeFileSync(path.join(staticRoot, "mhg-boot.mhg33.js"), "import { Stream } from '/stream/index.mhg33.js';\n");
-    fs.writeFileSync(path.join(staticRoot, "stream.mhg33.js"), bundle);
+    fs.writeFileSync(
+      path.join(staticRoot, `mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js`),
+      `import { Stream } from '/stream/index.${MOONLIGHT_MODULE_ALIAS}.js';\n`,
+    );
+    fs.writeFileSync(path.join(staticRoot, `stream.${MOONLIGHT_MODULE_ALIAS}.js`), bundle);
     fs.writeFileSync(
       path.join(staticRoot, "stream.html"),
       '<!doctype html><html><head><base href="/" /><script src=./config.js></script>' +
-        '<script type="module" src="/mhg-boot.mhg33.js"></script>' +
-        '<script type="module" src="/stream.mhg33.js"></script>' +
+        `<script type="module" src="/mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js"></script>` +
+        `<script type="module" src="/stream.${MOONLIGHT_MODULE_ALIAS}.js"></script>` +
         '</head><body><script src=stream.js></script></body></html>',
     );
 
@@ -213,16 +230,39 @@ describe("moonlightWebEmbed", () => {
     expect(js.startsWith("(()=>")).toBe(true);
     expect(js).toContain("this.autoEnterFullscreenOnStart=true");
     expect(js).toContain('get("mhgStop")');
+    expect(js).toContain('dispatchEvent(new Event("ml-connected"))');
+    expect(js).toContain("getGamepads()||[]");
+    expect(js).toContain("catch(_mhgGp){return}");
+    expect(js).toContain("catch(_mhgGp){o=null}");
+    expect(js).toContain("window.__MHG_TV__");
+    expect(js).toContain("this.audioElement.play()");
+    expect(js).toContain(
+      '!(typeof window!=="undefined"&&window.__MHG_TV__)&&this.tryRequestMicrophone()',
+    );
+    expect(js).not.toContain("0&&this.tryRequestMicrophone()");
+    expect(js).not.toContain("catch(_mhgPl){}");
+    expect(js).toContain('window.__MHG_TV__)return;this.previousMouseMode');
+    expect(js).toContain("Failed to aquire microphone");
+    expect(js).toContain(
+      'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
+    );
+    expect(js).not.toContain('_mhgP.innerHTML=""');
     expect(js).not.toContain("import { Stream }");
     expect(fs.existsSync(path.join(staticRoot, "stream", "index.js"))).toBe(false);
-    expect(fs.existsSync(path.join(staticRoot, "mhg-boot.mhg33.js"))).toBe(false);
-    expect(fs.existsSync(path.join(staticRoot, "stream.mhg33.js"))).toBe(false);
+    expect(fs.existsSync(path.join(staticRoot, `mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js`))).toBe(false);
+    expect(fs.existsSync(path.join(staticRoot, `stream.${MOONLIGHT_MODULE_ALIAS}.js`))).toBe(false);
 
     const html = fs.readFileSync(path.join(staticRoot, "stream.html"), "utf8");
     expect(html).not.toContain("type=\"module\"");
-    expect(html.match(/<script src="\/stream\.js\?mhg=33"><\/script>/g)).toHaveLength(1);
+    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=40"><\\/script>`, "g"))).toHaveLength(1);
     expect(html).toContain('id="mhg-v3-boot"');
     expect(html).toContain("mlSettings");
+    expect(html).toContain("tv-modal-focus");
+    expect(html).toContain("10009");
+    expect(html).toContain("data-mhg-tv");
+    expect(html).toContain("100vw");
+    expect(html).toContain("unlockMedia");
+    expect(html).not.toContain("innerHTML = \"\"");
     const versioned = fs.readFileSync(
       path.join(staticRoot, MOONLIGHT_MODULE_ALIAS, "stream.html"),
       "utf8",
