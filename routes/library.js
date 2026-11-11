@@ -2359,6 +2359,390 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   };
   app.post("/catalog/import-game", requireToken, handleImportCatalogGame);
 
+  /**
+   * Open a native OS folder chooser on the server host and return the selected path.
+   * Used by the Add Game "Import from a folder" action (AI-required).
+   */
+  app.post("/games/pick-import-folder", requireToken, async (req, res) => {
+    const { resolveAiIdentifyConfig } = require("../utils/aiGameIdentify");
+    if (!resolveAiIdentifyConfig().enabled) {
+      return res.status(503).json({
+        error: "AI game identification is not configured. Set OPENAI_API_KEY to enable folder import.",
+      });
+    }
+
+    const { pickFolderDialog } = require("../utils/pickFolderDialog");
+    const prompt =
+      typeof req.body?.prompt === "string" && req.body.prompt.trim()
+        ? req.body.prompt.trim()
+        : "Select a folder with games";
+    const defaultPath =
+      typeof req.body?.defaultPath === "string" && req.body.defaultPath.trim()
+        ? req.body.defaultPath.trim()
+        : undefined;
+
+    try {
+      const result = pickFolderDialog({ prompt, defaultPath });
+      if (result.error && !result.cancelled) {
+        return res.status(500).json({ error: result.error });
+      }
+      if (!result.folderPath) {
+        return res.status(200).json({ status: "cancelled", folderPath: null });
+      }
+      return res.json({ status: "success", folderPath: result.folderPath });
+    } catch (error) {
+      console.error("Failed to open folder picker:", error);
+      return res.status(500).json({
+        error: error?.message || "Failed to open folder picker",
+      });
+    }
+  });
+
+  /**
+   * Recursively scan a host folder, ask AI for official titles, then match IGDB
+   * (when catalog credentials exist) and add games with launch scripts.
+   * Requires AI configuration — there is no heuristic / filename-only import path.
+   * Body: { folderPath: string, dryRun?: boolean }
+   */
+  app.post("/games/import-from-folder", requireToken, async (req, res) => {
+    const {
+      resolveUserFolderPath,
+      scanFolderForGameCandidates,
+      pickBestIgdbMatch,
+      isAcceptableIgdbMatch,
+      normalizeTitleKey,
+      writeLocalPathLaunchScript,
+    } = require("../utils/folderGameImport");
+    const {
+      identifyGamesWithAi,
+      resolveCandidateTitle,
+      resolveAiIdentifyConfig,
+    } = require("../utils/aiGameIdentify");
+    const { getIGDBAccessToken, runIGDBSearch } = require("./igdb");
+    const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+
+    const aiConfig = resolveAiIdentifyConfig();
+    if (!aiConfig.enabled) {
+      return res.status(503).json({
+        error: "AI game identification is not configured. Set OPENAI_API_KEY to enable folder import.",
+      });
+    }
+
+    const folderPath = resolveUserFolderPath(req.body?.folderPath);
+    const dryRun = Boolean(req.body?.dryRun);
+    if (!folderPath) {
+      return res.status(400).json({ error: "Missing required field: folderPath" });
+    }
+
+    let candidates;
+    try {
+      candidates = scanFolderForGameCandidates(folderPath);
+    } catch (error) {
+      const status = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 400 : 500;
+      return res.status(status).json({
+        error: error?.message || "Failed to scan folder",
+        detail: error?.code || undefined,
+      });
+    }
+
+    const candidatesForAi = candidates.map((c) => {
+      const unitRoot = c.folderPath || c.filePath;
+      return {
+        ...c,
+        relativePath: path.relative(folderPath, unitRoot) || c.sourceName,
+        folderPath: unitRoot,
+        tree: Array.isArray(c.tree) && c.tree.length > 0
+          ? c.tree
+          : [path.relative(folderPath, unitRoot) || c.sourceName],
+      };
+    });
+    const aiIdentify = await identifyGamesWithAi(candidatesForAi);
+    if (!aiIdentify.used || aiIdentify.error) {
+      console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
+      return res.status(502).json({
+        error: aiIdentify.error || "AI game identification failed",
+        aiModel: aiIdentify.model || null,
+      });
+    }
+
+    // Catalog match is best-effort: without Twitch/IGDB credentials we still create
+    // library entries using the AI title and attach launch scripts.
+    const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
+    const resolvedCreds = resolveTwitchAppCredentials(req);
+    const canSearchCatalog = Boolean(resolvedCreds.clientId && resolvedCreds.clientSecret);
+
+    function mapCatalogHits(raw) {
+      return (Array.isArray(raw) ? raw : []).map((game) => {
+        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
+        return {
+          id: game.id,
+          name: game.name,
+          summary: game.summary || "",
+          cover: game.cover
+            ? `https:${String(game.cover.url || "")
+                .replace("t_thumb", "t_1080p")
+                .replace("t_cover_big", "t_1080p")}`
+            : null,
+          releaseDate,
+          releaseDateFull,
+          first_release_date: game.first_release_date ?? null,
+          genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
+          platforms: game.platforms
+            ? game.platforms.map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)
+            : [],
+          criticRating: game.aggregated_rating ? Math.round(game.aggregated_rating / 10) : null,
+          userRating: game.rating ? Math.round(game.rating / 10) : null,
+        };
+      });
+    }
+
+    async function searchCatalog(title, yearHint = null) {
+      if (!canSearchCatalog) return [];
+      const accessToken = await getIGDBAccessToken(resolvedCreds.clientId, resolvedCreds.clientSecret);
+      const yearToFilter =
+        Number.isFinite(Number(yearHint)) && Number(yearHint) >= 1970 ? Number(yearHint) : null;
+      let raw = await runIGDBSearch(title, accessToken, resolvedCreds.clientId, yearToFilter);
+      // If the AI year was wrong/too strict, retry without the year filter.
+      if (yearToFilter != null && (!Array.isArray(raw) || raw.length === 0)) {
+        raw = await runIGDBSearch(title, accessToken, resolvedCreds.clientId, null);
+      }
+      return mapCatalogHits(raw);
+    }
+
+    function importCatalogViaHandler(payload) {
+      return new Promise((resolve, reject) => {
+        const fakeReq = {
+          body: payload,
+          header: (name) => req.header(name),
+          headers: req.headers,
+          query: req.query,
+        };
+        const fakeRes = {
+          statusCode: 200,
+          status(code) {
+            this.statusCode = code;
+            return this;
+          },
+          json(body) {
+            if (this.statusCode >= 400) {
+              const err = new Error(body?.error || `Import failed (${this.statusCode})`);
+              err.status = this.statusCode;
+              err.payload = body;
+              reject(err);
+              return;
+            }
+            resolve(body);
+          },
+        };
+        Promise.resolve(handleImportCatalogGame(fakeReq, fakeRes)).catch(reject);
+      });
+    }
+
+    async function createScratchGame(title) {
+      let gameId = Date.now();
+      const gameDirBase = path.join(metadataPath, "content", "games");
+      while (allGames[gameId] || fs.existsSync(path.join(gameDirBase, String(gameId)))) {
+        gameId += 1;
+      }
+      const newGame = {
+        id: gameId,
+        title,
+        summary: "",
+        year: null,
+        month: null,
+        day: null,
+        dateAdded: Date.now(),
+        genre: null,
+        criticratings: null,
+        userratings: null,
+        stars: null,
+        themes: null,
+        platforms: null,
+        gameModes: null,
+        playerPerspectives: null,
+        websites: null,
+        ageRatings: null,
+        developers: null,
+        publishers: null,
+        franchise: null,
+        collection: null,
+        screenshots: null,
+        videos: null,
+        gameEngines: null,
+        keywords: null,
+        alternativeNames: null,
+        similarGames: null,
+        externalCoverUrl: null,
+        externalBackgroundUrl: null,
+        showTitle: true,
+      };
+      saveGame(metadataPath, newGame);
+      allGames[gameId] = newGame;
+      invalidateLibraryGamesResponseCache();
+      return newGame;
+    }
+
+    const results = [];
+    const seenCatalogIds = new Set();
+    const seenTitleKeys = new Set();
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      const resolved = resolveCandidateTitle(candidate, aiIdentify.results[i]);
+      const searchTitle = resolved.title;
+      const aiYear = resolved.ai?.year ?? null;
+      const aiPlatform = resolved.ai?.platform ?? null;
+      const entry = {
+        filePath: candidate.filePath,
+        guessedTitle: candidate.title,
+        identifiedTitle: resolved.ai?.title || null,
+        aiYear,
+        aiPlatform,
+        aiConfidence: resolved.ai?.confidence ?? null,
+        status: "pending",
+        gameId: null,
+        catalogGameId: null,
+        catalogName: null,
+      };
+      try {
+        if (resolved.skip) {
+          entry.status = dryRun ? "would_skip" : "skipped";
+          entry.reason = resolved.reason || "ai_not_a_game";
+          results.push(entry);
+          continue;
+        }
+
+        const titleKey = normalizeTitleKey(searchTitle);
+        if (titleKey && seenTitleKeys.has(titleKey)) {
+          entry.status = dryRun ? "would_skip" : "skipped";
+          entry.reason = "duplicate_title";
+          results.push(entry);
+          continue;
+        }
+
+        let match = null;
+        if (canSearchCatalog) {
+          const hits = await searchCatalog(searchTitle, aiYear);
+          const picked = pickBestIgdbMatch(searchTitle, hits, {
+            year: aiYear,
+            platform: aiPlatform,
+          });
+          match = isAcceptableIgdbMatch(searchTitle, picked) ? picked : null;
+        }
+
+        // With IGDB available, require a catalog match — never invent from folder names.
+        if (canSearchCatalog && !match) {
+          entry.status = dryRun ? "would_skip" : "skipped";
+          entry.reason = "no_official_catalog_match";
+          results.push(entry);
+          continue;
+        }
+
+        if (match?.id && seenCatalogIds.has(Number(match.id))) {
+          entry.status = dryRun ? "would_skip" : "skipped";
+          entry.reason = "duplicate_catalog";
+          entry.catalogGameId = match.id;
+          entry.catalogName = match.name;
+          results.push(entry);
+          continue;
+        }
+
+        if (dryRun) {
+          entry.status = match ? "would_import" : "would_create";
+          entry.catalogGameId = match?.id ?? null;
+          entry.catalogName = match?.name ?? null;
+          if (match?.id) seenCatalogIds.add(Number(match.id));
+          if (titleKey) seenTitleKeys.add(titleKey);
+          results.push(entry);
+          continue;
+        }
+
+        let gameId = null;
+        if (match?.id) {
+          if (allGames[match.id]) {
+            gameId = match.id;
+            entry.status = "exists";
+            entry.catalogGameId = match.id;
+            entry.catalogName = match.name;
+          } else {
+            try {
+              const imported = await importCatalogViaHandler({
+                gameId: match.id,
+                name: match.name,
+                summary: match.summary,
+                cover: match.cover,
+                releaseDate: match.releaseDateFull?.timestamp || match.releaseDate,
+                genres: match.genres,
+                criticRating: match.criticRating,
+                userRating: match.userRating,
+              });
+              gameId = imported.gameId || imported.game?.id || match.id;
+              entry.status = "imported";
+              entry.catalogGameId = match.id;
+              entry.catalogName = match.name;
+            } catch (importErr) {
+              if (importErr?.status === 409 && importErr?.payload?.gameId) {
+                gameId = importErr.payload.gameId;
+                entry.status = "exists";
+                entry.catalogGameId = match.id;
+                entry.catalogName = match.name;
+              } else {
+                throw importErr;
+              }
+            }
+          }
+          seenCatalogIds.add(Number(match.id));
+        } else {
+          // No IGDB: create with the AI title only (never a folder/filename heuristic).
+          const created = await createScratchGame(searchTitle);
+          gameId = created.id;
+          entry.status = "created";
+        }
+
+        if (titleKey) seenTitleKeys.add(titleKey);
+        entry.gameId = gameId;
+        if (gameId != null) {
+          writeLocalPathLaunchScript(metadataPath, gameId, candidate.filePath, {
+            label: path.basename(candidate.sourceName, path.extname(candidate.sourceName)) || "folderimport",
+            kind: candidate.kind,
+          });
+          if (allGames[gameId]) {
+            allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
+            allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
+            saveGame(metadataPath, allGames[gameId]);
+          }
+        }
+        results.push(entry);
+      } catch (error) {
+        entry.status = "error";
+        entry.error = error?.message || String(error);
+        results.push(entry);
+      }
+    }
+
+    if (!dryRun) {
+      scheduleRecommendedSectionsUpdate(updateRecommendedSections, metadataPath, allGames);
+      invalidateLibraryGamesResponseCache();
+    }
+
+    const summary = {
+      scanned: candidates.length,
+      imported: results.filter((r) => r.status === "imported").length,
+      created: results.filter((r) => r.status === "created").length,
+      exists: results.filter((r) => r.status === "exists").length,
+      skipped: results.filter((r) => r.status === "skipped" || r.status === "would_skip").length,
+      wouldImport: results.filter((r) => r.status === "would_import").length,
+      wouldCreate: results.filter((r) => r.status === "would_create").length,
+      errors: results.filter((r) => r.status === "error").length,
+      catalogEnabled: canSearchCatalog,
+      aiEnabled: true,
+      aiUsed: true,
+      aiModel: aiIdentify.model || null,
+      aiError: null,
+    };
+
+    res.json({ status: "success", folderPath, dryRun, summary, results });
+  });
+
   // Endpoint: create a new game from scratch (no catalog lookup). ID = creation timestamp.
   app.post("/games/create", requireToken, async (req, res) => {
     const { title } = req.body;

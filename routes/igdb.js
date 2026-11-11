@@ -102,7 +102,7 @@ async function getIGDBAccessToken(clientId, clientSecret) {
  * @returns {Promise<Array>} Raw game objects from IGDB
  */
 function runIGDBSearch(searchQuery, accessToken, clientId, yearToFilter) {
-  let postData = `search "${searchQuery}"; fields id,name,summary,cover.url,first_release_date,genres.name,rating,aggregated_rating,collections.name,franchises.name,game_type;`;
+  let postData = `search "${searchQuery}"; fields id,name,summary,cover.url,first_release_date,genres.name,platforms.name,rating,aggregated_rating,collections.name,franchises.name,game_type;`;
   if (yearToFilter !== null && yearToFilter !== undefined) {
     const yearStart = Math.floor(new Date(yearToFilter, 0, 1).getTime() / 1000);
     const yearEnd = Math.floor(new Date(yearToFilter, 11, 31, 23, 59, 59).getTime() / 1000);
@@ -1785,6 +1785,8 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
 module.exports = {
   registerIGDBRoutes,
   getIGDBAccessToken,
+  runIGDBSearch,
+  runIGDBGameById,
   fetchIGDBGameNamesByIds,
   fetchIGDBGameSummaryAndKeywords,
 };
