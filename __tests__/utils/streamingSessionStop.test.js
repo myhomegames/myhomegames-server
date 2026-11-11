@@ -69,6 +69,18 @@ describe("streamingSessionStop", () => {
     expect(paths.some((p) => p.includes("dosbox-x"))).toBe(true);
   });
 
+  it("unescapes shell-escaped spaces in ROM paths (MAME megadriv carts)", () => {
+    const line =
+      "/Users/lucastancapiano/git/mame/mame megadriv -cart /Volumes/Elements/Dropbox/xmame/software/megadriv/Monster\\ World\\ IV\\ \\(USA,\\ Europe\\)\\ \\(En,Ja\\)\\ \\(Virtual\\ Console\\).zip -state_directory /Volumes/Elements/Dropbox/xmame/sta/monsterworld4";
+    const paths = extractLaunchCommandPaths(line);
+    expect(paths[0]).toBe(
+      "/Volumes/Elements/Dropbox/xmame/software/megadriv/Monster World IV (USA, Europe) (En,Ja) (Virtual Console).zip",
+    );
+    expect(paths).toContain("/Volumes/Elements/Dropbox/xmame/sta/monsterworld4");
+    expect(paths).toContain("/Users/lucastancapiano/git/mame/mame");
+    expect(paths.some((p) => p.endsWith("Monster\\") || p.includes("Monster\\ "))).toBe(false);
+  });
+
   it("reads the first command line from a launch script", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-launch-"));
     const script = path.join(dir, "game.sh");
