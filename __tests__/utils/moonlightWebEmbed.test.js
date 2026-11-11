@@ -202,6 +202,7 @@ describe("moonlightWebEmbed", () => {
       'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
       'const e=()=>{document.removeEventListener("pointerlockerror",e),t.requestPointerLock()};',
       "requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){this.previousMouseMode=this.inputConfig.mouseMode;",
+      "this.requestFullscreen().then(()=>{this.isFullscreen()||this.armFullscreenOnNextInteraction()}),0)",
       "navigator.mediaDevices.getUserMedia({audio:!0})",
       '"/host/stream/web_socket"',
       "})();",
@@ -254,7 +255,7 @@ describe("moonlightWebEmbed", () => {
 
     const html = fs.readFileSync(path.join(staticRoot, "stream.html"), "utf8");
     expect(html).not.toContain("type=\"module\"");
-    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=40"><\\/script>`, "g"))).toHaveLength(1);
+    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=41"><\\/script>`, "g"))).toHaveLength(1);
     expect(html).toContain('id="mhg-v3-boot"');
     expect(html).toContain("mlSettings");
     expect(html).toContain("tv-modal-focus");
@@ -262,7 +263,11 @@ describe("moonlightWebEmbed", () => {
     expect(html).toContain("data-mhg-tv");
     expect(html).toContain("100vw");
     expect(html).toContain("unlockMedia");
+    expect(html).toContain('proto.requestFullscreen = noopResolved');
+    expect(html).toContain("enterFullscreenOnStreamStart\":false");
+    expect(html).not.toContain("req.call(el");
     expect(html).not.toContain("innerHTML = \"\"");
+    expect(js).toContain(".catch(function(){}),0)");
     const versioned = fs.readFileSync(
       path.join(staticRoot, MOONLIGHT_MODULE_ALIAS, "stream.html"),
       "utf8",

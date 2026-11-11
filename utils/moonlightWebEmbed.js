@@ -21,14 +21,16 @@ const MOONLIGHT_TV_STREAM_SETTINGS = {
   canvasRenderer: false,
   forceVideoElementRenderer: true,
   hdr: false,
-  enterFullscreenOnStreamStart: true,
+  // CSS fills the TV viewport; native fullscreen throws Permissions-Policy TypeError
+  // which Moonlight surfaces via window unhandledrejection → error toast.
+  enterFullscreenOnStreamStart: false,
 };
 
 const MOONLIGHT_TV_SETTINGS_JSON = JSON.stringify(MOONLIGHT_TV_STREAM_SETTINGS);
 
 /** Cache-bust nested Moonlight ES modules (Tizen keeps bare import URLs forever). */
-const MOONLIGHT_MODULE_CACHE_BUST = "mhg=40";
-const MOONLIGHT_MODULE_ALIAS = "mhg40";
+const MOONLIGHT_MODULE_CACHE_BUST = "mhg=41";
+const MOONLIGHT_MODULE_ALIAS = "mhg41";
 /** Physical entry script — Tizen ignores ?query on modules and often caches stream.html body. */
 const MOONLIGHT_STREAM_ENTRY = `stream.${MOONLIGHT_MODULE_ALIAS}.js`;
 /**
@@ -1953,6 +1955,11 @@ const BUNDLED_POINTER_LOCK_SKIP_STOCK =
   "requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){this.previousMouseMode=this.inputConfig.mouseMode;";
 const BUNDLED_POINTER_LOCK_SKIP_PATCHED =
   'requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){if(typeof window!=="undefined"&&window.__MHG_TV__)return;this.previousMouseMode=this.inputConfig.mouseMode;';
+/** Auto-fullscreen .then without .catch → unhandledrejection toast on policy block. */
+const BUNDLED_FS_THEN_STOCK =
+  "this.requestFullscreen().then(()=>{this.isFullscreen()||this.armFullscreenOnNextInteraction()}),0)";
+const BUNDLED_FS_THEN_PATCHED =
+  "this.requestFullscreen().then(()=>{this.isFullscreen()||this.armFullscreenOnNextInteraction()}).catch(function(){}),0)";
 
 function bundledMoonlightPreamble() {
   return `<script id="mhg-v3-boot">
@@ -1968,6 +1975,40 @@ function bundledMoonlightPreamble() {
       try { current = JSON.parse(localStorage.getItem("mlSettings") || "{}") || {}; } catch (_e) { current = {}; }
       var tv = ${MOONLIGHT_TV_SETTINGS_JSON};
       localStorage.setItem("mlSettings", JSON.stringify(Object.assign({}, current, tv)));
+      // Tizen iframe Permissions-Policy blocks these APIs. Moonlight registers
+      // window "error" / "unhandledrejection" handlers that toast every failure as
+      // "TypeError: disallowed by permissions policy". No-op the blocked APIs
+      // before stream.js so the toast never fires; CSS already fills the viewport.
+      try {
+        var noopResolved = function () { return Promise.resolve(); };
+        var proto = typeof Element !== "undefined" ? Element.prototype : null;
+        if (proto) {
+          if (typeof proto.requestFullscreen === "function") proto.requestFullscreen = noopResolved;
+          if (typeof proto.webkitRequestFullscreen === "function") proto.webkitRequestFullscreen = noopResolved;
+          if (typeof proto.msRequestFullscreen === "function") proto.msRequestFullscreen = noopResolved;
+          if (typeof proto.requestPointerLock === "function") {
+            proto.requestPointerLock = function () { return undefined; };
+          }
+        }
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
+          // Resolve empty — a rejection would still toast via unhandledrejection if
+          // any caller forgets to catch.
+          navigator.mediaDevices.getUserMedia = function () {
+            return Promise.resolve({
+              getAudioTracks: function () { return []; },
+              getVideoTracks: function () { return []; },
+              getTracks: function () { return []; },
+              active: false
+            });
+          };
+        }
+        if (typeof navigator.getGamepads === "function") {
+          navigator.getGamepads = function () { return []; };
+        }
+        if (navigator.keyboard && typeof navigator.keyboard.lock === "function") {
+          navigator.keyboard.lock = noopResolved;
+        }
+      } catch (_shim) {}
     }
   } catch (_tv) {}
   try {
@@ -2136,15 +2177,9 @@ function bundledMoonlightPreamble() {
     }
     document.addEventListener("keydown", unlockMedia, true);
     document.addEventListener("keyup", unlockMedia, true);
-    // Best-effort fullscreen; CSS above fills the viewport when the API is missing.
-    setTimeout(function () {
-      try {
-        var el = document.body;
-        var req = el && (el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen);
-        if (req) req.call(el, { navigationUI: "hide" });
-      } catch (_fs) {}
-      unlockMedia();
-    }, 1200);
+    // Do not call requestFullscreen here: on Tizen it rejects with
+    // TypeError "disallowed by permissions policy" and Moonlight toasts it.
+    setTimeout(unlockMedia, 1200);
   } catch (_tvUi) {}
 })();
 </script>
@@ -2241,6 +2276,9 @@ function patchBundledMoonlightStatic(staticRoot) {
     !next.includes(BUNDLED_POINTER_LOCK_SKIP_PATCHED)
   ) {
     next = next.replace(BUNDLED_POINTER_LOCK_SKIP_STOCK, BUNDLED_POINTER_LOCK_SKIP_PATCHED);
+  }
+  if (next.includes(BUNDLED_FS_THEN_STOCK)) {
+    next = next.replace(BUNDLED_FS_THEN_STOCK, BUNDLED_FS_THEN_PATCHED);
   }
   if (next !== source) {
     fs.writeFileSync(streamPath, next);
