@@ -106,6 +106,92 @@ function populateUnifiedPayload() {
 }
 
 /**
+ * Embed MyHomeGames app icon (+ version/manifest) into the Windows PE via go-winres.
+ * Produces rsrc_windows_amd64.syso next to main.go so `go build` links it automatically.
+ */
+function ensureWindowsExeIconResources(version) {
+  const iconPng = path.join(ROOT, "scripts", "assets", "app-icon-1024.png");
+  if (!fs.existsSync(iconPng)) {
+    console.warn(
+      "⚠️  scripts/assets/app-icon-1024.png missing — Windows .exe will keep the generic icon.",
+    );
+    return;
+  }
+  const winresDir = path.join(UNIFIED_EXE_DIR, "winres");
+  fs.mkdirSync(winresDir, { recursive: true });
+  // go-winres accepts one PNG and builds 256/64/48/32/16; source may be 1024.
+  const winresIcon = path.join(winresDir, "icon.png");
+  if (process.platform === "darwin") {
+    const resized = spawnSync(
+      "sips",
+      ["-z", "256", "256", iconPng, "--out", winresIcon],
+      { stdio: "ignore" },
+    );
+    if (resized.status !== 0 || !fs.existsSync(winresIcon)) {
+      fs.copyFileSync(iconPng, winresIcon);
+    }
+  } else {
+    fs.copyFileSync(iconPng, winresIcon);
+  }
+
+  const winresJson = path.join(winresDir, "winres.json");
+  if (!fs.existsSync(winresJson)) {
+    throw new Error(`Missing ${winresJson}`);
+  }
+
+  const fileVersion = String(version || "0.0.0").split(".").concat(["0", "0", "0", "0"]).slice(0, 4).join(".");
+
+  function runGoWinres(bin) {
+    return spawnSync(
+      bin,
+      [
+        "make",
+        "--in",
+        "winres/winres.json",
+        "--arch",
+        "amd64",
+        "--product-version",
+        fileVersion,
+        "--file-version",
+        fileVersion,
+      ],
+      { cwd: UNIFIED_EXE_DIR, stdio: "inherit" },
+    );
+  }
+
+  let result = runGoWinres("go-winres");
+  if (result.error || result.status !== 0) {
+    console.log("go-winres not on PATH — installing github.com/tc-hib/go-winres@v0.3.3…");
+    const install = spawnSync(
+      "go",
+      ["install", "github.com/tc-hib/go-winres@v0.3.3"],
+      { cwd: UNIFIED_EXE_DIR, stdio: "inherit", env: process.env },
+    );
+    if (install.error || install.status !== 0) {
+      throw new Error(
+        "Could not install go-winres (needed to embed the Start Menu / Explorer icon). " +
+          "Install Go, then: go install github.com/tc-hib/go-winres@v0.3.3",
+      );
+    }
+    const gopathBin = spawnSync("go", ["env", "GOPATH"], { encoding: "utf8" });
+    const gopath = (gopathBin.stdout || "").trim() || path.join(require("os").homedir(), "go");
+    const installed = path.join(gopath, "bin", process.platform === "win32" ? "go-winres.exe" : "go-winres");
+    result = runGoWinres(fs.existsSync(installed) ? installed : "go-winres");
+  }
+  if (result.error) {
+    throw new Error(`go-winres failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error("go-winres make failed — Windows exe icon was not generated.");
+  }
+  const syso = path.join(UNIFIED_EXE_DIR, "rsrc_windows_amd64.syso");
+  if (!fs.existsSync(syso)) {
+    throw new Error(`Expected ${syso} after go-winres make.`);
+  }
+  console.log("✅ Windows PE icon resources: rsrc_windows_amd64.syso");
+}
+
+/**
  * One .exe: embeds payload + extracts to %LOCALAPPDATA%\\MyHomeGames\\server-runtime\\<version> and runs tray PS1.
  * Output: build/MyHomeGames-<version>-win-x64.exe and build/MyHomeGames-<version>-win-x64.zip (zip contains the exe).
  */
@@ -114,6 +200,7 @@ function buildWindowsUnifiedExe() {
   const version = packageJson.version;
   fs.mkdirSync(BUILD_DIR, { recursive: true });
   populateUnifiedPayload();
+  ensureWindowsExeIconResources(version);
   const outExe = path.join(BUILD_DIR, `MyHomeGames-${version}-win-x64.exe`);
   const ldflags = `-s -w -H windowsgui -X main.appVersion=${version}`;
   const result = spawnSync(
@@ -159,5 +246,6 @@ module.exports = {
   findWinExe,
   runPkgWindowsOnly,
   populateUnifiedPayload,
+  ensureWindowsExeIconResources,
   buildWindowsUnifiedExe,
 };
