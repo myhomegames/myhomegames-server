@@ -2412,6 +2412,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       pickBestIgdbMatch,
       isAcceptableIgdbMatch,
       normalizeTitleKey,
+      isJunkGameBasename,
       writeLocalPathLaunchScript,
     } = require("../utils/folderGameImport");
     const {
@@ -2419,12 +2420,64 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       resolveCandidateTitle,
       resolveAiIdentifyConfig,
     } = require("../utils/aiGameIdentify");
+    const {
+      loadAiIdentifyCache,
+      saveAiIdentifyCache,
+      readCacheEntry,
+      writeCacheEntry,
+    } = require("../utils/aiIdentifyCache");
     const { getIGDBAccessToken, runIGDBSearch } = require("./igdb");
     const { formatIGDBReleaseDate } = require("../utils/dateUtils");
 
+    const wantsStream =
+      req.body?.stream === true ||
+      String(req.headers.accept || "").includes("text/event-stream");
+
+    let streamStarted = false;
+    function beginStream() {
+      if (!wantsStream || streamStarted || res.headersSent) return;
+      streamStarted = true;
+      res.status(200);
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      if (typeof res.flushHeaders === "function") res.flushHeaders();
+    }
+    function emitSse(event, data) {
+      if (!wantsStream) return;
+      beginStream();
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      if (typeof res.flush === "function") res.flush();
+    }
+    function reportProgress({ phase, current = 0, total = 0, label = "" }) {
+      const ranges = { scan: [0, 5], ai: [5, 45], import: [45, 99] };
+      const [lo, hi] = ranges[phase] || [0, 100];
+      const frac = total > 0 ? Math.min(1, Math.max(0, current / total)) : phase === "scan" ? 1 : 0;
+      const percent = Math.min(99, Math.max(0, Math.round(lo + (hi - lo) * frac)));
+      emitSse("progress", { phase, current, total, percent, label });
+    }
+    function finishOk(payload) {
+      if (wantsStream) {
+        emitSse("progress", { phase: "done", current: 1, total: 1, percent: 100, label: "done" });
+        emitSse("done", payload);
+        res.end();
+        return;
+      }
+      res.json(payload);
+    }
+    function finishErr(status, payload) {
+      if (wantsStream && streamStarted) {
+        emitSse("error", { ...payload, status });
+        res.end();
+        return;
+      }
+      res.status(status).json(payload);
+    }
+
     const aiConfig = resolveAiIdentifyConfig(process.env, { req });
     if (!aiConfig.enabled) {
-      return res.status(503).json({
+      return finishErr(503, {
         error:
           "AI game identification is not configured. Set OPENAI_API_KEY on the server or Cloudflare Worker.",
       });
@@ -2433,21 +2486,35 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const folderPath = resolveUserFolderPath(req.body?.folderPath);
     const dryRun = Boolean(req.body?.dryRun);
     if (!folderPath) {
-      return res.status(400).json({ error: "Missing required field: folderPath" });
+      return finishErr(400, { error: "Missing required field: folderPath" });
     }
+
+    try {
+    beginStream();
+    reportProgress({ phase: "scan", current: 0, total: 1, label: "scanning" });
 
     let candidates;
     try {
       candidates = scanFolderForGameCandidates(folderPath);
     } catch (error) {
       const status = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 400 : 500;
-      return res.status(status).json({
+      return finishErr(status, {
         error: error?.message || "Failed to scan folder",
         detail: error?.code || undefined,
       });
     }
+    reportProgress({
+      phase: "scan",
+      current: 1,
+      total: 1,
+      label: `found ${candidates.length}`,
+    });
 
-    const candidatesForAi = candidates.map((c) => {
+    // Drop obvious non-games before spending AI tokens (titles still come only from AI/cache).
+    const candidatesFiltered = candidates.filter(
+      (c) => !isJunkGameBasename(c.sourceName || path.basename(c.folderPath || c.filePath || ""))
+    );
+    const candidatesForAi = candidatesFiltered.map((c) => {
       const unitRoot = c.folderPath || c.filePath;
       return {
         ...c,
@@ -2458,6 +2525,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           : [path.relative(folderPath, unitRoot) || c.sourceName],
       };
     });
+    const aiCache = loadAiIdentifyCache(metadataPath);
     const aiIdentify = await identifyGamesWithAi(candidatesForAi, {
       apiKey: aiConfig.apiKey,
       baseURL: aiConfig.baseURL,
@@ -2466,14 +2534,33 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       batchSize: aiConfig.batchSize,
       maxTreeLines: aiConfig.maxTreeLines,
       maxPromptChars: aiConfig.maxPromptChars,
+      cache: aiCache,
+      readCacheEntry,
+      writeCacheEntry,
+      onProgress: ({ batchIndex, batchCount }) => {
+        reportProgress({
+          phase: "ai",
+          current: batchIndex,
+          total: Math.max(1, batchCount),
+          label: `ai ${batchIndex}/${batchCount}`,
+        });
+      },
     });
     if (!aiIdentify.used || aiIdentify.error) {
       console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
-      return res.status(502).json({
+      return finishErr(502, {
         error: aiIdentify.error || "AI game identification failed",
         aiModel: aiIdentify.model || null,
       });
     }
+    try {
+      saveAiIdentifyCache(metadataPath, aiCache);
+    } catch (cacheErr) {
+      console.warn("[import-from-folder] AI cache save failed:", cacheErr?.message || cacheErr);
+    }
+    reportProgress({ phase: "ai", current: 1, total: 1, label: "ai done" });
+    // Keep import loop aligned with AI results (junk filtered above).
+    candidates = candidatesFiltered;
 
     // Catalog match is best-effort: without Twitch/IGDB credentials we still create
     // library entries using the AI title and attach launch scripts.
@@ -2595,7 +2682,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const results = [];
     const seenCatalogIds = new Set();
     const seenTitleKeys = new Set();
+    const importTotal = Math.max(1, candidates.length);
     for (let i = 0; i < candidates.length; i++) {
+      reportProgress({
+        phase: "import",
+        current: i,
+        total: importTotal,
+        label: `import ${i}/${candidates.length}`,
+      });
       const candidate = candidates[i];
       const resolved = resolveCandidateTitle(candidate, aiIdentify.results[i]);
       const searchTitle = resolved.title;
@@ -2748,9 +2842,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       aiUsed: true,
       aiModel: aiIdentify.model || null,
       aiError: null,
+      aiCacheHits: aiIdentify.stats?.cacheHits ?? 0,
+      aiDeduped: aiIdentify.stats?.deduped ?? 0,
+      aiSent: aiIdentify.stats?.sent ?? 0,
     };
 
-    res.json({ status: "success", folderPath, dryRun, summary, results });
+    reportProgress({
+      phase: "import",
+      current: importTotal,
+      total: importTotal,
+      label: "import done",
+    });
+    finishOk({ status: "success", folderPath, dryRun, summary, results });
+    } catch (error) {
+      console.error("[import-from-folder] unexpected:", error);
+      finishErr(500, { error: error?.message || String(error) });
+    }
   });
 
   // Endpoint: create a new game from scratch (no catalog lookup). ID = creation timestamp.

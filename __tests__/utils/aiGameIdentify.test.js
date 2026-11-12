@@ -6,7 +6,19 @@ const {
   identifyGamesWithAi,
   packBatches,
   isRequestTooLargeError,
+  candidateIdentifyKey,
+  dedupeCandidatesForIdentify,
+  buildIdentifyPrompt,
 } = require("../../utils/aiGameIdentify");
+const {
+  loadAiIdentifyCache,
+  saveAiIdentifyCache,
+  readCacheEntry,
+  writeCacheEntry,
+} = require("../../utils/aiIdentifyCache");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 function mockReq(headers) {
   return {
@@ -29,7 +41,8 @@ describe("resolveAiIdentifyConfig", () => {
     });
     expect(cfg.enabled).toBe(true);
     expect(cfg.model).toBe("gpt-4o-mini");
-    expect(cfg.batchSize).toBe(4);
+    expect(cfg.batchSize).toBe(12);
+    expect(cfg.maxTreeLines).toBe(1);
   });
 
   test("tunnel mode uses gateway headers only (ignores env key)", () => {
@@ -206,7 +219,7 @@ describe("identifyGamesWithAi", () => {
     expect(out.enabled).toBe(false);
   });
 
-  test("prompt asks for year/platform/confidence fields", async () => {
+  test("prompt asks for year/platform/confidence and uses name-only by default", async () => {
     const create = jest.fn(async () => ({
       choices: [
         {
@@ -232,6 +245,7 @@ describe("identifyGamesWithAi", () => {
           filePath: "/x",
           folderPath: "/games/Fallout_1997",
           sourceName: "Fallout_1997",
+          relativePath: "games/Fallout_1997",
           tree: ["Fallout_1997/", "Fallout_1997/FALLOUT.EXE"],
         },
       ],
@@ -245,6 +259,59 @@ describe("identifyGamesWithAi", () => {
     expect(prompt).toMatch(/"platform"/);
     expect(prompt).toMatch(/confidence/);
     expect(prompt).toMatch(/aloneinthedark/);
+    expect(prompt).toMatch(/games\/Fallout_1997/);
+    expect(prompt).not.toMatch(/FALLOUT\.EXE/);
+  });
+
+  test("dedupes identical keys and reuses cache entries", async () => {
+    const create = jest.fn(async () => ({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify([
+              {
+                index: 0,
+                isGame: true,
+                title: "Doom",
+                year: 1993,
+                platform: "DOS",
+                confidence: 0.99,
+              },
+            ]),
+          },
+        },
+      ],
+    }));
+    const cache = { version: 1, entries: {} };
+    writeCacheEntry(cache, "quake", {
+      isGame: true,
+      title: "Quake",
+      year: 1996,
+      platform: "DOS",
+      confidence: 0.95,
+    });
+    const out = await identifyGamesWithAi(
+      [
+        { sourceName: "doom", filePath: "/a/doom", relativePath: "games/doom" },
+        { sourceName: "DOOM", filePath: "/b/DOOM", relativePath: "games/DOOM" },
+        { sourceName: "quake", filePath: "/c/quake", relativePath: "games/quake" },
+      ],
+      {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+        cache,
+        readCacheEntry,
+        writeCacheEntry,
+      }
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(out.stats.cacheHits).toBe(1);
+    expect(out.stats.deduped).toBe(1);
+    expect(out.stats.sent).toBe(1);
+    expect(out.results[0].title).toBe("Doom");
+    expect(out.results[1].title).toBe("Doom");
+    expect(out.results[2].title).toBe("Quake");
+    expect(out.results[2].fromCache).toBe(true);
   });
 
   test("retries with smaller batches on 413 Request too large", async () => {
@@ -295,5 +362,60 @@ describe("identifyGamesWithAi", () => {
     expect(out.results[0].title).toBe("Game A");
     expect(out.results[0].year).toBe(1995);
     expect(out.results[1].title).toBe("Game A");
+  });
+});
+
+describe("candidateIdentifyKey / dedupe", () => {
+  test("normalizes basename keys", () => {
+    expect(candidateIdentifyKey({ sourceName: "Alone_In_The_Dark" })).toBe("aloneinthedark");
+    expect(candidateIdentifyKey({ sourceName: "doom.exe" })).toBe("doom");
+  });
+
+  test("dedupeCandidatesForIdentify groups by key", () => {
+    const { unique, membersOf } = dedupeCandidatesForIdentify([
+      { absoluteIndex: 0, identifyKey: "doom", sourceName: "doom" },
+      { absoluteIndex: 1, identifyKey: "quake", sourceName: "quake" },
+      { absoluteIndex: 2, identifyKey: "doom", sourceName: "DOOM" },
+    ]);
+    expect(unique).toHaveLength(2);
+    expect(membersOf[0]).toEqual([0, 2]);
+    expect(membersOf[1]).toEqual([1]);
+  });
+});
+
+describe("buildIdentifyPrompt", () => {
+  test("name-only when maxTreeLines is 1", () => {
+    const prompt = buildIdentifyPrompt(
+      [
+        {
+          relativePath: "games/aloneinthedark",
+          sourceName: "aloneinthedark",
+          tree: ["aloneinthedark/", "aloneinthedark/AITD.EXE"],
+        },
+      ],
+      { maxTreeLines: 1 }
+    );
+    expect(prompt).toContain("0. games/aloneinthedark");
+    expect(prompt).not.toContain("AITD.EXE");
+  });
+});
+
+describe("aiIdentifyCache", () => {
+  test("persists and reloads entries", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ai-cache-"));
+    const cache = loadAiIdentifyCache(dir);
+    writeCacheEntry(cache, "fallout", {
+      isGame: true,
+      title: "Fallout",
+      year: 1997,
+      platform: "PC",
+      confidence: 0.9,
+    });
+    saveAiIdentifyCache(dir, cache);
+    const reloaded = loadAiIdentifyCache(dir);
+    const hit = readCacheEntry(reloaded, "fallout");
+    expect(hit.title).toBe("Fallout");
+    expect(hit.year).toBe(1997);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

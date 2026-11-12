@@ -4,15 +4,75 @@ const path = require("path");
 const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
 
 const DEFAULT_MODEL = "gpt-4o-mini";
-/** Small batches keep Groq free-tier TPM (~8k) and similar request caps happy. */
-const DEFAULT_BATCH_SIZE = 4;
-/** Max tree lines sent per candidate (folder name + key files). */
-const DEFAULT_MAX_TREE_LINES = 12;
+/**
+ * With name-first prompts, larger batches stay under Groq free-tier TPM (~8k).
+ * Override with MHG_AI_BATCH_SIZE when using a higher quota provider.
+ */
+const DEFAULT_BATCH_SIZE = 12;
+/** Default: folder/file path only (no directory listing). Raise for ambiguous dumps. */
+const DEFAULT_MAX_TREE_LINES = 1;
 /**
  * Soft cap on user-prompt characters per request (~chars/4 ≈ tokens).
  * Leave headroom under common 8k TPM / request limits for system + completion.
  */
 const DEFAULT_MAX_PROMPT_CHARS = 14000;
+
+const SYSTEM_PROMPT =
+  "Video-game metadata expert. JSON only: [{index,isGame,title,year,platform,confidence}]. " +
+  "title=official retail/IGDB name with spaces+Title Case (never slugs/DOS/CD/RIP/EN). " +
+  "year=first release or null; platform=short hint or null; isGame=false for tools/BIOS/setup; confidence 0..1.";
+
+function normalizeIdentifyKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function truncateTree(tree, maxLines) {
+  const lines = Array.isArray(tree) ? tree.map((l) => String(l)) : [];
+  if (lines.length <= maxLines) return lines;
+  return [...lines.slice(0, maxLines - 1), `…(+${lines.length - (maxLines - 1)} more)`];
+}
+
+/**
+ * Stable cache/dedup key from folder or file basename (not full relative path).
+ */
+function candidateIdentifyKey(candidate) {
+  const raw =
+    candidate?.sourceName ||
+    path.basename(candidate?.folderPath || candidate?.filePath || candidate?.relativePath || "");
+  return normalizeIdentifyKey(String(raw).replace(/\.[^.]+$/, ""));
+}
+
+/**
+ * One prompt label per candidate. With maxTreeLines<=1 skip file listings (biggest token win).
+ */
+function candidatePromptLines(item, maxTreeLines) {
+  const label =
+    item.relativePath ||
+    item.sourceName ||
+    path.basename(item.folderPath || item.filePath || "") ||
+    "?";
+  if (maxTreeLines <= 1) return [String(label)];
+
+  const rawTree = Array.isArray(item.tree) ? item.tree.map((l) => String(l)) : [];
+  const extras = [];
+  const labelKey = normalizeIdentifyKey(path.basename(String(label).replace(/\/$/, "")));
+  for (const line of rawTree) {
+    if (extras.length >= maxTreeLines - 1) break;
+    const base = normalizeIdentifyKey(path.basename(String(line).replace(/\/$/, "")));
+    if (
+      base &&
+      base === labelKey &&
+      String(line).replace(/\/$/, "") === String(label).replace(/\/$/, "")
+    ) {
+      continue;
+    }
+    if (String(line) === String(label)) continue;
+    extras.push(String(line));
+  }
+  return truncateTree([String(label), ...extras], maxTreeLines);
+}
 
 function readHeader(req, name) {
   if (!req) return "";
@@ -104,7 +164,7 @@ function resolveAiIdentifyConfig(env = process.env, options = {}) {
     baseURL,
     model,
     batchSize: Math.max(1, batchSize),
-    maxTreeLines: Math.max(2, maxTreeLines),
+    maxTreeLines: Math.max(1, maxTreeLines),
     maxPromptChars: Math.max(2000, maxPromptChars),
     source: tunnel ? "gateway-headers" : apiKey ? "local" : "none",
   };
@@ -126,37 +186,18 @@ function isAiFolderImportEnabled(req, env = process.env) {
   return Boolean(resolveAiIdentifyConfig(env, { req }).enabled);
 }
 
-function truncateTree(tree, maxLines) {
-  const lines = Array.isArray(tree) ? tree.map((l) => String(l)) : [];
-  if (lines.length <= maxLines) return lines;
-  return [...lines.slice(0, maxLines - 1), `…(+${lines.length - (maxLines - 1)} more)`];
-}
-
 function buildIdentifyPrompt(batch, options = {}) {
   const maxTreeLines = Number.isFinite(options.maxTreeLines)
     ? options.maxTreeLines
     : DEFAULT_MAX_TREE_LINES;
   const blocks = batch.map((item, index) => {
-    const folder =
-      item.relativePath ||
-      item.sourceName ||
-      path.basename(item.folderPath || item.filePath || "");
-    const rawTree =
-      Array.isArray(item.tree) && item.tree.length > 0 ? item.tree : [String(folder)];
-    const tree = truncateTree(rawTree, maxTreeLines);
-    return [`${index}.`, ...tree.map((line) => `  ${line}`)].join("\n");
+    const lines = candidatePromptLines(item, maxTreeLines);
+    if (lines.length === 1) return `${index}. ${lines[0]}`;
+    return [`${index}.`, ...lines.map((line) => `  ${line}`)].join("\n");
   });
   return [
-    `Return ONLY a JSON array (no markdown) with one object per input index (${batch.length} items).`,
-    'Each object: {"index":number,"isGame":boolean,"title":string,"year":number|null,"platform":string|null,"confidence":number}',
-    '- title: official retail/IGDB name, Spaces + Title Case (e.g. "Alone in the Dark"). Never glued slugs (aloneinthedark), codes (AI130), or dump tags (DOS/CD/RIP/EN/ISO) in the title.',
-    "- year: first release year when known, else null (used to filter catalog search).",
-    '- platform: short catalog platform hint when clear (e.g. "DOS", "PC", "SNES", "Arcade"), else null.',
-    "- isGame=false for tools/BIOS/setup/dosbox/mappers/installers (title may be empty).",
-    "- confidence: 0..1 (use <0.55 when unsure).",
-    'Examples: aloneinthedark→title "Alone in the Dark"; alien rampage dos rip→title "Alien Rampage", platform "DOS"; Fallout_1997→title "Fallout", year 1997.',
-    "- Keep index aligned with the numbered list. Same commercial game → identical title string.",
-    "",
+    `JSON array only, ${batch.length} objects: {"index","isGame","title","year","platform","confidence"}.`,
+    'Examples: aloneinthedark→"Alone in the Dark"; Fallout_1997→"Fallout",year 1997; setup/dosbox→isGame false.',
     "Inputs:",
     ...blocks,
   ].join("\n");
@@ -271,14 +312,45 @@ function isRequestTooLargeError(error) {
 }
 
 /**
+ * Collapse candidates that share the same identify key so we call the model once.
+ * Each item must carry `absoluteIndex` (index into the original candidates array).
+ * @returns {{ unique: object[], membersOf: number[][] }}
+ */
+function dedupeCandidatesForIdentify(list) {
+  const unique = [];
+  const keyToUnique = new Map();
+  const membersOf = [];
+  for (const item of list) {
+    const absoluteIndex = item.absoluteIndex;
+    const key = item.identifyKey || candidateIdentifyKey(item) || `__idx_${absoluteIndex}`;
+    if (keyToUnique.has(key)) {
+      membersOf[keyToUnique.get(key)].push(absoluteIndex);
+      continue;
+    }
+    const uniqueIdx = unique.length;
+    keyToUnique.set(key, uniqueIdx);
+    membersOf.push([absoluteIndex]);
+    unique.push({ ...item, absoluteIndex, identifyKey: key, uniqueIdx });
+  }
+  return { unique, membersOf };
+}
+
+/**
  * Ask an OpenAI-compatible model to identify games from scanned folder candidates.
+ * Uses name-first prompts, dedupes by slug key, and optional AI-result cache.
  * Folder import requires AI: callers must not fall back to heuristics.
  */
 async function identifyGamesWithAi(candidates, options = {}) {
   const list = Array.isArray(candidates) ? candidates : [];
   const config = resolveAiIdentifyConfig(options.env || process.env, options);
   if (!config.enabled) {
-    return { enabled: false, used: false, model: null, results: list.map(() => null) };
+    return {
+      enabled: false,
+      used: false,
+      model: null,
+      results: list.map(() => null),
+      stats: { total: list.length, cacheHits: 0, deduped: 0, sent: 0 },
+    };
   }
 
   const OpenAI = options.OpenAI || require("openai");
@@ -297,9 +369,11 @@ async function identifyGamesWithAi(candidates, options = {}) {
     ? options.maxPromptChars
     : config.maxPromptChars;
   const identified = new Array(list.length).fill(null);
-
-  const SYSTEM =
-    'Video-game metadata expert. Reply with JSON only: array of {index,isGame,title,year,platform,confidence}. Official titles with spaces + Title Case; never folder slugs or DOS/CD/RIP/EN in title. year/platform help catalog search.';
+  const cache = options.cache && typeof options.cache === "object" ? options.cache : null;
+  const readCache =
+    typeof options.readCacheEntry === "function" ? options.readCacheEntry : null;
+  const writeCache =
+    typeof options.writeCacheEntry === "function" ? options.writeCacheEntry : null;
 
   async function completeBatch(batch, treeCap) {
     const prompt = buildIdentifyPrompt(batch, { maxTreeLines: treeCap });
@@ -307,7 +381,7 @@ async function identifyGamesWithAi(candidates, options = {}) {
       model: config.model,
       temperature: 0.1,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: prompt },
       ],
     });
@@ -326,24 +400,88 @@ async function identifyGamesWithAi(candidates, options = {}) {
         const right = await identifyBatchWithRetry(batch.slice(mid), treeCap);
         return [...left, ...right];
       }
-      if (treeCap > 4) {
-        return identifyBatchWithRetry(batch, Math.max(4, Math.floor(treeCap / 2)));
+      if (treeCap > 1) {
+        return identifyBatchWithRetry(batch, Math.max(1, Math.floor(treeCap / 2)));
       }
       throw error;
     }
   }
 
   try {
-    const indexed = list.map((c, absoluteIndex) => ({ ...c, absoluteIndex }));
-    const batches = packBatches(indexed, { batchSize, maxTreeLines, maxPromptChars });
-    for (const batch of batches) {
+    let cacheHits = 0;
+    const needAi = [];
+    list.forEach((c, absoluteIndex) => {
+      const key = candidateIdentifyKey(c);
+      if (cache && readCache && key) {
+        const hit = readCache(cache, key);
+        if (hit) {
+          identified[absoluteIndex] = hit;
+          cacheHits += 1;
+          return;
+        }
+      }
+      needAi.push({ ...c, absoluteIndex, identifyKey: key });
+    });
+
+    const { unique, membersOf } = dedupeCandidatesForIdentify(needAi);
+    const deduped = Math.max(0, needAi.length - unique.length);
+    const batches = packBatches(unique, { batchSize, maxTreeLines, maxPromptChars });
+    const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
       const parsed = await identifyBatchWithRetry(batch, maxTreeLines);
-      parsed.forEach((row, i) => {
+      batch.forEach((uniqueItem, i) => {
+        const row = parsed[i];
         if (!row) return;
-        identified[batch[i].absoluteIndex] = row;
+        const uniqueIdx = Number.isInteger(uniqueItem.uniqueIdx)
+          ? uniqueItem.uniqueIdx
+          : unique.findIndex((u) => u.absoluteIndex === uniqueItem.absoluteIndex);
+        const absIndexes =
+          uniqueIdx >= 0 ? membersOf[uniqueIdx] : [uniqueItem.absoluteIndex];
+        for (const abs of absIndexes) {
+          identified[abs] = row;
+        }
+        if (cache && writeCache && uniqueItem.identifyKey) {
+          writeCache(cache, uniqueItem.identifyKey, row, { model: config.model });
+        }
+      });
+
+      if (onProgress) {
+        onProgress({
+          phase: "ai",
+          batchIndex: batchIndex + 1,
+          batchCount: Math.max(1, batches.length),
+          candidateCount: list.length,
+          cacheHits,
+          deduped,
+        });
+      }
+    }
+
+    if (batches.length === 0 && onProgress) {
+      onProgress({
+        phase: "ai",
+        batchIndex: 1,
+        batchCount: 1,
+        candidateCount: list.length,
+        cacheHits,
+        deduped,
       });
     }
-    return { enabled: true, used: true, model: config.model, results: identified };
+
+    return {
+      enabled: true,
+      used: true,
+      model: config.model,
+      results: identified,
+      stats: {
+        total: list.length,
+        cacheHits,
+        deduped,
+        sent: unique.length,
+      },
+    };
   } catch (error) {
     return {
       enabled: true,
@@ -351,6 +489,7 @@ async function identifyGamesWithAi(candidates, options = {}) {
       model: config.model,
       results: list.map(() => null),
       error: error?.message || String(error),
+      stats: { total: list.length, cacheHits: 0, deduped: 0, sent: 0 },
     };
   }
 }
@@ -386,6 +525,7 @@ module.exports = {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAX_TREE_LINES,
   DEFAULT_MAX_PROMPT_CHARS,
+  SYSTEM_PROMPT,
   resolveAiIdentifyConfig,
   isAiFolderImportEnabled,
   parseIdentifyResponse,
@@ -394,6 +534,9 @@ module.exports = {
   buildIdentifyPrompt,
   packBatches,
   truncateTree,
+  candidateIdentifyKey,
+  candidatePromptLines,
+  dedupeCandidatesForIdentify,
   isRequestTooLargeError,
   readOpenAiHeaders,
 };

@@ -434,6 +434,7 @@ function scanCollectionByGameFolders(root, maxCandidates) {
           for (const child of listDirents(full)) {
             if (!child.isDirectory() || shouldSkipDir(child.name)) continue;
             const childPath = path.join(full, child.name);
+            if (isJunkGameBasename(child.name)) continue;
             if (
               directoryHasGamePayload(childPath) ||
               listDirents(childPath).some((e) => e.isDirectory() || e.isFile())
@@ -459,6 +460,7 @@ function scanCollectionByGameFolders(root, maxCandidates) {
           if (emittedNested) continue;
         }
 
+        if (isJunkGameBasename(ent.name)) continue;
         if (directoryHasGamePayload(full) || listDirents(full).length > 0) {
           pushCandidate(
             found,
