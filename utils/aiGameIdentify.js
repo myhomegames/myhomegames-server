@@ -22,6 +22,15 @@ const SYSTEM_PROMPT =
   "title=official retail/IGDB name with spaces+Title Case (never slugs/DOS/CD/RIP/EN). " +
   "year=first release or null; platform=short hint or null; isGame=false for tools/BIOS/setup; confidence 0..1.";
 
+const SKELETON_SYSTEM_PROMPT =
+  "Video-game library expert. You receive a compressed filesystem find listing. " +
+  "Sibling names under a folder are grouped as parent/{a,b,c} (internal files included). " +
+  "Reply with JSON only: an array of every distinct game you find. " +
+  'Each object: {"path":string,"title":string,"year":number|null,"platform":string|null,"confidence":number}. ' +
+  "path = full relative game root (folder or primary file), e.g. dosprograms/games/alleycat — never a brace group. " +
+  "Use folder names and nested file names to recognize titles when the folder slug is unclear. " +
+  "title = official retail/IGDB name with spaces + Title Case. Skip tools/BIOS/setup/shared/scripts/soundfonts.";
+
 function normalizeIdentifyKey(value) {
   return String(value || "")
     .toLowerCase()
@@ -494,6 +503,208 @@ async function identifyGamesWithAi(candidates, options = {}) {
   }
 }
 
+function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
+  return [
+    `Root folder name: ${rootName}.`,
+    "Compressed find listing: siblings are grouped as parent/{a,b,c}. Identify every game.",
+    'Return ONLY a JSON array of {"path","title","year","platform","confidence"}.',
+    "path = full relative game root (folder or primary file), no braces.",
+    "",
+    skeletonChunk,
+  ].join("\n");
+}
+
+/**
+ * Parse AI skeleton response into game rows with absolute paths.
+ */
+function parseSkeletonIdentifyResponse(rawText, rootPath) {
+  const { skeletonPathToAbsolute } = require("./pathSkeleton");
+  const text = String(rawText || "").trim();
+  if (!text) return [];
+  let jsonText = text;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) jsonText = fenced[1].trim();
+  const start = jsonText.indexOf("[");
+  const end = jsonText.lastIndexOf("]");
+  if (start >= 0 && end > start) jsonText = jsonText.slice(start, end + 1);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const games = [];
+  for (const row of parsed) {
+    if (!row || typeof row !== "object") continue;
+    const relPath = String(row.path || row.relativePath || "").trim().replace(/\\/g, "/");
+    const title = String(row.title || "").trim();
+    if (!relPath || !title) continue;
+    const yearNum = Number(row.year);
+    const confidence = Math.max(0, Math.min(1, Number(row.confidence) || 0));
+    games.push({
+      path: relPath.replace(/^\.\//, ""),
+      title,
+      year: Number.isFinite(yearNum) && yearNum >= 1970 && yearNum <= 2100 ? Math.floor(yearNum) : null,
+      platform: row.platform != null ? String(row.platform).trim() || null : null,
+      confidence,
+      isGame: true,
+      absPath: skeletonPathToAbsolute(rootPath, relPath),
+    });
+  }
+  return games;
+}
+
+/**
+ * Identify games from a compressed find skeleton (chunked if needed for provider limits).
+ * Returns one merged list — AI decides which paths are games (no hardcoded games/cd layout).
+ */
+async function identifyGamesFromSkeleton(skeleton, options = {}) {
+  const rootPath = skeleton?.rootPath || options.rootPath;
+  const rootName = skeleton?.rootName || path.basename(String(rootPath || ""));
+  const chunks = Array.isArray(skeleton?.chunks)
+    ? skeleton.chunks.filter((c) => String(c || "").trim())
+    : skeleton?.text
+      ? [String(skeleton.text)]
+      : [];
+
+  const config = resolveAiIdentifyConfig(options.env || process.env, options);
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      used: false,
+      model: null,
+      games: [],
+      results: [],
+      stats: { chunks: 0, games: 0 },
+    };
+  }
+  if (!rootPath || chunks.length === 0) {
+    return {
+      enabled: true,
+      used: false,
+      model: config.model,
+      games: [],
+      results: [],
+      error: "Empty folder skeleton",
+      stats: { chunks: 0, games: 0 },
+    };
+  }
+
+  const OpenAI = options.OpenAI || require("openai");
+  const client =
+    options.client ||
+    new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+    });
+
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  const cache = options.cache && typeof options.cache === "object" ? options.cache : null;
+  const readCache =
+    typeof options.readCacheEntry === "function" ? options.readCacheEntry : null;
+  const writeCache =
+    typeof options.writeCacheEntry === "function" ? options.writeCacheEntry : null;
+
+  async function completeChunk(chunkText) {
+    const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName);
+    const completion = await client.chat.completions.create({
+      model: config.model,
+      temperature: 0.1,
+      messages: [
+        { role: "system", content: SKELETON_SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+    });
+    return parseSkeletonIdentifyResponse(
+      completion?.choices?.[0]?.message?.content || "",
+      rootPath
+    );
+  }
+
+  async function completeChunkWithRetry(chunkText) {
+    try {
+      return await completeChunk(chunkText);
+    } catch (error) {
+      if (!isRequestTooLargeError(error)) throw error;
+      const lines = String(chunkText).split("\n").filter((l) => l.length > 0);
+      if (lines.length <= 1) throw error;
+      const mid = Math.ceil(lines.length / 2);
+      const left = await completeChunkWithRetry(lines.slice(0, mid).join("\n"));
+      const right = await completeChunkWithRetry(lines.slice(mid).join("\n"));
+      return [...left, ...right];
+    }
+  }
+
+  try {
+    const byPath = new Map();
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkGames = await completeChunkWithRetry(chunks[i]);
+      for (const game of chunkGames) {
+        const key = String(game.path || "").toLowerCase();
+        if (!key) continue;
+        if (cache && readCache) {
+          const cacheKey = candidateIdentifyKey({ sourceName: path.basename(game.path) });
+          const hit = cacheKey ? readCache(cache, cacheKey) : null;
+          if (hit?.title && hit.isGame !== false) {
+            game.title = hit.title;
+            game.year = hit.year ?? game.year;
+            game.platform = hit.platform ?? game.platform;
+            game.confidence = hit.confidence ?? game.confidence;
+          } else if (writeCache && cacheKey) {
+            writeCache(cache, cacheKey, game, { model: config.model });
+          }
+        } else if (cache && writeCache) {
+          const cacheKey = candidateIdentifyKey({ sourceName: path.basename(game.path) });
+          if (cacheKey) writeCache(cache, cacheKey, game, { model: config.model });
+        }
+        const prev = byPath.get(key);
+        if (!prev || (game.confidence || 0) >= (prev.confidence || 0)) {
+          byPath.set(key, game);
+        }
+      }
+      if (onProgress) {
+        onProgress({
+          phase: "ai",
+          batchIndex: i + 1,
+          batchCount: chunks.length,
+          candidateCount: byPath.size,
+        });
+      }
+    }
+
+    const games = Array.from(byPath.values());
+    const results = games.map((g) => ({
+      isGame: true,
+      title: g.title,
+      year: g.year,
+      platform: g.platform,
+      confidence: g.confidence,
+    }));
+
+    return {
+      enabled: true,
+      used: true,
+      model: config.model,
+      games,
+      results,
+      stats: { chunks: chunks.length, games: games.length },
+    };
+  } catch (error) {
+    return {
+      enabled: true,
+      used: false,
+      model: config.model,
+      games: [],
+      results: [],
+      error: error?.message || String(error),
+      stats: { chunks: chunks.length, games: 0 },
+    };
+  }
+}
+
 /**
  * Use the AI title as-is. No app-side rewriting — AI is the only naming authority.
  * year/platform/confidence are passed through for IGDB filtering.
@@ -526,12 +737,16 @@ module.exports = {
   DEFAULT_MAX_TREE_LINES,
   DEFAULT_MAX_PROMPT_CHARS,
   SYSTEM_PROMPT,
+  SKELETON_SYSTEM_PROMPT,
   resolveAiIdentifyConfig,
   isAiFolderImportEnabled,
   parseIdentifyResponse,
+  parseSkeletonIdentifyResponse,
   identifyGamesWithAi,
+  identifyGamesFromSkeleton,
   resolveCandidateTitle,
   buildIdentifyPrompt,
+  buildSkeletonIdentifyPrompt,
   packBatches,
   truncateTree,
   candidateIdentifyKey,

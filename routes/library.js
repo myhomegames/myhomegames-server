@@ -2400,23 +2400,21 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   });
 
   /**
-   * Recursively scan a host folder, ask AI for official titles, then match IGDB
-   * (when catalog credentials exist) and add games with launch scripts.
+   * Build a compressed `find`-style skeleton of a host folder, ask AI which paths
+   * are games (official titles), then match IGDB and add launch scripts.
    * Requires AI configuration — there is no heuristic / filename-only import path.
    * Body: { folderPath: string, dryRun?: boolean }
    */
   app.post("/games/import-from-folder", requireToken, async (req, res) => {
     const {
       resolveUserFolderPath,
-      scanFolderForGameCandidates,
       pickBestIgdbMatch,
       isAcceptableIgdbMatch,
       normalizeTitleKey,
-      isJunkGameBasename,
       writeLocalPathLaunchScript,
     } = require("../utils/folderGameImport");
     const {
-      identifyGamesWithAi,
+      identifyGamesFromSkeleton,
       resolveCandidateTitle,
       resolveAiIdentifyConfig,
     } = require("../utils/aiGameIdentify");
@@ -2426,6 +2424,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       readCacheEntry,
       writeCacheEntry,
     } = require("../utils/aiIdentifyCache");
+    const { buildCompressedFindSkeleton } = require("../utils/pathSkeleton");
     const { getIGDBAccessToken, runIGDBSearch } = require("./igdb");
     const { formatIGDBReleaseDate } = require("../utils/dateUtils");
 
@@ -2493,9 +2492,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     beginStream();
     reportProgress({ phase: "scan", current: 0, total: 1, label: "scanning" });
 
-    let candidates;
+    let skeleton;
     try {
-      candidates = scanFolderForGameCandidates(folderPath);
+      // Full find listing, compressed by eliding repeated path prefixes (spaces keep columns).
+      skeleton = buildCompressedFindSkeleton(folderPath, {
+        maxChars: Math.max(4000, Math.floor((aiConfig.maxPromptChars || 14000) * 0.85)),
+      });
     } catch (error) {
       const status = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 400 : 500;
       return finishErr(status, {
@@ -2507,33 +2509,15 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       phase: "scan",
       current: 1,
       total: 1,
-      label: `found ${candidates.length}`,
+      label: `skeleton ${skeleton.pathCount} paths / ${skeleton.chunks.length} chunks`,
     });
 
-    // Drop obvious non-games before spending AI tokens (titles still come only from AI/cache).
-    const candidatesFiltered = candidates.filter(
-      (c) => !isJunkGameBasename(c.sourceName || path.basename(c.folderPath || c.filePath || ""))
-    );
-    const candidatesForAi = candidatesFiltered.map((c) => {
-      const unitRoot = c.folderPath || c.filePath;
-      return {
-        ...c,
-        relativePath: path.relative(folderPath, unitRoot) || c.sourceName,
-        folderPath: unitRoot,
-        tree: Array.isArray(c.tree) && c.tree.length > 0
-          ? c.tree
-          : [path.relative(folderPath, unitRoot) || c.sourceName],
-      };
-    });
     const aiCache = loadAiIdentifyCache(metadataPath);
-    const aiIdentify = await identifyGamesWithAi(candidatesForAi, {
+    const aiIdentify = await identifyGamesFromSkeleton(skeleton, {
       apiKey: aiConfig.apiKey,
       baseURL: aiConfig.baseURL,
       model: aiConfig.model,
       enabled: true,
-      batchSize: aiConfig.batchSize,
-      maxTreeLines: aiConfig.maxTreeLines,
-      maxPromptChars: aiConfig.maxPromptChars,
       cache: aiCache,
       readCacheEntry,
       writeCacheEntry,
@@ -2559,8 +2543,25 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       console.warn("[import-from-folder] AI cache save failed:", cacheErr?.message || cacheErr);
     }
     reportProgress({ phase: "ai", current: 1, total: 1, label: "ai done" });
-    // Keep import loop aligned with AI results (junk filtered above).
-    candidates = candidatesFiltered;
+
+    // Candidates come only from AI paths (no hardcoded games/cd layout).
+    const candidates = (aiIdentify.games || []).map((g) => {
+      const abs = g.absPath;
+      let kind = "game-folder";
+      try {
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) kind = "rom-file";
+      } catch {
+        // keep folder default
+      }
+      return {
+        filePath: abs,
+        folderPath: abs,
+        title: g.title,
+        sourceName: path.basename(abs),
+        kind,
+        relativePath: g.path,
+      };
+    });
 
     // Catalog match is best-effort: without Twitch/IGDB credentials we still create
     // library entries using the AI title and attach launch scripts.
@@ -2842,9 +2843,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       aiUsed: true,
       aiModel: aiIdentify.model || null,
       aiError: null,
-      aiCacheHits: aiIdentify.stats?.cacheHits ?? 0,
-      aiDeduped: aiIdentify.stats?.deduped ?? 0,
-      aiSent: aiIdentify.stats?.sent ?? 0,
+      aiChunks: aiIdentify.stats?.chunks ?? skeleton.chunks.length,
+      aiGames: aiIdentify.stats?.games ?? candidates.length,
+      skeletonPaths: skeleton.pathCount,
     };
 
     reportProgress({

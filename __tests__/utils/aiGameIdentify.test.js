@@ -1,9 +1,11 @@
 const {
   parseIdentifyResponse,
+  parseSkeletonIdentifyResponse,
   resolveAiIdentifyConfig,
   isAiFolderImportEnabled,
   resolveCandidateTitle,
   identifyGamesWithAi,
+  identifyGamesFromSkeleton,
   packBatches,
   isRequestTooLargeError,
   candidateIdentifyKey,
@@ -417,5 +419,66 @@ describe("aiIdentifyCache", () => {
     expect(hit.title).toBe("Fallout");
     expect(hit.year).toBe(1997);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("identifyGamesFromSkeleton", () => {
+  test("parses skeleton JSON and maps absolute paths", () => {
+    const root = path.join("/tmp", "dosprograms");
+    const games = parseSkeletonIdentifyResponse(
+      JSON.stringify([
+        {
+          path: "dosprograms/games/alleycat",
+          title: "Alley Cat",
+          year: 1983,
+          platform: "DOS",
+          confidence: 0.95,
+        },
+      ]),
+      root
+    );
+    expect(games).toHaveLength(1);
+    expect(games[0].title).toBe("Alley Cat");
+    expect(games[0].absPath).toBe(path.join(root, "games", "alleycat"));
+  });
+
+  test("sends brace-compressed skeleton chunk to the model", async () => {
+    const create = jest.fn(async ({ messages }) => {
+      const prompt = String(messages[1].content);
+      expect(prompt).toMatch(/parent\/\{a,b,c\}/);
+      expect(prompt).toMatch(/dosprograms\/games\/alleycat\/\{CAT\.EXE,README\.TXT\}/);
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify([
+                {
+                  path: "dosprograms/games/alleycat",
+                  title: "Alley Cat",
+                  year: 1983,
+                  platform: "DOS",
+                  confidence: 0.9,
+                },
+              ]),
+            },
+          },
+        ],
+      };
+    });
+    const out = await identifyGamesFromSkeleton(
+      {
+        rootPath: path.join("/tmp", "dosprograms"),
+        rootName: "dosprograms",
+        chunks: ["dosprograms/games/alleycat/{CAT.EXE,README.TXT}"],
+      },
+      {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+      }
+    );
+    expect(out.used).toBe(true);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(out.games[0].title).toBe("Alley Cat");
+    expect(out.stats.chunks).toBe(1);
   });
 });
