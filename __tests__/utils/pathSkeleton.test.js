@@ -1,10 +1,13 @@
 const {
   compressPathSkeleton,
   compressPathSkeletonBrace,
+  compressPathSkeletonNested,
   compressPathSkeletonSpaces,
   expandCompressedSkeleton,
   expandBraceSkeleton,
   chunkCompressedSkeleton,
+  chunkNestedSkeleton,
+  buildNestedTreeFromPaths,
   skeletonPathToAbsolute,
   commonDirPrefixLength,
 } = require("../../utils/pathSkeleton");
@@ -41,18 +44,6 @@ describe("compressPathSkeletonBrace", () => {
     expect(compressed).toContain("dosprograms/games/ancient-art-of-war/{O0,O1,O7}");
   });
 
-  test("default compressPathSkeleton uses brace mode", () => {
-    const compressed = compressPathSkeleton([
-      "root",
-      "root/a",
-      "root/a/one",
-      "root/a/two",
-      "root/b",
-      "root/b/three",
-    ]);
-    expect(compressed).toEqual(["root/a/{one,two}", "root/b/three"]);
-  });
-
   test("expandBraceSkeleton restores leaf paths", () => {
     expect(expandBraceSkeleton(["dosprograms/games/x/{O0,O1}"])).toEqual([
       "dosprograms/games/x/O0",
@@ -61,9 +52,71 @@ describe("compressPathSkeletonBrace", () => {
   });
 });
 
+describe("compressPathSkeletonNested", () => {
+  test("nests directories as a{b{c{…}}}", () => {
+    const compressed = compressPathSkeletonNested([
+      "dosprograms",
+      "dosprograms/games",
+      "dosprograms/games/night-shift",
+      "dosprograms/games/night-shift/night",
+      "dosprograms/games/night-shift/night/INSTALL.BAT",
+      "dosprograms/games/night-shift/night/DISK_1.CMP",
+      "dosprograms/games/night-shift/night/BEAST_2.CMP",
+      "dosprograms/games/night-shift/night/DELTA_9.CMP",
+      "dosprograms/games/night-shift/night/BEAST_3.CMP",
+      "dosprograms/games/night-shift/night/BEAST_1.CMP",
+      "dosprograms/games/night-shift/night/DELTA_19.CMP",
+      "dosprograms/games/night-shift/night/DELTA_27.CMP",
+      "dosprograms/games/midnightresque",
+      "dosprograms/games/midnightresque/DATTRIB.GRA",
+      "dosprograms/games/midnightresque/SSR.TGA",
+      "dosprograms/games/midnightresque/CLOSE.GRA",
+      "dosprograms/games/midnightresque/DMENUS.GRA",
+      "dosprograms/games/midnightresque/DOPEN.GRA",
+      "dosprograms/games/midnightresque/dosbox.conf",
+    ]);
+    expect(compressed).toHaveLength(1);
+    expect(compressed[0]).toBe(
+      "dosprograms{games{midnightresque{CLOSE.GRA,DATTRIB.GRA,DMENUS.GRA,DOPEN.GRA,dosbox.conf,SSR.TGA},night-shift{night{BEAST_1.CMP,BEAST_2.CMP,BEAST_3.CMP,DELTA_19.CMP,DELTA_27.CMP,DELTA_9.CMP,DISK_1.CMP,INSTALL.BAT}}}}"
+    );
+  });
+
+  test("default compressPathSkeleton uses nested mode", () => {
+    const compressed = compressPathSkeleton([
+      "root",
+      "root/a",
+      "root/a/one",
+      "root/a/two",
+      "root/b",
+      "root/b/three",
+    ]);
+    expect(compressed).toEqual(["root{a{one,two},b{three}}"]);
+  });
+});
+
+describe("chunkNestedSkeleton", () => {
+  test("splits oversized nested trees into multiple rooted chunks", () => {
+    const tree = buildNestedTreeFromPaths([
+      "root",
+      "root/a",
+      "root/a/one",
+      "root/a/two",
+      "root/b",
+      "root/b/three",
+      "root/c",
+      "root/c/four",
+    ]);
+    const chunks = chunkNestedSkeleton(tree, "root", 30);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("root{")).toBe(true);
+    }
+  });
+});
+
 describe("chunkCompressedSkeleton", () => {
   test("starts each chunk with a full brace line", () => {
-    const compressed = compressPathSkeleton([
+    const compressed = compressPathSkeletonBrace([
       "root/a/one",
       "root/a/two",
       "root/b/three",

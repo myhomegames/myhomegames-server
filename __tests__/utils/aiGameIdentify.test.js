@@ -442,11 +442,11 @@ describe("identifyGamesFromSkeleton", () => {
     expect(games[0].absPath).toBe(path.join(root, "games", "alleycat"));
   });
 
-  test("sends brace-compressed skeleton chunk to the model", async () => {
+  test("sends nested-compressed skeleton chunk to the model", async () => {
     const create = jest.fn(async ({ messages }) => {
       const prompt = String(messages[1].content);
-      expect(prompt).toMatch(/parent\/\{a,b,c\}/);
-      expect(prompt).toMatch(/dosprograms\/games\/alleycat\/\{CAT\.EXE,README\.TXT\}/);
+      expect(prompt).toMatch(/nested a\{b\{c,file\}\}/);
+      expect(prompt).toMatch(/dosprograms\{games\{alleycat\{CAT\.EXE,README\.TXT\}\}\}/);
       return {
         choices: [
           {
@@ -469,7 +469,7 @@ describe("identifyGamesFromSkeleton", () => {
       {
         rootPath: path.join("/tmp", "dosprograms"),
         rootName: "dosprograms",
-        chunks: ["dosprograms/games/alleycat/{CAT.EXE,README.TXT}"],
+        chunks: ["dosprograms{games{alleycat{CAT.EXE,README.TXT}}}"],
       },
       {
         env: { OPENAI_API_KEY: "sk-test" },

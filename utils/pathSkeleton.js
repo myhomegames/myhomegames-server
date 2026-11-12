@@ -146,12 +146,9 @@ function formatBraceGroup(parent, names) {
 }
 
 /**
- * Compress a find listing by grouping sibling names:
+ * Compress a find listing by grouping sibling names (flat lines):
  *
  *   dosprograms/games/ancient-art-of-war/{O0,O1,O7}
- *   dosprograms/cd/Afterlife/{AFTERLIFE.cue,AFTERLIFE.img}
- *
- * Directories with children are emitted recursively; leaf siblings share one brace line.
  *
  * @param {string[]} paths
  * @returns {string[]}
@@ -191,10 +188,139 @@ function compressPathSkeletonBrace(paths) {
 }
 
 /**
- * Default skeleton compression: brace groups (token-efficient, keeps internal files).
+ * Build a nested tree from find paths. Directories are objects; leaf files are null.
+ */
+function buildNestedTreeFromPaths(paths) {
+  const root = {};
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const p = normalizeSkeletonPath(raw);
+    if (!p) continue;
+    const parts = p.split("/").filter(Boolean);
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const name = parts[i];
+      const last = i === parts.length - 1;
+      if (!last) {
+        if (node[name] == null || node[name] === null) node[name] = {};
+        node = node[name];
+      } else if (node[name] === undefined) {
+        node[name] = null;
+      }
+      // if already an object, keep directory
+    }
+  }
+  return root;
+}
+
+/**
+ * Format one nested node: name{child,dir{...},fileA,fileB}
+ */
+function formatNestedBraceNode(node, name) {
+  if (node == null || typeof node !== "object") {
+    return name || "";
+  }
+  const keys = Object.keys(node).sort((a, b) => a.localeCompare(b));
+  const leafFiles = [];
+  const dirs = [];
+  for (const key of keys) {
+    if (node[key] === null) leafFiles.push(key);
+    else dirs.push(key);
+  }
+  const parts = [];
+  if (leafFiles.length) parts.push(leafFiles.join(","));
+  for (const dir of dirs) {
+    parts.push(formatNestedBraceNode(node[dir], dir));
+  }
+  const body = `{${parts.join(",")}}`;
+  return name ? `${name}${body}` : body;
+}
+
+/**
+ * Nested brace compression (default):
+ *
+ *   dosprograms{games{night-shift{night{BEAST_1.CMP,...}},midnightresque{CLOSE.GRA,...}}}
+ *
+ * @returns {string[]} single-element array with the nested string (or [] if empty)
+ */
+function compressPathSkeletonNested(paths) {
+  const tree = buildNestedTreeFromPaths(paths);
+  const roots = Object.keys(tree).sort((a, b) => a.localeCompare(b));
+  if (roots.length === 0) return [];
+  if (roots.length === 1) {
+    return [formatNestedBraceNode(tree[roots[0]], roots[0])];
+  }
+  return [formatNestedBraceNode(tree, "")];
+}
+
+/**
+ * Split a nested tree into chunks under maxChars by grouping sibling subtrees.
+ * Each chunk is a valid nested string rooted at `rootName` (or the shared parent path).
+ */
+function chunkNestedSkeleton(tree, rootName, maxChars) {
+  const limit = Number.isFinite(maxChars) && maxChars > 0 ? Math.floor(maxChars) : 0;
+  const rootNode =
+    rootName && tree && typeof tree[rootName] === "object" && tree[rootName] !== null
+      ? tree[rootName]
+      : tree;
+  const label = rootName || "";
+  const full = formatNestedBraceNode(rootNode, label);
+  if (!full) return [];
+  if (!limit || full.length <= limit) return [full];
+
+  const childKeys = Object.keys(rootNode || {}).sort((a, b) => a.localeCompare(b));
+  if (childKeys.length === 0) return [full];
+
+  const chunks = [];
+  let batch = {};
+  let batchCount = 0;
+
+  const flush = () => {
+    if (batchCount === 0) return;
+    chunks.push(formatNestedBraceNode(batch, label));
+    batch = {};
+    batchCount = 0;
+  };
+
+  for (const key of childKeys) {
+    const value = rootNode[key];
+    const aloneTree = { [key]: value };
+    const alone = formatNestedBraceNode(aloneTree, label);
+
+    if (alone.length > limit && value && typeof value === "object") {
+      flush();
+      // Split oversized child: produce key{...} chunks, then wrap as rootName{key{...}}.
+      const innerLimit = Math.max(500, limit - (label ? label.length + 2 : 0));
+      const innerChunks = chunkNestedSkeleton({ [key]: value }, key, innerLimit);
+      for (const inner of innerChunks) {
+        chunks.push(label ? `${label}{${inner}}` : inner);
+      }
+      continue;
+    }
+
+    const trial = { ...batch, [key]: value };
+    const trialText = formatNestedBraceNode(trial, label);
+    if (batchCount > 0 && trialText.length > limit) {
+      flush();
+    }
+    batch[key] = value;
+    batchCount += 1;
+    if (formatNestedBraceNode(batch, label).length > limit && batchCount > 1) {
+      delete batch[key];
+      batchCount -= 1;
+      flush();
+      batch[key] = value;
+      batchCount = 1;
+    }
+  }
+  flush();
+  return chunks.length ? chunks : [full];
+}
+
+/**
+ * Default skeleton compression: nested a{b{c{…}}} (most token-efficient).
  */
 function compressPathSkeleton(paths) {
-  return compressPathSkeletonBrace(paths);
+  return compressPathSkeletonNested(paths);
 }
 
 /**
@@ -303,17 +429,28 @@ function skeletonPathToAbsolute(rootPath, skeletonPath) {
 }
 
 /**
- * Build compressed find skeleton text for a chosen folder (brace groups by default).
+ * Build compressed find skeleton text for a chosen folder.
+ * Default mode: nested `a{b{c{…}}}` (token-efficient, keeps internal files).
  */
 function buildCompressedFindSkeleton(rootPath, options = {}) {
   const listed = listFindPaths(rootPath, options);
-  const mode = String(options.mode || "brace").toLowerCase();
-  const compressed =
-    mode === "spaces"
-      ? compressPathSkeletonSpaces(listed.paths)
-      : compressPathSkeletonBrace(listed.paths);
+  const mode = String(options.mode || "nested").toLowerCase();
+
+  let compressed;
+  let chunks;
+  if (mode === "spaces") {
+    compressed = compressPathSkeletonSpaces(listed.paths);
+    chunks = chunkCompressedSkeleton(compressed, options.maxChars);
+  } else if (mode === "brace" || mode === "flat") {
+    compressed = compressPathSkeletonBrace(listed.paths);
+    chunks = chunkCompressedSkeleton(compressed, options.maxChars);
+  } else {
+    compressed = compressPathSkeletonNested(listed.paths);
+    const tree = buildNestedTreeFromPaths(listed.paths);
+    chunks = chunkNestedSkeleton(tree, listed.rootName, options.maxChars);
+  }
+
   const text = compressed.join("\n");
-  const chunks = chunkCompressedSkeleton(compressed, options.maxChars);
   return {
     rootPath: listed.rootPath,
     rootName: listed.rootName,
@@ -322,7 +459,7 @@ function buildCompressedFindSkeleton(rootPath, options = {}) {
     compressed,
     text,
     chunks,
-    mode: mode === "spaces" ? "spaces" : "brace",
+    mode: mode === "spaces" ? "spaces" : mode === "brace" || mode === "flat" ? "brace" : "nested",
   };
 }
 
@@ -330,7 +467,11 @@ module.exports = {
   listFindPaths,
   compressPathSkeleton,
   compressPathSkeletonBrace,
+  compressPathSkeletonNested,
   compressPathSkeletonSpaces,
+  buildNestedTreeFromPaths,
+  formatNestedBraceNode,
+  chunkNestedSkeleton,
   expandCompressedLine,
   expandCompressedSkeleton,
   expandBraceSkeleton,

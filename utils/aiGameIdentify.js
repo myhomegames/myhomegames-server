@@ -24,10 +24,10 @@ const SYSTEM_PROMPT =
 
 const SKELETON_SYSTEM_PROMPT =
   "Video-game library expert. You receive a compressed filesystem find listing. " +
-  "Sibling names under a folder are grouped as parent/{a,b,c} (internal files included). " +
+  "Nested form a{b{c,file1,file2}} — braces nest directories; comma-separated siblings; internal files included. " +
   "Reply with JSON only: an array of every distinct game you find. " +
   'Each object: {"path":string,"title":string,"year":number|null,"platform":string|null,"confidence":number}. ' +
-  "path = full relative game root (folder or primary file), e.g. dosprograms/games/alleycat — never a brace group. " +
+  "path = full relative game root with slashes (e.g. dosprograms/games/alleycat), never nested-brace syntax. " +
   "Use folder names and nested file names to recognize titles when the folder slug is unclear. " +
   "title = official retail/IGDB name with spaces + Title Case. Skip tools/BIOS/setup/shared/scripts/soundfonts.";
 
@@ -506,9 +506,9 @@ async function identifyGamesWithAi(candidates, options = {}) {
 function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
   return [
     `Root folder name: ${rootName}.`,
-    "Compressed find listing: siblings are grouped as parent/{a,b,c}. Identify every game.",
+    "Compressed find listing (nested a{b{c,file}}). Identify every game.",
     'Return ONLY a JSON array of {"path","title","year","platform","confidence"}.',
-    "path = full relative game root (folder or primary file), no braces.",
+    "path = full relative game root with slashes (folder or primary file), not nested-brace syntax.",
     "",
     skeletonChunk,
   ].join("\n");
