@@ -2,6 +2,7 @@
 
 const path = require("path");
 const { isCloudflareTunnelEnabled } = require("./cloudflareTunnel");
+const { splitOversizedSkeletonChunk } = require("./pathSkeleton");
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 /**
@@ -12,24 +13,31 @@ const DEFAULT_BATCH_SIZE = 12;
 /** Default: folder/file path only (no directory listing). Raise for ambiguous dumps. */
 const DEFAULT_MAX_TREE_LINES = 1;
 /**
- * Soft cap on user-prompt characters per request (~chars/4 ≈ tokens).
- * Leave headroom under common 8k TPM / request limits for system + completion.
+ * Soft cap on user-prompt characters per request.
+ * Nested path skeletons tokenize denser than ~4 chars/token (often ~1.4).
+ * Default stays under Groq free-tier ~8k TPM including system + wrapper.
+ * Override with MHG_AI_MAX_PROMPT_CHARS when using a higher quota.
  */
-const DEFAULT_MAX_PROMPT_CHARS = 14000;
+const DEFAULT_MAX_PROMPT_CHARS = 4500;
+/** Cap completion size (output tokens) — keeps responses short under TPM limits. */
+const DEFAULT_MAX_COMPLETION_TOKENS = 2048;
+const DEFAULT_BATCH_COMPLETION_TOKENS = 1024;
 
 const SYSTEM_PROMPT =
-  "Video-game metadata expert. JSON only: [{index,isGame,title,year,platform,confidence}]. " +
+  "Video-game metadata expert. Reply with one JSON object only, no markdown/prose: " +
+  '{"results":[{index,isGame,title,year,platform,confidence}]}. ' +
   "title=official retail/IGDB name with spaces+Title Case (never slugs/DOS/CD/RIP/EN). " +
   "year=first release or null; platform=short hint or null; isGame=false for tools/BIOS/setup; confidence 0..1.";
 
 const SKELETON_SYSTEM_PROMPT =
   "Video-game library expert. You receive a compressed filesystem find listing. " +
   "Nested form a{b{c,file1,file2}} — braces nest directories; comma-separated siblings; internal files included. " +
-  "Reply with JSON only: an array of every distinct game you find. " +
-  'Each object: {"path":string,"title":string,"year":number|null,"platform":string|null,"confidence":number}. ' +
+  'Reply with one JSON object only, no markdown/prose: {"games":[{path,title,year,platform,confidence}]}. ' +
   "path = full relative game root with slashes (e.g. dosprograms/games/alleycat), never nested-brace syntax. " +
   "Use folder names and nested file names to recognize titles when the folder slug is unclear. " +
-  "title = official retail/IGDB name with spaces + Title Case. Skip tools/BIOS/setup/shared/scripts/soundfonts.";
+  "title = official retail/IGDB name with spaces + Title Case. year=first release or null; " +
+  "platform=short hint for that dump (DOS, PC, SNES, …) or null; confidence 0..1. " +
+  "Skip tools/BIOS/setup/shared/scripts/soundfonts. Omit non-games entirely.";
 
 function normalizeIdentifyKey(value) {
   return String(value || "")
@@ -205,7 +213,7 @@ function buildIdentifyPrompt(batch, options = {}) {
     return [`${index}.`, ...lines.map((line) => `  ${line}`)].join("\n");
   });
   return [
-    `JSON array only, ${batch.length} objects: {"index","isGame","title","year","platform","confidence"}.`,
+    `One JSON object only, no markdown: {"results":[${batch.length}×{"index","isGame","title","year","platform","confidence"}]}.`,
     'Examples: aloneinthedark→"Alone in the Dark"; Fallout_1997→"Fallout",year 1997; setup/dosbox→isGame false.',
     "Inputs:",
     ...blocks,
@@ -274,26 +282,97 @@ function normalizeIdentifyRow(row, fallbackIndex) {
 }
 
 /**
- * Parse AI response as a JSON array of identify objects (aligned by index).
- * Also accepts a legacy titles-only string array.
+ * Extract a JSON array from model output: bare array, {"games"|"results"|…: [...]},
+ * or the first [...] substring (legacy markdown wrappers).
  */
-function parseIdentifyResponse(rawText, batchLength) {
+function extractJsonArray(rawText) {
   const text = String(rawText || "").trim();
   if (!text) return [];
   let jsonText = text;
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) jsonText = fenced[1].trim();
-  const start = jsonText.indexOf("[");
-  const end = jsonText.lastIndexOf("]");
-  if (start >= 0 && end > start) jsonText = jsonText.slice(start, end + 1);
 
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return [];
+  const tryParse = (s) => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return undefined;
+    }
+  };
+
+  let parsed = tryParse(jsonText);
+  if (parsed === undefined) {
+    const objStart = jsonText.indexOf("{");
+    const objEnd = jsonText.lastIndexOf("}");
+    if (objStart >= 0 && objEnd > objStart) {
+      parsed = tryParse(jsonText.slice(objStart, objEnd + 1));
+    }
   }
-  if (!Array.isArray(parsed)) return [];
+  if (parsed === undefined) {
+    const start = jsonText.indexOf("[");
+    const end = jsonText.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      parsed = tryParse(jsonText.slice(start, end + 1));
+    }
+  }
+  if (parsed === undefined) return [];
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    for (const key of ["games", "results", "items", "data", "candidates"]) {
+      if (Array.isArray(parsed[key])) return parsed[key];
+    }
+  }
+  return [];
+}
+
+function isJsonModeUnsupportedError(error) {
+  const status = error?.status || error?.statusCode || error?.response?.status;
+  const msg = String(error?.message || error || "").toLowerCase();
+  if (status !== 400 && status !== 422) {
+    // Some gateways omit status; still match common wording.
+    return (
+      msg.includes("response_format") ||
+      msg.includes("json_object") ||
+      msg.includes("json mode")
+    );
+  }
+  return (
+    msg.includes("response_format") ||
+    msg.includes("json_object") ||
+    msg.includes("json mode") ||
+    msg.includes("json schema") ||
+    (msg.includes("json") && msg.includes("not support"))
+  );
+}
+
+/**
+ * Chat completion with json_object mode + max_tokens; falls back if the provider rejects JSON mode.
+ */
+async function createJsonCompletion(client, { model, messages, maxTokens, temperature = 0.1 }) {
+  const base = {
+    model,
+    temperature,
+    max_tokens: Math.max(64, Math.floor(maxTokens || DEFAULT_MAX_COMPLETION_TOKENS)),
+    messages,
+  };
+  try {
+    return await client.chat.completions.create({
+      ...base,
+      response_format: { type: "json_object" },
+    });
+  } catch (error) {
+    if (!isJsonModeUnsupportedError(error)) throw error;
+    return client.chat.completions.create(base);
+  }
+}
+
+/**
+ * Parse AI response as a JSON array of identify objects (aligned by index).
+ * Also accepts a legacy titles-only string array and {"results":[...]} wrappers.
+ */
+function parseIdentifyResponse(rawText, batchLength) {
+  const parsed = extractJsonArray(rawText);
+  if (!parsed.length) return [];
 
   const byIndex = new Map();
   parsed.forEach((row, i) => {
@@ -386,9 +465,9 @@ async function identifyGamesWithAi(candidates, options = {}) {
 
   async function completeBatch(batch, treeCap) {
     const prompt = buildIdentifyPrompt(batch, { maxTreeLines: treeCap });
-    const completion = await client.chat.completions.create({
+    const completion = await createJsonCompletion(client, {
       model: config.model,
-      temperature: 0.1,
+      maxTokens: DEFAULT_BATCH_COMPLETION_TOKENS,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: prompt },
@@ -507,7 +586,7 @@ function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
   return [
     `Root folder name: ${rootName}.`,
     "Compressed find listing (nested a{b{c,file}}). Identify every game.",
-    'Return ONLY a JSON array of {"path","title","year","platform","confidence"}.',
+    'Return ONLY {"games":[{"path","title","year","platform","confidence"}]} — no markdown.',
     "path = full relative game root with slashes (folder or primary file), not nested-brace syntax.",
     "",
     skeletonChunk,
@@ -516,25 +595,11 @@ function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
 
 /**
  * Parse AI skeleton response into game rows with absolute paths.
+ * Accepts {"games":[...]}, a bare array, or legacy markdown-wrapped JSON.
  */
 function parseSkeletonIdentifyResponse(rawText, rootPath) {
   const { skeletonPathToAbsolute } = require("./pathSkeleton");
-  const text = String(rawText || "").trim();
-  if (!text) return [];
-  let jsonText = text;
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) jsonText = fenced[1].trim();
-  const start = jsonText.indexOf("[");
-  const end = jsonText.lastIndexOf("]");
-  if (start >= 0 && end > start) jsonText = jsonText.slice(start, end + 1);
-
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
+  const parsed = extractJsonArray(rawText);
 
   const games = [];
   for (const row of parsed) {
@@ -610,9 +675,9 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
 
   async function completeChunk(chunkText) {
     const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName);
-    const completion = await client.chat.completions.create({
+    const completion = await createJsonCompletion(client, {
       model: config.model,
-      temperature: 0.1,
+      maxTokens: DEFAULT_MAX_COMPLETION_TOKENS,
       messages: [
         { role: "system", content: SKELETON_SYSTEM_PROMPT },
         { role: "user", content: prompt },
@@ -629,12 +694,13 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       return await completeChunk(chunkText);
     } catch (error) {
       if (!isRequestTooLargeError(error)) throw error;
-      const lines = String(chunkText).split("\n").filter((l) => l.length > 0);
-      if (lines.length <= 1) throw error;
-      const mid = Math.ceil(lines.length / 2);
-      const left = await completeChunkWithRetry(lines.slice(0, mid).join("\n"));
-      const right = await completeChunkWithRetry(lines.slice(mid).join("\n"));
-      return [...left, ...right];
+      const parts = splitOversizedSkeletonChunk(chunkText);
+      if (parts.length < 2) throw error;
+      const out = [];
+      for (const part of parts) {
+        out.push(...(await completeChunkWithRetry(part)));
+      }
+      return out;
     }
   }
 
@@ -736,12 +802,16 @@ module.exports = {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAX_TREE_LINES,
   DEFAULT_MAX_PROMPT_CHARS,
+  DEFAULT_MAX_COMPLETION_TOKENS,
+  DEFAULT_BATCH_COMPLETION_TOKENS,
   SYSTEM_PROMPT,
   SKELETON_SYSTEM_PROMPT,
   resolveAiIdentifyConfig,
   isAiFolderImportEnabled,
   parseIdentifyResponse,
   parseSkeletonIdentifyResponse,
+  extractJsonArray,
+  createJsonCompletion,
   identifyGamesWithAi,
   identifyGamesFromSkeleton,
   resolveCandidateTitle,
@@ -753,5 +823,6 @@ module.exports = {
   candidatePromptLines,
   dedupeCandidatesForIdentify,
   isRequestTooLargeError,
+  isJsonModeUnsupportedError,
   readOpenAiHeaders,
 };

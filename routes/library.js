@@ -2494,9 +2494,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
     let skeleton;
     try {
-      // Full find listing, compressed by eliding repeated path prefixes (spaces keep columns).
+      // Full find listing as nested braces; keep each chunk well under Groq ~8k TPM.
       skeleton = buildCompressedFindSkeleton(folderPath, {
-        maxChars: Math.max(4000, Math.floor((aiConfig.maxPromptChars || 14000) * 0.85)),
+        maxChars: Math.max(1500, Math.floor((aiConfig.maxPromptChars || 4500) * 0.75)),
       });
     } catch (error) {
       const status = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 400 : 500;

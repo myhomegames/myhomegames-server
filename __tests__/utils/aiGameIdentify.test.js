@@ -174,6 +174,26 @@ describe("parseIdentifyResponse", () => {
     expect(rows[1].isGame).toBe(false);
     expect(rows[2].title).toBe("Doom");
   });
+
+  test("accepts {results:[...]} json_object wrapper", () => {
+    const rows = parseIdentifyResponse(
+      JSON.stringify({
+        results: [
+          {
+            index: 0,
+            isGame: true,
+            title: "Doom",
+            year: 1993,
+            platform: "DOS",
+            confidence: 1,
+          },
+        ],
+      }),
+      1
+    );
+    expect(rows[0].title).toBe("Doom");
+    expect(rows[0].year).toBe(1993);
+  });
 });
 
 describe("resolveCandidateTitle", () => {
@@ -443,23 +463,27 @@ describe("identifyGamesFromSkeleton", () => {
   });
 
   test("sends nested-compressed skeleton chunk to the model", async () => {
-    const create = jest.fn(async ({ messages }) => {
-      const prompt = String(messages[1].content);
+    const create = jest.fn(async (opts) => {
+      expect(opts.response_format).toEqual({ type: "json_object" });
+      expect(opts.max_tokens).toBeGreaterThan(0);
+      const prompt = String(opts.messages[1].content);
       expect(prompt).toMatch(/nested a\{b\{c,file\}\}/);
       expect(prompt).toMatch(/dosprograms\{games\{alleycat\{CAT\.EXE,README\.TXT\}\}\}/);
+      expect(prompt).toMatch(/"games"/);
       return {
         choices: [
           {
             message: {
-              content: JSON.stringify([
-                {
-                  path: "dosprograms/games/alleycat",
-                  title: "Alley Cat",
-                  year: 1983,
-                  platform: "DOS",
-                  confidence: 0.9,
-                },
-              ]),
+              content: JSON.stringify({
+                games: [
+                  {
+                    path: "dosprograms/games/alleycat",
+                    title: "Alley Cat",
+                    year: 1983,
+                    confidence: 0.9,
+                  },
+                ],
+              }),
             },
           },
         ],
@@ -480,5 +504,53 @@ describe("identifyGamesFromSkeleton", () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(out.games[0].title).toBe("Alley Cat");
     expect(out.stats.chunks).toBe(1);
+  });
+
+  test("on 413 splits a nested one-liner and retries both halves", async () => {
+    let calls = 0;
+    const create = jest.fn(async ({ messages }) => {
+      calls += 1;
+      const prompt = String(messages[1].content);
+      if (calls === 1) {
+        expect(prompt).toContain("dosprograms{games{a{1},b{2},c{3},d{4}}}");
+        const err = new Error(
+          "413 Request too large ... Limit 8000, Requested 8598, please reduce your message size"
+        );
+        err.status = 413;
+        throw err;
+      }
+      const letter = prompt.includes("a{1}") ? "a" : "c";
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify([
+                {
+                  path: `dosprograms/games/${letter}`,
+                  title: `Game ${letter.toUpperCase()}`,
+                  year: 1990,
+                  platform: "DOS",
+                  confidence: 0.8,
+                },
+              ]),
+            },
+          },
+        ],
+      };
+    });
+    const out = await identifyGamesFromSkeleton(
+      {
+        rootPath: path.join("/tmp", "dosprograms"),
+        rootName: "dosprograms",
+        chunks: ["dosprograms{games{a{1},b{2},c{3},d{4}}}"],
+      },
+      {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+      }
+    );
+    expect(out.used).toBe(true);
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(out.games.map((g) => g.title).sort()).toEqual(["Game A", "Game C"]);
   });
 });

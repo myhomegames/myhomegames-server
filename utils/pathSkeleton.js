@@ -317,6 +317,75 @@ function chunkNestedSkeleton(tree, rootName, maxChars) {
 }
 
 /**
+ * Split a comma-separated nested-brace body on top-level commas only
+ * (commas inside `{…}` stay with their sibling).
+ */
+function splitTopLevelCommaParts(body) {
+  const text = String(body ?? "");
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === "{") depth += 1;
+    else if (c === "}") depth -= 1;
+    else if (c === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (start < text.length) parts.push(text.slice(start));
+  return parts.filter((p) => p.length > 0);
+}
+
+/**
+ * Binary-split one nested brace chunk (typically a single line) into two smaller
+ * rooted chunks by dividing top-level siblings. Recurses into a lone child when
+ * needed. Returns null when the chunk cannot be split further.
+ */
+function splitNestedBraceInHalf(chunkText) {
+  const text = String(chunkText || "").trim();
+  const open = text.indexOf("{");
+  if (open <= 0 || !text.endsWith("}")) return null;
+  const name = text.slice(0, open);
+  const body = text.slice(open + 1, -1);
+  const parts = splitTopLevelCommaParts(body);
+  if (parts.length >= 2) {
+    const mid = Math.ceil(parts.length / 2);
+    return [
+      `${name}{${parts.slice(0, mid).join(",")}}`,
+      `${name}{${parts.slice(mid).join(",")}}`,
+    ];
+  }
+  if (parts.length === 1) {
+    const child = parts[0];
+    const childOpen = child.indexOf("{");
+    if (childOpen > 0 && child.endsWith("}")) {
+      const halves = splitNestedBraceInHalf(child);
+      if (halves && halves.length === 2) {
+        return [`${name}{${halves[0]}}`, `${name}{${halves[1]}}`];
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Split an oversized skeleton chunk for 413 retries: multi-line → half by lines;
+ * nested one-liner → half by top-level siblings.
+ */
+function splitOversizedSkeletonChunk(chunkText) {
+  const text = String(chunkText || "").trim();
+  if (!text) return [];
+  const lines = text.split("\n").filter((l) => l.length > 0);
+  if (lines.length > 1) {
+    const mid = Math.ceil(lines.length / 2);
+    return [lines.slice(0, mid).join("\n"), lines.slice(mid).join("\n")];
+  }
+  return splitNestedBraceInHalf(text) || [];
+}
+
+/**
  * Default skeleton compression: nested a{b{c{…}}} (most token-efficient).
  */
 function compressPathSkeleton(paths) {
@@ -472,6 +541,9 @@ module.exports = {
   buildNestedTreeFromPaths,
   formatNestedBraceNode,
   chunkNestedSkeleton,
+  splitTopLevelCommaParts,
+  splitNestedBraceInHalf,
+  splitOversizedSkeletonChunk,
   expandCompressedLine,
   expandCompressedSkeleton,
   expandBraceSkeleton,

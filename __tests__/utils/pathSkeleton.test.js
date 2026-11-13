@@ -7,6 +7,8 @@ const {
   expandBraceSkeleton,
   chunkCompressedSkeleton,
   chunkNestedSkeleton,
+  splitNestedBraceInHalf,
+  splitOversizedSkeletonChunk,
   buildNestedTreeFromPaths,
   skeletonPathToAbsolute,
   commonDirPrefixLength,
@@ -111,6 +113,28 @@ describe("chunkNestedSkeleton", () => {
     for (const chunk of chunks) {
       expect(chunk.startsWith("root{")).toBe(true);
     }
+  });
+});
+
+describe("splitNestedBraceInHalf / splitOversizedSkeletonChunk", () => {
+  test("halves a nested one-liner by top-level siblings", () => {
+    const chunk = "dosprograms{games{a{1},b{2},c{3},d{4}}}";
+    const halves = splitNestedBraceInHalf(chunk);
+    expect(halves).toEqual([
+      "dosprograms{games{a{1},b{2}}}",
+      "dosprograms{games{c{3},d{4}}}",
+    ]);
+  });
+
+  test("recurses when the outer body has a single child", () => {
+    const chunk = "root{only{a,b,c,d}}";
+    const halves = splitNestedBraceInHalf(chunk);
+    expect(halves).toEqual(["root{only{a,b}}", "root{only{c,d}}"]);
+  });
+
+  test("splitOversizedSkeletonChunk prefers line splits then nested", () => {
+    expect(splitOversizedSkeletonChunk("a\nb\nc")).toEqual(["a\nb", "c"]);
+    expect(splitOversizedSkeletonChunk("root{a,b}")).toEqual(["root{a}", "root{b}"]);
   });
 });
 
