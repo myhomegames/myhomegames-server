@@ -19,9 +19,12 @@ const DEFAULT_MAX_TREE_LINES = 1;
  * Override with MHG_AI_MAX_PROMPT_CHARS when using a higher quota.
  */
 const DEFAULT_MAX_PROMPT_CHARS = 4500;
-/** Cap completion size (output tokens) — keeps responses short under TPM limits. */
-const DEFAULT_MAX_COMPLETION_TOKENS = 2048;
-const DEFAULT_BATCH_COMPLETION_TOKENS = 1024;
+/**
+ * Cap completion size (output tokens). Too low truncates JSON and Groq
+ * `json_object` mode then returns 400 "Failed to validate JSON".
+ */
+const DEFAULT_MAX_COMPLETION_TOKENS = 4096;
+const DEFAULT_BATCH_COMPLETION_TOKENS = 1536;
 
 const SYSTEM_PROMPT =
   "Video-game metadata expert. Reply with one JSON object only, no markdown/prose: " +
@@ -325,28 +328,39 @@ function extractJsonArray(rawText) {
   return [];
 }
 
+/**
+ * True when we should retry without response_format:
+ * - provider does not support json_object
+ * - Groq validated the model output and rejected it (failed_generation)
+ */
 function isJsonModeUnsupportedError(error) {
   const status = error?.status || error?.statusCode || error?.response?.status;
-  const msg = String(error?.message || error || "").toLowerCase();
-  if (status !== 400 && status !== 422) {
-    // Some gateways omit status; still match common wording.
-    return (
-      msg.includes("response_format") ||
-      msg.includes("json_object") ||
-      msg.includes("json mode")
-    );
-  }
-  return (
+  const msg = String(
+    error?.message || error?.error?.message || error?.error || error || ""
+  ).toLowerCase();
+  const looksLikeJsonModeIssue =
     msg.includes("response_format") ||
     msg.includes("json_object") ||
     msg.includes("json mode") ||
     msg.includes("json schema") ||
-    (msg.includes("json") && msg.includes("not support"))
-  );
+    msg.includes("failed to validate json") ||
+    msg.includes("failed_generation") ||
+    (msg.includes("validate") && msg.includes("json")) ||
+    (msg.includes("json") && msg.includes("not support"));
+  // Groq often returns 400 with failed_generation when json_object output truncates.
+  if (status != null && status !== 400 && status !== 422) {
+    return (
+      msg.includes("failed to validate json") ||
+      msg.includes("failed_generation")
+    );
+  }
+  return looksLikeJsonModeIssue;
 }
 
 /**
- * Chat completion with json_object mode + max_tokens; falls back if the provider rejects JSON mode.
+ * Chat completion with json_object mode + max_tokens.
+ * Falls back to plain completion if JSON mode is unsupported or Groq rejects
+ * the generated JSON (common when output truncates mid-object).
  */
 async function createJsonCompletion(client, { model, messages, maxTokens, temperature = 0.1 }) {
   const base = {

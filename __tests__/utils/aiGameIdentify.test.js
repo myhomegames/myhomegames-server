@@ -8,6 +8,8 @@ const {
   identifyGamesFromSkeleton,
   packBatches,
   isRequestTooLargeError,
+  isJsonModeUnsupportedError,
+  createJsonCompletion,
   candidateIdentifyKey,
   dedupeCandidatesForIdentify,
   buildIdentifyPrompt,
@@ -128,6 +130,46 @@ describe("isRequestTooLargeError", () => {
           "413 Request too large for model `openai/gpt-oss-20b` ... Limit 8000, Requested 8515",
       })
     ).toBe(true);
+  });
+});
+
+describe("isJsonModeUnsupportedError / createJsonCompletion", () => {
+  test("detects Groq failed_generation JSON validation", () => {
+    expect(
+      isJsonModeUnsupportedError({
+        status: 400,
+        message:
+          "400 Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.",
+      })
+    ).toBe(true);
+  });
+
+  test("retries without response_format after Groq JSON validation failure", async () => {
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            "400 Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details."
+          ),
+          { status: 400 }
+        )
+      )
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify({ games: [] }) } }],
+      });
+    const out = await createJsonCompletion(
+      { chat: { completions: { create } } },
+      {
+        model: "openai/gpt-oss-20b",
+        maxTokens: 256,
+        messages: [{ role: "user", content: "x" }],
+      }
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0].response_format).toEqual({ type: "json_object" });
+    expect(create.mock.calls[1][0].response_format).toBeUndefined();
+    expect(out.choices[0].message.content).toContain("games");
   });
 });
 
