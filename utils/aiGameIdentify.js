@@ -372,7 +372,63 @@ function isJsonModeUnsupportedError(error) {
  * Falls back to plain completion if JSON mode is unsupported or Groq rejects
  * the generated JSON (common when output truncates mid-object).
  */
-async function createJsonCompletion(client, { model, messages, maxTokens, temperature = 0.1 }) {
+function summarizeAiMessages(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.map((m) => {
+    const content = String(m?.content || "");
+    return {
+      role: m?.role || "?",
+      chars: content.length,
+      preview: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+    };
+  });
+}
+
+async function createChatCompletionLogged(client, params, meta = {}) {
+  const model = params?.model || "?";
+  const jsonMode = Boolean(params?.response_format);
+  const label = meta.label || "completion";
+  const started = Date.now();
+  console.log("[ai-identify] request", {
+    label,
+    model,
+    jsonMode,
+    temperature: params?.temperature,
+    max_tokens: params?.max_tokens,
+    messages: summarizeAiMessages(params?.messages),
+  });
+  try {
+    const completion = await client.chat.completions.create(params);
+    const choice = completion?.choices?.[0];
+    const content = String(choice?.message?.content || "");
+    console.log("[ai-identify] response", {
+      label,
+      model,
+      jsonMode,
+      ms: Date.now() - started,
+      finish_reason: choice?.finish_reason || null,
+      contentChars: content.length,
+      contentPreview: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+      usage: completion?.usage || null,
+    });
+    return completion;
+  } catch (error) {
+    console.warn("[ai-identify] error", {
+      label,
+      model,
+      jsonMode,
+      ms: Date.now() - started,
+      status: error?.status || error?.statusCode || null,
+      message: error?.message || String(error),
+    });
+    throw error;
+  }
+}
+
+async function createJsonCompletion(
+  client,
+  { model, messages, maxTokens, temperature = 0.1, label = "completion" }
+) {
   const base = {
     model,
     temperature,
@@ -381,13 +437,20 @@ async function createJsonCompletion(client, { model, messages, maxTokens, temper
   };
   return withRateLimitRetry(async () => {
     try {
-      return await client.chat.completions.create({
-        ...base,
-        response_format: { type: "json_object" },
-      });
+      return await createChatCompletionLogged(
+        client,
+        {
+          ...base,
+          response_format: { type: "json_object" },
+        },
+        { label: `${label}:json_object` }
+      );
     } catch (error) {
       if (!isJsonModeUnsupportedError(error)) throw error;
-      return client.chat.completions.create(base);
+      console.warn("[ai-identify] falling back to plain completion (no response_format)", {
+        label,
+      });
+      return createChatCompletionLogged(client, base, { label: `${label}:plain_fallback` });
     }
   });
 }
@@ -520,13 +583,22 @@ async function withRateLimitRetry(fn, options = {}) {
       if (suggested == null) {
         // Unknown delay: brief exponential backoff for a few attempts.
         if (attempt >= maxAttempts - 1) throw createRateLimitError(error, null);
-        await sleep(1000 * (attempt + 1));
+        const waitMs = 1000 * (attempt + 1);
+        console.warn("[ai-identify] rate limit, retrying", {
+          attempt: attempt + 1,
+          waitMs,
+        });
+        await sleep(waitMs);
         continue;
       }
       if (suggested > maxWaitMs) {
         throw createRateLimitError(error, suggested);
       }
       if (attempt >= maxAttempts - 1) throw createRateLimitError(error, suggested);
+      console.warn("[ai-identify] rate limit, retrying", {
+        attempt: attempt + 1,
+        waitMs: suggested + 250,
+      });
       await sleep(suggested + 250);
     }
   }
@@ -602,6 +674,7 @@ async function identifyGamesWithAi(candidates, options = {}) {
     const completion = await createJsonCompletion(client, {
       model: config.model,
       maxTokens: DEFAULT_BATCH_COMPLETION_TOKENS,
+      label: `batch(size=${batch.length},tree=${treeCap})`,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: prompt },
@@ -807,11 +880,12 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   const writeCache =
     typeof options.writeCacheEntry === "function" ? options.writeCacheEntry : null;
 
-  async function completeChunk(chunkText) {
+  async function completeChunk(chunkText, label) {
     const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName);
     const completion = await createJsonCompletion(client, {
       model: config.model,
       maxTokens: DEFAULT_MAX_COMPLETION_TOKENS,
+      label,
       messages: [
         { role: "system", content: SKELETON_SYSTEM_PROMPT },
         { role: "user", content: prompt },
@@ -823,16 +897,22 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     );
   }
 
-  async function completeChunkWithRetry(chunkText) {
+  async function completeChunkWithRetry(chunkText, label) {
     try {
-      return await completeChunk(chunkText);
+      return await completeChunk(chunkText, label);
     } catch (error) {
       if (!isRequestTooLargeError(error)) throw error;
       const parts = splitOversizedSkeletonChunk(chunkText);
       if (parts.length < 2) throw error;
+      console.warn("[ai-identify] splitting oversized skeleton chunk", {
+        label,
+        parts: parts.length,
+      });
       const out = [];
-      for (const part of parts) {
-        out.push(...(await completeChunkWithRetry(part)));
+      for (let p = 0; p < parts.length; p += 1) {
+        out.push(
+          ...(await completeChunkWithRetry(parts[p], `${label}/split${p + 1}`))
+        );
       }
       return out;
     }
@@ -843,10 +923,17 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     : DEFAULT_CHUNK_GAP_MS;
 
   try {
+    console.log("[ai-identify] skeleton identify start", {
+      rootName,
+      chunks: chunks.length,
+      model: config.model,
+      baseURL: config.baseURL || null,
+    });
     const byPath = new Map();
     for (let i = 0; i < chunks.length; i++) {
       if (i > 0 && chunkGapMs > 0) await sleep(chunkGapMs);
-      const chunkGames = await completeChunkWithRetry(chunks[i]);
+      const label = `skeleton ${i + 1}/${chunks.length}`;
+      const chunkGames = await completeChunkWithRetry(chunks[i], label);
       for (const game of chunkGames) {
         const key = String(game.path || "").toLowerCase();
         if (!key) continue;
