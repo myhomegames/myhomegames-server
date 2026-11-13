@@ -25,6 +25,16 @@ const DEFAULT_MAX_PROMPT_CHARS = 4500;
  */
 const DEFAULT_MAX_COMPLETION_TOKENS = 4096;
 const DEFAULT_BATCH_COMPLETION_TOKENS = 1536;
+/** Auto-wait/retry 429 only when the provider asks for at most this delay (TPM bumps). */
+const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 90_000;
+const DEFAULT_RATE_LIMIT_RETRIES = 5;
+/** Pause between skeleton chunks to reduce TPM spikes (TPD still applies). */
+const DEFAULT_CHUNK_GAP_MS = 350;
+
+function sleep(ms) {
+  const wait = Math.max(0, Math.floor(Number(ms) || 0));
+  return new Promise((resolve) => setTimeout(resolve, wait));
+}
 
 const SYSTEM_PROMPT =
   "Video-game metadata expert. Reply with one JSON object only, no markdown/prose: " +
@@ -369,15 +379,17 @@ async function createJsonCompletion(client, { model, messages, maxTokens, temper
     max_tokens: Math.max(64, Math.floor(maxTokens || DEFAULT_MAX_COMPLETION_TOKENS)),
     messages,
   };
-  try {
-    return await client.chat.completions.create({
-      ...base,
-      response_format: { type: "json_object" },
-    });
-  } catch (error) {
-    if (!isJsonModeUnsupportedError(error)) throw error;
-    return client.chat.completions.create(base);
-  }
+  return withRateLimitRetry(async () => {
+    try {
+      return await client.chat.completions.create({
+        ...base,
+        response_format: { type: "json_object" },
+      });
+    } catch (error) {
+      if (!isJsonModeUnsupportedError(error)) throw error;
+      return client.chat.completions.create(base);
+    }
+  });
 }
 
 /**
@@ -404,13 +416,121 @@ function isRequestTooLargeError(error) {
   const status = error?.status || error?.statusCode || error?.response?.status;
   const msg = String(error?.message || error || "").toLowerCase();
   if (status === 413) return true;
+  // Daily TPD / org quota 429s are rate limits, not "request too large" splits.
+  if (status === 429) return false;
   return (
     msg.includes("request too large") ||
     msg.includes("reduce your message size") ||
     msg.includes("context_length") ||
     msg.includes("maximum context length") ||
-    (msg.includes("tokens per minute") && msg.includes("requested"))
+    (msg.includes("tokens per minute") && msg.includes("requested") && !msg.includes("rate limit"))
   );
+}
+
+function isRateLimitError(error) {
+  const status = error?.status || error?.statusCode || error?.response?.status;
+  const msg = String(
+    error?.message || error?.error?.message || error?.error || error || ""
+  ).toLowerCase();
+  if (status === 429) return true;
+  return (
+    msg.includes("rate limit") ||
+    msg.includes("tokens per day") ||
+    msg.includes("too many requests") ||
+    (msg.includes("tpd") && msg.includes("limit"))
+  );
+}
+
+/**
+ * Parse Groq/OpenAI-style "Please try again in 22m57.648s" (or Retry-After seconds).
+ * @returns {number|null} milliseconds
+ */
+function parseRetryAfterMs(error) {
+  const headers = error?.headers || error?.response?.headers;
+  const rawHeader =
+    (headers && (headers["retry-after"] || headers["Retry-After"])) || null;
+  if (rawHeader != null) {
+    const sec = Number(rawHeader);
+    if (Number.isFinite(sec) && sec >= 0) return Math.ceil(sec * 1000);
+  }
+  const msg = String(error?.message || error?.error?.message || error?.error || error || "");
+  const full = msg.match(
+    /try again in\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(\d+(?:\.\d+)?)\s*s/i
+  );
+  if (full) {
+    const hours = Number(full[1] || 0);
+    const mins = Number(full[2] || 0);
+    const secs = Number(full[3] || 0);
+    const ms = ((hours * 60 + mins) * 60 + secs) * 1000;
+    if (Number.isFinite(ms) && ms >= 0) return Math.ceil(ms);
+  }
+  const secsOnly = msg.match(/try again in\s+(\d+(?:\.\d+)?)\s*s/i);
+  if (secsOnly) {
+    const ms = Number(secsOnly[1]) * 1000;
+    if (Number.isFinite(ms) && ms >= 0) return Math.ceil(ms);
+  }
+  return null;
+}
+
+function formatDurationForUser(ms) {
+  const totalSec = Math.max(1, Math.ceil((Number(ms) || 0) / 1000));
+  const hours = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  return `${secs}s`;
+}
+
+/**
+ * User-facing rate-limit error. Long TPD waits are not auto-slept (import would hang).
+ */
+function createRateLimitError(error, waitMs) {
+  const wait = waitMs != null ? waitMs : parseRetryAfterMs(error);
+  const human = wait != null ? formatDurationForUser(wait) : null;
+  const msg = human
+    ? `AI rate limit reached (provider daily/token quota). Try again in about ${human}.`
+    : "AI rate limit reached (provider daily/token quota). Try again later.";
+  const err = new Error(msg);
+  err.status = 429;
+  err.code = "AI_RATE_LIMIT";
+  err.retryAfterMs = wait;
+  err.cause = error;
+  return err;
+}
+
+/**
+ * Retry on short 429 waits; for long daily-quota waits, throw a clear error immediately.
+ */
+async function withRateLimitRetry(fn, options = {}) {
+  const maxWaitMs = Number.isFinite(options.maxWaitMs)
+    ? options.maxWaitMs
+    : DEFAULT_RATE_LIMIT_MAX_WAIT_MS;
+  const maxAttempts = Number.isFinite(options.maxAttempts)
+    ? Math.max(1, Math.floor(options.maxAttempts))
+    : DEFAULT_RATE_LIMIT_RETRIES;
+  let lastError = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isRateLimitError(error)) throw error;
+      lastError = error;
+      const suggested = parseRetryAfterMs(error);
+      if (suggested == null) {
+        // Unknown delay: brief exponential backoff for a few attempts.
+        if (attempt >= maxAttempts - 1) throw createRateLimitError(error, null);
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      if (suggested > maxWaitMs) {
+        throw createRateLimitError(error, suggested);
+      }
+      if (attempt >= maxAttempts - 1) throw createRateLimitError(error, suggested);
+      await sleep(suggested + 250);
+    }
+  }
+  throw createRateLimitError(lastError, parseRetryAfterMs(lastError));
 }
 
 /**
@@ -718,9 +838,14 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     }
   }
 
+  const chunkGapMs = Number.isFinite(options.chunkGapMs)
+    ? Math.max(0, Math.floor(options.chunkGapMs))
+    : DEFAULT_CHUNK_GAP_MS;
+
   try {
     const byPath = new Map();
     for (let i = 0; i < chunks.length; i++) {
+      if (i > 0 && chunkGapMs > 0) await sleep(chunkGapMs);
       const chunkGames = await completeChunkWithRetry(chunks[i]);
       for (const game of chunkGames) {
         const key = String(game.path || "").toLowerCase();
@@ -818,6 +943,9 @@ module.exports = {
   DEFAULT_MAX_PROMPT_CHARS,
   DEFAULT_MAX_COMPLETION_TOKENS,
   DEFAULT_BATCH_COMPLETION_TOKENS,
+  DEFAULT_RATE_LIMIT_MAX_WAIT_MS,
+  DEFAULT_RATE_LIMIT_RETRIES,
+  DEFAULT_CHUNK_GAP_MS,
   SYSTEM_PROMPT,
   SKELETON_SYSTEM_PROMPT,
   resolveAiIdentifyConfig,
@@ -837,6 +965,11 @@ module.exports = {
   candidatePromptLines,
   dedupeCandidatesForIdentify,
   isRequestTooLargeError,
+  isRateLimitError,
   isJsonModeUnsupportedError,
+  parseRetryAfterMs,
+  formatDurationForUser,
+  createRateLimitError,
+  withRateLimitRetry,
   readOpenAiHeaders,
 };

@@ -8,8 +8,11 @@ const {
   identifyGamesFromSkeleton,
   packBatches,
   isRequestTooLargeError,
+  isRateLimitError,
   isJsonModeUnsupportedError,
   createJsonCompletion,
+  parseRetryAfterMs,
+  withRateLimitRetry,
   candidateIdentifyKey,
   dedupeCandidatesForIdentify,
   buildIdentifyPrompt,
@@ -170,6 +173,38 @@ describe("isJsonModeUnsupportedError / createJsonCompletion", () => {
     expect(create.mock.calls[0][0].response_format).toEqual({ type: "json_object" });
     expect(create.mock.calls[1][0].response_format).toBeUndefined();
     expect(out.choices[0].message.content).toContain("games");
+  });
+});
+
+describe("rate limit / TPD handling", () => {
+  test("detects Groq TPD 429 and parses try-again delay", () => {
+    const err = {
+      status: 429,
+      message:
+        "429 Rate limit reached for model `openai/gpt-oss-20b` in organization `org_x` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197264, Requested 5925. Please try again in 22m57.648s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing",
+    };
+    expect(isRateLimitError(err)).toBe(true);
+    expect(isRequestTooLargeError(err)).toBe(false);
+    const ms = parseRetryAfterMs(err);
+    expect(ms).toBeGreaterThan(22 * 60 * 1000);
+    expect(ms).toBeLessThan(23 * 60 * 1000);
+  });
+
+  test("does not sleep for long daily-quota waits", async () => {
+    const started = Date.now();
+    await expect(
+      withRateLimitRetry(
+        async () => {
+          const err = new Error(
+            "429 Rate limit reached ... Please try again in 22m57.648s."
+          );
+          err.status = 429;
+          throw err;
+        },
+        { maxWaitMs: 90_000, maxAttempts: 3 }
+      )
+    ).rejects.toThrow(/try again in about 22m/i);
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
 

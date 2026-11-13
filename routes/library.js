@@ -2532,8 +2532,14 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     });
     if (!aiIdentify.used || aiIdentify.error) {
       console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
-      return finishErr(502, {
-        error: aiIdentify.error || "AI game identification failed",
+      const errText = String(aiIdentify.error || "AI game identification failed");
+      const rateLimited =
+        /\brate limit\b/i.test(errText) ||
+        /\b429\b/.test(errText) ||
+        /tokens per day/i.test(errText) ||
+        /try again in about/i.test(errText);
+      return finishErr(rateLimited ? 429 : 502, {
+        error: errText,
         aiModel: aiIdentify.model || null,
       });
     }
