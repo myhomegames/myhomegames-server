@@ -249,6 +249,288 @@ async function fetchIGDBGameSummaryAndKeywords(id, accessToken, clientId) {
   };
 }
 
+const CATALOG_GAME_DETAIL_FIELDS =
+  "id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.id,platforms.name," +
+  "game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating," +
+  "artworks.image_id,artworks.artwork_type,artworks.alpha_channel,age_ratings.rating,age_ratings.category," +
+  "involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id," +
+  "involved_companies.company.description,involved_companies.developer,involved_companies.publisher," +
+  "franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name," +
+  "alternative_names.name,similar_games.id,similar_games.name,game_type";
+
+/**
+ * Full catalog game payload (same shape as GET /igdb/game/:id / Add Game import).
+ * @param {number|string} igdbId
+ * @param {string} accessToken
+ * @param {string} clientId
+ * @param {{ locale?: string }} [options]
+ */
+async function fetchCatalogGameByIgdbId(igdbId, accessToken, clientId, options = {}) {
+  const numericId = Number(igdbId);
+  if (!Number.isFinite(numericId)) {
+    const err = new Error("Invalid IGDB game ID");
+    err.status = 400;
+    throw err;
+  }
+
+  const postData = `fields ${CATALOG_GAME_DETAIL_FIELDS}; where id = ${numericId};`;
+  const requestOptions = {
+    hostname: "api.igdb.com",
+    path: "/v4/games",
+    method: "POST",
+    headers: {
+      "Client-ID": clientId,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "text/plain",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  const games = await new Promise((resolve, reject) => {
+    const igdbReq = https.request(requestOptions, (igdbRes) => {
+      let data = "";
+      igdbRes.on("data", (chunk) => {
+        data += chunk;
+      });
+      igdbRes.on("end", () => {
+        if (igdbRes.statusCode && igdbRes.statusCode !== 200) {
+          const err = new Error(`IGDB API error ${igdbRes.statusCode}: ${data}`);
+          err.status = igdbRes.statusCode;
+          reject(err);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          resolve(Array.isArray(parsed) ? parsed : []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    igdbReq.on("error", reject);
+    igdbReq.write(postData);
+    igdbReq.end();
+  });
+
+  const game = games[0];
+  if (!game || typeof game !== "object") {
+    const err = new Error("IGDB game not found");
+    err.status = 404;
+    throw err;
+  }
+
+  const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+  const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
+  const backgroundUrl = backgroundUrlFromArtworks(game.artworks);
+  const logoUrl = logoUrlFromArtworks(game.artworks);
+
+  let ageRatings = [];
+  if (game.age_ratings && game.age_ratings.length > 0) {
+    const ageRatingIds = game.age_ratings.map((ar) => ar.id || ar).filter((id) => id);
+    if (ageRatingIds.length > 0) {
+      try {
+        const ageRatingPostData = `fields organization,rating_category; where id = (${ageRatingIds.join(",")});`;
+        const ageRatingOptions = {
+          hostname: "api.igdb.com",
+          path: "/v4/age_ratings",
+          method: "POST",
+          headers: {
+            "Client-ID": clientId,
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "text/plain",
+            "Content-Length": Buffer.byteLength(ageRatingPostData),
+          },
+        };
+        const ageRatingData = await new Promise((resolveAgeRating, rejectAgeRating) => {
+          const ageRatingReq = https.request(ageRatingOptions, (ageRatingRes) => {
+            let ageRatingBody = "";
+            ageRatingRes.on("data", (chunk) => {
+              ageRatingBody += chunk;
+            });
+            ageRatingRes.on("end", () => {
+              try {
+                if (ageRatingRes.statusCode === 200) {
+                  resolveAgeRating(JSON.parse(ageRatingBody));
+                } else {
+                  rejectAgeRating(new Error(`IGDB age ratings API returned ${ageRatingRes.statusCode}`));
+                }
+              } catch (e) {
+                rejectAgeRating(e);
+              }
+            });
+          });
+          ageRatingReq.on("error", rejectAgeRating);
+          ageRatingReq.write(ageRatingPostData);
+          ageRatingReq.end();
+        });
+        ageRatings = Array.isArray(ageRatingData)
+          ? ageRatingData
+              .filter(
+                (ar) =>
+                  ar &&
+                  typeof ar.organization === "number" &&
+                  typeof ar.rating_category === "number"
+              )
+              .map((ar) => ({
+                category: ar.organization,
+                rating: ar.rating_category,
+              }))
+          : [];
+      } catch (ageRatingError) {
+        console.error(
+          "Failed to fetch age rating details:",
+          ageRatingError.message,
+          ageRatingError.stack
+        );
+      }
+    }
+  }
+
+  const developers = game.involved_companies
+    ? game.involved_companies
+        .filter((ic) => ic.developer && ic.company)
+        .map((ic) => {
+          const c = ic.company;
+          if (!c || !c.id || !c.name) return null;
+          return {
+            id: c.id,
+            name: c.name || "",
+            logo: c.logo?.image_id
+              ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png`
+              : null,
+            description: c.description || "",
+          };
+        })
+        .filter(Boolean)
+    : [];
+  const publishers = game.involved_companies
+    ? game.involved_companies
+        .filter((ic) => ic.publisher && ic.company)
+        .map((ic) => {
+          const c = ic.company;
+          if (!c || !c.id || !c.name) return null;
+          return {
+            id: c.id,
+            name: c.name || "",
+            logo: c.logo?.image_id
+              ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png`
+              : null,
+            description: c.description || "",
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  const screenshots = game.screenshots
+    ? game.screenshots
+        .map((s) => `https://images.igdb.com/igdb/image/upload/t_1080p/${s.image_id}.jpg`)
+        .filter(Boolean)
+    : [];
+  const videos = game.videos
+    ? game.videos.map((v) => `https://www.youtube.com/embed/${v.video_id}`).filter(Boolean)
+    : [];
+  const similarGames = game.similar_games
+    ? game.similar_games.map((sg) => ({ id: sg.id, name: sg.name || "" })).filter((sg) => sg.name)
+    : [];
+  const gameTypeId = coerceToGameTypeId(game.game_type);
+
+  const gameData = {
+    id: game.id,
+    name: game.name,
+    summary: game.summary || "",
+    cover: game.cover
+      ? `https:${String(game.cover.url || "")
+          .replace("t_thumb", "t_1080p")
+          .replace("t_cover_big", "t_1080p")}`
+      : null,
+    background: backgroundUrl,
+    logo: logoUrl,
+    releaseDate,
+    releaseDateFull,
+    genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
+    themes: game.themes
+      ? game.themes
+          .map((t) => ({ id: t.id, name: t.name || String(t) }))
+          .filter((t) => t.id != null || t.name)
+      : [],
+    platforms: game.platforms
+      ? game.platforms
+          .map((p) => ({ id: p.id, name: p.name || String(p) }))
+          .filter((p) => p.id != null || p.name)
+      : [],
+    gameModes: game.game_modes
+      ? game.game_modes
+          .map((m) => ({ id: m.id, name: m.name || String(m) }))
+          .filter((m) => m.id != null || m.name)
+      : [],
+    playerPerspectives: game.player_perspectives
+      ? game.player_perspectives
+          .map((p) => ({ id: p.id, name: p.name || String(p) }))
+          .filter((p) => p.id != null || p.name)
+      : [],
+    websites: game.websites
+      ? game.websites.map((w) => ({ url: w.url, category: w.category })).filter((w) => w.url)
+      : [],
+    ageRatings: ageRatings.length > 0 ? ageRatings : undefined,
+    developers:
+      developers.length > 0
+        ? developers.map((d) => ({
+            id: d.id,
+            name: d.name,
+            logo: d.logo,
+            description: d.description,
+          }))
+        : undefined,
+    publishers:
+      publishers.length > 0
+        ? publishers.map((p) => ({
+            id: p.id,
+            name: p.name,
+            logo: p.logo,
+            description: p.description,
+          }))
+        : undefined,
+    franchise: (game.franchises || [])
+      .map((f) => ({ id: f.id, name: f.name || "" }))
+      .filter((f) => f.name),
+    collection: (game.collections || [])
+      .map((c) => ({ id: c.id, name: c.name || "" }))
+      .filter((c) => c.name),
+    series: (game.collections || [])
+      .map((c) => ({ id: c.id, name: c.name || "" }))
+      .filter((c) => c.name),
+    screenshots: screenshots.length > 0 ? screenshots : undefined,
+    videos: videos.length > 0 ? videos : undefined,
+    gameEngines: game.game_engines
+      ? game.game_engines
+          .map((e) => ({ id: e.id, name: e.name || String(e) }))
+          .filter((e) => e.id != null || e.name)
+      : undefined,
+    keywords: game.keywords ? game.keywords.map((k) => k.name || k).filter(Boolean) : undefined,
+    alternativeNames: game.alternative_names
+      ? game.alternative_names.map((an) => an.name || an).filter(Boolean)
+      : undefined,
+    similarGames: similarGames.length > 0 ? similarGames : undefined,
+    criticRating: game.rating !== undefined && game.rating !== null ? game.rating : null,
+    userRating:
+      game.aggregated_rating !== undefined && game.aggregated_rating !== null
+        ? game.aggregated_rating
+        : null,
+    ...(gameTypeId != null ? { type: gameTypeId } : {}),
+  };
+
+  gameData.summaryEn = gameData.summary || "";
+  if (options.locale) {
+    try {
+      gameData.summary = await translateIgdbSummary(gameData.summaryEn, options.locale);
+    } catch (translateErr) {
+      console.warn("IGDB game summary translation failed:", translateErr?.message || translateErr);
+    }
+  }
+
+  return gameData;
+}
+
 /**
  * Fetch game names from IGDB by id list.
  * @param {number[]} ids - IGDB game IDs
@@ -1548,9 +1830,9 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
   // Endpoint: get single IGDB game details with high-res cover
   app.get("/igdb/game/:igdbId", requireToken, async (req, res) => {
     const igdbId = req.params.igdbId;
-    
+
     if (!igdbId || isNaN(parseInt(igdbId, 10))) {
-      res.setHeader('Content-Type', 'application/json');
+      res.setHeader("Content-Type", "application/json");
       return res.status(400).json({ error: "Invalid IGDB game ID" });
     }
 
@@ -1560,224 +1842,24 @@ function registerIGDBRoutes(app, requireToken, metadataPath) {
 
     try {
       const accessToken = await getIGDBAccessToken(clientId, clientSecret);
-
-      const postData = `fields id,name,summary,cover.url,first_release_date,genres.name,themes.name,platforms.name,game_modes.name,player_perspectives.name,websites.url,websites.category,rating,aggregated_rating,artworks.image_id,artworks.artwork_type,artworks.alpha_channel,age_ratings.rating,age_ratings.category,involved_companies.company.id,involved_companies.company.name,involved_companies.company.logo.image_id,involved_companies.company.description,involved_companies.developer,involved_companies.publisher,franchises.name,collections.name,screenshots.image_id,videos.video_id,game_engines.name,keywords.name,alternative_names.name,similar_games.id,similar_games.name,game_type; where id = ${igdbId};`;
-
-      const options = {
-        hostname: "api.igdb.com",
-        path: "/v4/games",
-        method: "POST",
-        headers: {
-          "Client-ID": clientId,
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "text/plain",
-          "Content-Length": Buffer.byteLength(postData),
-        },
-      };
-
-      const igdbReq = https.request(options, async (igdbRes) => {
-        let data = "";
-        igdbRes.on("data", (chunk) => {
-          data += chunk;
-        });
-        igdbRes.on("end", async () => {
-          try {
-            if (igdbRes.statusCode && igdbRes.statusCode !== 200) {
-              res.setHeader("Content-Type", "application/json");
-              return res
-                .status(igdbRes.statusCode)
-                .json({ error: `IGDB API error ${igdbRes.statusCode}`, detail: data });
-            }
-
-            const games = JSON.parse(data);
-
-            if (!Array.isArray(games) || games.length === 0) {
-              res.setHeader('Content-Type', 'application/json');
-              return res.status(404).json({ error: "IGDB game not found" });
-            }
-
-            const game = games[0];
-            if (!game || typeof game !== "object") {
-              res.setHeader("Content-Type", "application/json");
-              return res.status(404).json({ error: "IGDB game not found" });
-            }
-
-            const { formatIGDBReleaseDate } = require("../utils/dateUtils");
-            const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
-            
-            // Background: prefer non-logo artworks; logo goes to dedicated field
-            const backgroundUrl = backgroundUrlFromArtworks(game.artworks);
-            const logoUrl = logoUrlFromArtworks(game.artworks);
-            
-            // Process age ratings
-            // IGDB returns only IDs, so we need to fetch details separately
-            let ageRatings = [];
-            if (game.age_ratings && game.age_ratings.length > 0) {
-              const ageRatingIds = game.age_ratings.map((ar) => ar.id || ar).filter((id) => id);
-              if (ageRatingIds.length > 0) {
-                try {
-                  // Fetch age rating details from IGDB
-                  // Note: IGDB uses 'organization' for category and 'rating_category' for rating
-                  const ageRatingPostData = `fields organization,rating_category; where id = (${ageRatingIds.join(',')});`;
-                  const ageRatingOptions = {
-                    hostname: "api.igdb.com",
-                    path: "/v4/age_ratings",
-                    method: "POST",
-                    headers: {
-                      "Client-ID": clientId,
-                      Authorization: `Bearer ${accessToken}`,
-                      "Content-Type": "text/plain",
-                      "Content-Length": Buffer.byteLength(ageRatingPostData),
-                    },
-                  };
-
-                  const ageRatingData = await new Promise((resolveAgeRating, rejectAgeRating) => {
-                    const ageRatingReq = https.request(ageRatingOptions, (ageRatingRes) => {
-                      let ageRatingData = "";
-                      ageRatingRes.on("data", (chunk) => {
-                        ageRatingData += chunk;
-                      });
-                      ageRatingRes.on("end", () => {
-                        try {
-                          if (ageRatingRes.statusCode === 200) {
-                            resolveAgeRating(JSON.parse(ageRatingData));
-                          } else {
-                            console.error(`IGDB age ratings API returned ${ageRatingRes.statusCode}:`, ageRatingData);
-                            rejectAgeRating(new Error(`IGDB age ratings API returned ${ageRatingRes.statusCode}`));
-                          }
-                        } catch (e) {
-                          console.error('Error parsing age rating response:', e);
-                          rejectAgeRating(e);
-                        }
-                      });
-                    });
-                    ageRatingReq.on("error", (err) => {
-                      console.error('Age rating request error:', err);
-                      rejectAgeRating(err);
-                    });
-                    ageRatingReq.write(ageRatingPostData);
-                    ageRatingReq.end();
-                  });
-
-                  // IGDB uses 'organization' for category (ESRB, PEGI, etc.) and 'rating_category' for the rating value
-                  // organization: 1=ESRB, 2=PEGI, 3=CERO, 4=USK, 5=GRAC, 6=CLASS_IND, 7=ACB
-                  // rating_category: This is the rating ID that maps to specific rating values per organization
-                  ageRatings = Array.isArray(ageRatingData) ? ageRatingData
-                    .filter((ar) => ar && typeof ar.organization === 'number' && typeof ar.rating_category === 'number')
-                    .map((ar) => ({
-                      category: ar.organization, // organization maps to category (1=ESRB, 2=PEGI, etc.)
-                      rating: ar.rating_category, // rating_category is the rating ID/value
-                    })) : [];
-                } catch (ageRatingError) {
-                  console.error('Failed to fetch age rating details:', ageRatingError.message, ageRatingError.stack);
-                  // Continue without age ratings
-                }
-              }
-            }
-
-            // Process involved companies — return { id, name, logo?, description? } for import-game
-            const developers = game.involved_companies
-              ? game.involved_companies
-                  .filter((ic) => ic.developer && ic.company)
-                  .map((ic) => {
-                    const c = ic.company;
-                    if (!c || !c.id || !c.name) return null;
-                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
-                  })
-                  .filter(Boolean)
-              : [];
-            const publishers = game.involved_companies
-              ? game.involved_companies
-                  .filter((ic) => ic.publisher && ic.company)
-                  .map((ic) => {
-                    const c = ic.company;
-                    if (!c || !c.id || !c.name) return null;
-                    return { id: c.id, name: c.name || "", logo: c.logo?.image_id ? `https://images.igdb.com/igdb/image/upload/t_1080p/${c.logo.image_id}.png` : null, description: c.description || "" };
-                  })
-                  .filter(Boolean)
-              : [];
-
-            // Process screenshots
-            const screenshots = game.screenshots
-              ? game.screenshots.map((s) => `https://images.igdb.com/igdb/image/upload/t_1080p/${s.image_id}.jpg`).filter(Boolean)
-              : [];
-
-            // Process videos
-            const videos = game.videos
-              ? game.videos.map((v) => `https://www.youtube.com/embed/${v.video_id}`).filter(Boolean)
-              : [];
-
-            // Process similar games
-            const similarGames = game.similar_games
-              ? game.similar_games.map((sg) => ({ id: sg.id, name: sg.name || '' })).filter((sg) => sg.name)
-              : [];
-
-            const gameTypeId = coerceToGameTypeId(game.game_type);
-
-            const gameData = {
-              id: game.id,
-              name: game.name,
-              summary: game.summary || "",
-              cover: game.cover
-                ? `https:${game.cover.url.replace("t_thumb", "t_1080p").replace("t_cover_big", "t_1080p")}`
-                : null,
-              background: backgroundUrl,
-              logo: logoUrl,
-              releaseDate,
-              releaseDateFull,
-              genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
-              themes: game.themes ? game.themes.map((t) => ({ id: t.id, name: t.name || String(t) })).filter((t) => t.id != null || t.name) : [],
-              platforms: game.platforms ? game.platforms.map((p) => ({ id: p.id, name: p.name || String(p) })).filter((p) => p.id != null || p.name) : [],
-              gameModes: game.game_modes ? game.game_modes.map((m) => ({ id: m.id, name: m.name || String(m) })).filter((m) => m.id != null || m.name) : [],
-              playerPerspectives: game.player_perspectives ? game.player_perspectives.map((p) => ({ id: p.id, name: p.name || String(p) })).filter((p) => p.id != null || p.name) : [],
-              websites: game.websites ? game.websites.map((w) => ({ url: w.url, category: w.category })).filter((w) => w.url) : [],
-              ageRatings: ageRatings.length > 0 ? ageRatings : undefined,
-              developers: developers.length > 0 ? developers.map((d) => ({ id: d.id, name: d.name, logo: d.logo, description: d.description })) : undefined,
-              publishers: publishers.length > 0 ? publishers.map((p) => ({ id: p.id, name: p.name, logo: p.logo, description: p.description })) : undefined,
-              franchise: (game.franchises || []).map((f) => ({ id: f.id, name: f.name || "" })).filter((f) => f.name),
-              collection: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
-              series: (game.collections || []).map((c) => ({ id: c.id, name: c.name || "" })).filter((c) => c.name),
-              screenshots: screenshots.length > 0 ? screenshots : undefined,
-              videos: videos.length > 0 ? videos : undefined,
-              gameEngines: game.game_engines ? game.game_engines.map((e) => ({ id: e.id, name: e.name || String(e) })).filter((e) => e.id != null || e.name) : undefined,
-              keywords: game.keywords ? game.keywords.map((k) => k.name || k).filter(Boolean) : undefined,
-              alternativeNames: game.alternative_names ? game.alternative_names.map((an) => an.name || an).filter(Boolean) : undefined,
-              similarGames: similarGames.length > 0 ? similarGames : undefined,
-              criticRating: game.rating !== undefined && game.rating !== null ? game.rating : null,
-              userRating: game.aggregated_rating !== undefined && game.aggregated_rating !== null ? game.aggregated_rating : null,
-              ...(gameTypeId != null ? { type: gameTypeId } : {}),
-            };
-            
-            try {
-              const locale = resolveRequestLocale(req, metadataPath);
-              gameData.summaryEn = gameData.summary || "";
-              gameData.summary = await translateIgdbSummary(gameData.summaryEn, locale);
-            } catch (translateErr) {
-              console.warn("IGDB game summary translation failed:", translateErr?.message || translateErr);
-            }
-
-            res.setHeader('Content-Type', 'application/json');
-            res.json(gameData);
-          } catch (e) {
-            console.error("Error parsing IGDB response:", e);
-            res.setHeader('Content-Type', 'application/json');
-            res.status(500).json({ error: "Failed to parse IGDB response" });
-          }
-        });
-      });
-
-      igdbReq.on("error", (err) => {
-        console.error("IGDB request error:", err);
-        res.setHeader('Content-Type', 'application/json');
-        res.status(500).json({ error: "Failed to fetch game from IGDB" });
-      });
-
-      igdbReq.write(postData);
-      igdbReq.end();
+      const locale = resolveRequestLocale(req, metadataPath);
+      const gameData = await fetchCatalogGameByIgdbId(igdbId, accessToken, clientId, { locale });
+      res.setHeader("Content-Type", "application/json");
+      res.json(gameData);
     } catch (error) {
       console.error("Error fetching IGDB game:", error);
-      res.setHeader('Content-Type', 'application/json');
-      res.status(500).json({ error: "Failed to fetch game from IGDB" });
+      res.setHeader("Content-Type", "application/json");
+      const status = Number(error?.status) || 500;
+      if (status === 404) {
+        return res.status(404).json({ error: "IGDB game not found" });
+      }
+      if (status === 400) {
+        return res.status(400).json({ error: "Invalid IGDB game ID" });
+      }
+      res.status(status >= 400 && status < 600 ? status : 500).json({
+        error: "Failed to fetch game from IGDB",
+        detail: error?.message || String(error),
+      });
     }
   });
 }
@@ -1789,5 +1871,6 @@ module.exports = {
   runIGDBGameById,
   fetchIGDBGameNamesByIds,
   fetchIGDBGameSummaryAndKeywords,
+  fetchCatalogGameByIgdbId,
 };
 

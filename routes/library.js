@@ -118,6 +118,7 @@ const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchApp
 const {
   getIGDBAccessToken,
   fetchIGDBGameSummaryAndKeywords,
+  fetchCatalogGameByIgdbId,
 } = require("./igdb");
 
 
@@ -2833,6 +2834,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         }
 
         let gameId = null;
+        let catalogDetail = null;
         if (match?.id) {
           if (allGames[match.id]) {
             gameId = match.id;
@@ -2841,21 +2843,53 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             entry.catalogName = match.name;
           } else {
             try {
+              // Same enrichment path as selecting a game from IGDB search (GET /igdb/game/:id).
+              const accessToken = await getIGDBAccessToken(
+                resolvedCreds.clientId,
+                resolvedCreds.clientSecret
+              );
+              const locale = resolveRequestLocale(req, metadataPath);
+              catalogDetail = await fetchCatalogGameByIgdbId(
+                match.id,
+                accessToken,
+                resolvedCreds.clientId,
+                { locale }
+              );
               const imported = await importCatalogViaHandler({
-                gameId: match.id,
-                name: match.name,
-                summary: match.summary,
-                cover: match.cover,
-                releaseDate: match.releaseDateFull?.timestamp || match.releaseDate,
-                genres: match.genres,
-                platforms: match.platforms,
-                criticRating: match.criticRating,
-                userRating: match.userRating,
+                gameId: catalogDetail.id,
+                name: catalogDetail.name,
+                summary: catalogDetail.summary,
+                summaryEn: catalogDetail.summaryEn,
+                cover: catalogDetail.cover,
+                background: catalogDetail.background,
+                logo: catalogDetail.logo,
+                releaseDate:
+                  catalogDetail.releaseDateFull?.timestamp || catalogDetail.releaseDate,
+                genres: catalogDetail.genres,
+                criticRating: catalogDetail.criticRating,
+                userRating: catalogDetail.userRating,
+                themes: catalogDetail.themes,
+                platforms: catalogDetail.platforms,
+                gameModes: catalogDetail.gameModes,
+                playerPerspectives: catalogDetail.playerPerspectives,
+                websites: catalogDetail.websites,
+                ageRatings: catalogDetail.ageRatings,
+                developers: catalogDetail.developers,
+                publishers: catalogDetail.publishers,
+                franchise: catalogDetail.franchise,
+                collection: catalogDetail.series ?? catalogDetail.collection,
+                screenshots: catalogDetail.screenshots,
+                videos: catalogDetail.videos,
+                gameEngines: catalogDetail.gameEngines,
+                keywords: catalogDetail.keywords,
+                alternativeNames: catalogDetail.alternativeNames,
+                similarGames: catalogDetail.similarGames,
+                type: catalogDetail.type,
               });
-              gameId = imported.gameId || imported.game?.id || match.id;
+              gameId = imported.gameId || imported.game?.id || catalogDetail.id;
               entry.status = "imported";
-              entry.catalogGameId = match.id;
-              entry.catalogName = match.name;
+              entry.catalogGameId = catalogDetail.id;
+              entry.catalogName = catalogDetail.name;
             } catch (importErr) {
               if (importErr?.status === 409 && importErr?.payload?.gameId) {
                 gameId = importErr.payload.gameId;
@@ -2880,9 +2914,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         entry.gameId = gameId;
         if (gameId != null && match?.id) {
           const platformSource =
-            match.platforms?.length
-              ? match.platforms
-              : allGames[gameId]?.platforms || [];
+            catalogDetail?.platforms?.length
+              ? catalogDetail.platforms
+              : match.platforms?.length
+                ? match.platforms
+                : allGames[gameId]?.platforms || [];
           attachExistingLaunchScripts(gameId, abs, platformSource, aiPlatform);
         } else if (gameId != null && allGames[gameId]) {
           // Scratch / no catalog: still stamp dateInstalled, but no invented executables.
