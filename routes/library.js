@@ -2402,7 +2402,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
   /**
    * Build a compressed `find`-style skeleton of a host folder, ask AI which paths
    * are games (official titles), then match IGDB. Launch scripts are added only when
-   * real .sh/.bat files exist for that game (never invented open wrappers).
+   * IGDB is active (so a platform id can be set) and real .sh/.bat files exist for
+   * that game (never invented open wrappers).
    * Requires AI configuration — there is no heuristic / filename-only import path.
    * Body: { folderPath: string, dryRun?: boolean }
    */
@@ -2414,6 +2415,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       normalizeTitleKey,
       writeLocalPathLaunchScript,
       findLaunchScriptsForGame,
+      resolveExecutablePlatformId,
     } = require("../utils/folderGameImport");
     const {
       identifyGamesFromSkeleton,
@@ -2554,8 +2556,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         );
       }
     };
-    // Catalog match is best-effort: without Twitch/IGDB credentials we still create
-    // library entries using the AI title and attach launch scripts.
+    // Catalog match is best-effort for titles; launch scripts require IGDB so a
+    // platform id can be written into the executable filename.
     const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
     const resolvedCreds = resolveTwitchAppCredentials(req);
     const canSearchCatalog = Boolean(resolvedCreds.clientId && resolvedCreds.clientSecret);
@@ -2576,8 +2578,19 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           releaseDateFull,
           first_release_date: game.first_release_date ?? null,
           genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
-          platforms: game.platforms
-            ? game.platforms.map((p) => (typeof p === "string" ? p : p?.name)).filter(Boolean)
+          platforms: Array.isArray(game.platforms)
+            ? game.platforms
+                .map((p) => {
+                  if (p == null) return null;
+                  if (typeof p === "string" || typeof p === "number") {
+                    return { id: null, name: String(p) };
+                  }
+                  const id = p.id != null ? p.id : null;
+                  const name = p.name != null ? String(p.name) : "";
+                  if (id == null && !name) return null;
+                  return { id, name };
+                })
+                .filter(Boolean)
             : [],
           criticRating: game.aggregated_rating ? Math.round(game.aggregated_rating / 10) : null,
           userRating: game.rating ? Math.round(game.rating / 10) : null,
@@ -2685,12 +2698,17 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const seenPaths = new Set();
     const chunkTotal = Math.max(1, skeleton.chunks.length);
 
-    function attachExistingLaunchScripts(gameId, gameAbsPath) {
+    function attachExistingLaunchScripts(gameId, gameAbsPath, platforms, platformHint) {
+      // Executables only with IGDB: filename includes platformId for Manage Installation.
+      if (!canSearchCatalog) return 0;
+      const platformId = resolveExecutablePlatformId(platforms, platformHint);
+      if (!platformId) return 0;
       const launchers = findLaunchScriptsForGame(gameAbsPath);
       for (const launcher of launchers) {
         writeLocalPathLaunchScript(metadataPath, gameId, launcher.path, {
           label: launcher.label,
           kind: "script",
+          platformId,
         });
       }
       if (!allGames[gameId]) return launchers.length;
@@ -2767,7 +2785,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.gameId = existingByTitle.id;
           entry.catalogName = existingByTitle.title || null;
           if (titleKey) seenTitleKeys.add(titleKey);
-          attachExistingLaunchScripts(existingByTitle.id, abs);
+          attachExistingLaunchScripts(
+            existingByTitle.id,
+            abs,
+            existingByTitle.platforms,
+            aiPlatform
+          );
           results.push(entry);
           return entry;
         }
@@ -2825,6 +2848,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 cover: match.cover,
                 releaseDate: match.releaseDateFull?.timestamp || match.releaseDate,
                 genres: match.genres,
+                platforms: match.platforms,
                 criticRating: match.criticRating,
                 userRating: match.userRating,
               });
@@ -2846,6 +2870,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           seenCatalogIds.add(Number(match.id));
         } else {
           // No IGDB: create with the AI title only (never a folder/filename heuristic).
+          // Launch scripts are skipped — they require an IGDB platform id.
           const created = await createScratchGame(searchTitle);
           gameId = created.id;
           entry.status = "created";
@@ -2853,8 +2878,16 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
         if (titleKey) seenTitleKeys.add(titleKey);
         entry.gameId = gameId;
-        if (gameId != null) {
-          attachExistingLaunchScripts(gameId, abs);
+        if (gameId != null && match?.id) {
+          const platformSource =
+            match.platforms?.length
+              ? match.platforms
+              : allGames[gameId]?.platforms || [];
+          attachExistingLaunchScripts(gameId, abs, platformSource, aiPlatform);
+        } else if (gameId != null && allGames[gameId]) {
+          // Scratch / no catalog: still stamp dateInstalled, but no invented executables.
+          allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
+          saveGame(metadataPath, allGames[gameId]);
         }
         results.push(entry);
         return entry;

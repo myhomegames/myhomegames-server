@@ -674,6 +674,48 @@ function gameHasPlatformHint(game, platformHint) {
 }
 
 /**
+ * Pick an IGDB platform id for a launch script filename suffix.
+ * Prefers a platform matching the AI hint; otherwise the first entry with an id.
+ * @returns {string} platform id or ""
+ */
+function resolveExecutablePlatformId(platforms, platformHint = null) {
+  const list = Array.isArray(platforms) ? platforms : [];
+  const normalized = [];
+  for (const p of list) {
+    if (p == null) continue;
+    if (typeof p === "number" || (typeof p === "string" && /^\d+$/.test(String(p).trim()))) {
+      normalized.push({ id: String(p).trim(), name: "" });
+      continue;
+    }
+    if (typeof p === "string") {
+      const name = p.trim();
+      if (name) normalized.push({ id: "", name });
+      continue;
+    }
+    if (typeof p === "object") {
+      const id =
+        p.id != null && String(p.id).trim() !== "" ? String(p.id).trim() : "";
+      const name = String(p.name || "").trim();
+      if (id || name) normalized.push({ id, name });
+    }
+  }
+  if (normalized.length === 0) return "";
+  const hint = String(platformHint || "")
+    .trim()
+    .toLowerCase();
+  if (hint) {
+    const hit = normalized.find((p) => {
+      const name = p.name.toLowerCase();
+      if (!name) return false;
+      return name === hint || name.includes(hint) || hint.includes(name);
+    });
+    if (hit?.id) return hit.id;
+  }
+  const withId = normalized.find((p) => p.id);
+  return withId?.id || "";
+}
+
+/**
  * Pick the best IGDB search hit for a guessed title (exact name preferred).
  * Optional AI hints: platform prefers matching platforms[]; year prefers release year.
  */
@@ -817,5 +859,6 @@ module.exports = {
   isAcceptableIgdbMatch,
   writeLocalPathLaunchScript,
   findLaunchScriptsForGame,
+  resolveExecutablePlatformId,
   resolveUserFolderPath,
 };

@@ -10,6 +10,7 @@ const {
   scanFolderForGameCandidates,
   writeLocalPathLaunchScript,
   findLaunchScriptsForGame,
+  resolveExecutablePlatformId,
 } = require("../../utils/folderGameImport");
 
 describe("guessTitleFromBasename", () => {
@@ -198,6 +199,34 @@ describe("writeLocalPathLaunchScript", () => {
     const body = fs.readFileSync(scriptPath, "utf8");
     expect(body).toMatch(/exec /);
     expect(body).toContain(launcher);
+  });
+});
+
+describe("resolveExecutablePlatformId", () => {
+  test("prefers platform matching AI hint when ids are present", () => {
+    expect(
+      resolveExecutablePlatformId(
+        [
+          { id: 48, name: "PlayStation 4" },
+          { id: 13, name: "DOS" },
+        ],
+        "DOS"
+      )
+    ).toBe("13");
+  });
+
+  test("falls back to first platform with an id", () => {
+    expect(
+      resolveExecutablePlatformId([{ id: 6, name: "PC (Microsoft Windows)" }, { id: 13, name: "DOS" }])
+    ).toBe("6");
+  });
+
+  test("returns empty when platforms have names only", () => {
+    expect(resolveExecutablePlatformId(["DOS", "PC"], "DOS")).toBe("");
+  });
+
+  test("accepts numeric platform ids from library tags", () => {
+    expect(resolveExecutablePlatformId([13, 6], null)).toBe("13");
   });
 });
 
