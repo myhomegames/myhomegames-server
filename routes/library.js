@@ -2401,7 +2401,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
   /**
    * Build a compressed `find`-style skeleton of a host folder, ask AI which paths
-   * are games (official titles), then match IGDB and add launch scripts.
+   * are games (official titles), then match IGDB. Launch scripts are added only when
+   * real .sh/.bat files exist for that game (never invented open wrappers).
    * Requires AI configuration — there is no heuristic / filename-only import path.
    * Body: { folderPath: string, dryRun?: boolean }
    */
@@ -2412,6 +2413,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       isAcceptableIgdbMatch,
       normalizeTitleKey,
       writeLocalPathLaunchScript,
+      findLaunchScriptsForGame,
     } = require("../utils/folderGameImport");
     const {
       identifyGamesFromSkeleton,
@@ -2683,6 +2685,23 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const seenPaths = new Set();
     const chunkTotal = Math.max(1, skeleton.chunks.length);
 
+    function attachExistingLaunchScripts(gameId, gameAbsPath) {
+      const launchers = findLaunchScriptsForGame(gameAbsPath);
+      for (const launcher of launchers) {
+        writeLocalPathLaunchScript(metadataPath, gameId, launcher.path, {
+          label: launcher.label,
+          kind: "script",
+        });
+      }
+      if (!allGames[gameId]) return launchers.length;
+      if (launchers.length > 0) {
+        allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
+      }
+      allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
+      saveGame(metadataPath, allGames[gameId]);
+      return launchers.length;
+    }
+
     async function importOneAiGame(game) {
       const pathKey = String(game.path || "").toLowerCase();
       if (pathKey && seenPaths.has(pathKey)) return null;
@@ -2748,21 +2767,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.gameId = existingByTitle.id;
           entry.catalogName = existingByTitle.title || null;
           if (titleKey) seenTitleKeys.add(titleKey);
-          writeLocalPathLaunchScript(metadataPath, existingByTitle.id, candidate.filePath, {
-            label:
-              path.basename(candidate.sourceName, path.extname(candidate.sourceName)) ||
-              "folderimport",
-            kind: candidate.kind,
-          });
-          if (allGames[existingByTitle.id]) {
-            allGames[existingByTitle.id].executables = getExecutablesWithOrder(
-              metadataPath,
-              existingByTitle.id
-            );
-            allGames[existingByTitle.id].dateInstalled =
-              allGames[existingByTitle.id].dateInstalled || Date.now();
-            saveGame(metadataPath, allGames[existingByTitle.id]);
-          }
+          attachExistingLaunchScripts(existingByTitle.id, abs);
           results.push(entry);
           return entry;
         }
@@ -2849,17 +2854,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (titleKey) seenTitleKeys.add(titleKey);
         entry.gameId = gameId;
         if (gameId != null) {
-          writeLocalPathLaunchScript(metadataPath, gameId, candidate.filePath, {
-            label:
-              path.basename(candidate.sourceName, path.extname(candidate.sourceName)) ||
-              "folderimport",
-            kind: candidate.kind,
-          });
-          if (allGames[gameId]) {
-            allGames[gameId].executables = getExecutablesWithOrder(metadataPath, gameId);
-            allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
-            saveGame(metadataPath, allGames[gameId]);
-          }
+          attachExistingLaunchScripts(gameId, abs);
         }
         results.push(entry);
         return entry;

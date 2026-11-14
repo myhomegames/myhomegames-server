@@ -9,6 +9,7 @@ const {
   resolveUserFolderPath,
   scanFolderForGameCandidates,
   writeLocalPathLaunchScript,
+  findLaunchScriptsForGame,
 } = require("../../utils/folderGameImport");
 
 describe("guessTitleFromBasename", () => {
@@ -197,5 +198,55 @@ describe("writeLocalPathLaunchScript", () => {
     const body = fs.readFileSync(scriptPath, "utf8");
     expect(body).toMatch(/exec /);
     expect(body).toContain(launcher);
+  });
+});
+
+describe("findLaunchScriptsForGame", () => {
+  let tmpRoot;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-launch-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  test("returns empty when a game folder has no sh/bat", () => {
+    const gameDir = path.join(tmpRoot, "games", "alleycat");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "ALLEYCAT.EXE"), "x");
+    expect(findLaunchScriptsForGame(gameDir)).toEqual([]);
+  });
+
+  test("finds sh/bat inside the game folder and skips setup scripts", () => {
+    const gameDir = path.join(tmpRoot, "Heroes2");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "heroes2.sh"), "#!/bin/bash\necho play\n");
+    fs.writeFileSync(path.join(gameDir, "setup.sh"), "#!/bin/bash\necho setup\n");
+    fs.writeFileSync(path.join(gameDir, "HEROES2.EXE"), "x");
+    const found = findLaunchScriptsForGame(gameDir);
+    expect(found.map((f) => f.label)).toEqual(["heroes2"]);
+    expect(found[0].path).toBe(path.join(gameDir, "heroes2.sh"));
+  });
+
+  test("matches collection scripts/<game>.sh by folder name", () => {
+    const gameDir = path.join(tmpRoot, "games", "fallout");
+    const scriptsDir = path.join(tmpRoot, "scripts");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "FALLOUT.EXE"), "x");
+    fs.writeFileSync(path.join(scriptsDir, "fallout.sh"), "#!/bin/bash\necho go\n");
+    const found = findLaunchScriptsForGame(gameDir);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe(path.join(scriptsDir, "fallout.sh"));
+  });
+
+  test("accepts a game path that is itself a launch script", () => {
+    const launcher = path.join(tmpRoot, "xonix.sh");
+    fs.writeFileSync(launcher, "#!/bin/bash\necho x\n");
+    const found = findLaunchScriptsForGame(launcher);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe(launcher);
   });
 });

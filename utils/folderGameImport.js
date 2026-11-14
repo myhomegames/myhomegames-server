@@ -327,6 +327,14 @@ function countChildGameFolders(dir) {
   return count;
 }
 
+const LAUNCH_SCRIPT_EXTENSIONS = new Set([".sh", ".bat"]);
+
+function isLaunchScriptBasename(name) {
+  const ext = path.extname(String(name || "")).toLowerCase();
+  if (!LAUNCH_SCRIPT_EXTENSIONS.has(ext)) return false;
+  return !isJunkGameBasename(name);
+}
+
 /**
  * Optional matching launcher under scripts/ for a game folder (launch only; not used for naming).
  */
@@ -336,7 +344,7 @@ function findMatchingLaunchScript(scriptsDir, folderName) {
   if (!key) return null;
   let best = null;
   for (const ent of listDirents(scriptsDir)) {
-    if (!ent.isFile() || !/\.(sh|bat|cmd)$/i.test(ent.name)) continue;
+    if (!ent.isFile() || !isLaunchScriptBasename(ent.name)) continue;
     const scriptKey = normalizeTitleKey(guessTitleFromBasename(ent.name));
     if (!scriptKey) continue;
     if (scriptKey === key || scriptKey.includes(key) || key.includes(scriptKey)) {
@@ -346,6 +354,78 @@ function findMatchingLaunchScript(scriptsDir, folderName) {
     }
   }
   return best;
+}
+
+/**
+ * Discover real .sh/.bat launchers for a game path.
+ * Never invents open/xdg-open wrappers — only returns existing scripts on disk.
+ * @returns {{ path: string, label: string }[]}
+ */
+function findLaunchScriptsForGame(gamePath) {
+  const found = [];
+  const seen = new Set();
+
+  const add = (fullPath) => {
+    const resolved = path.resolve(String(fullPath || ""));
+    if (!resolved || seen.has(resolved)) return;
+    let st;
+    try {
+      st = fs.statSync(resolved);
+    } catch {
+      return;
+    }
+    if (!st.isFile()) return;
+    const base = path.basename(resolved);
+    if (!isLaunchScriptBasename(base)) return;
+    seen.add(resolved);
+    found.push({
+      path: resolved,
+      label: path.basename(base, path.extname(base)) || "script",
+    });
+  };
+
+  let st;
+  try {
+    st = fs.statSync(gamePath);
+  } catch {
+    return found;
+  }
+
+  if (st.isFile()) {
+    add(gamePath);
+    return found;
+  }
+
+  if (!st.isDirectory()) return found;
+
+  const walkGameDir = (dir, depth) => {
+    for (const ent of listDirents(dir)) {
+      if (ent.name.startsWith(".")) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isFile()) {
+        add(full);
+        continue;
+      }
+      if (!ent.isDirectory() || shouldSkipDir(ent.name) || depth >= 2) continue;
+      const lower = ent.name.toLowerCase();
+      // Prefer scripts/ and one level of nested game content.
+      if (lower === "scripts" || depth === 0) walkGameDir(full, depth + 1);
+    }
+  };
+  walkGameDir(gamePath, 0);
+
+  // Collection layout: sibling/ancestor scripts/<matching-name>.sh|bat
+  const folderName = path.basename(gamePath);
+  let dir = path.dirname(gamePath);
+  for (let i = 0; i < 4; i += 1) {
+    const match = findMatchingLaunchScript(path.join(dir, "scripts"), folderName);
+    if (match) add(match);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return found;
 }
 
 function buildFolderCandidate(folderPath, options = {}) {
@@ -736,5 +816,6 @@ module.exports = {
   pickBestIgdbMatch,
   isAcceptableIgdbMatch,
   writeLocalPathLaunchScript,
+  findLaunchScriptsForGame,
   resolveUserFolderPath,
 };
