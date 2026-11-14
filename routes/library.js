@@ -2451,16 +2451,36 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       if (typeof res.flush === "function") res.flush();
     }
-    function reportProgress({ phase, current = 0, total = 0, label = "" }) {
+    function reportProgress({
+      phase,
+      current = 0,
+      total = 0,
+      paths = undefined,
+      chunks = undefined,
+      games = undefined,
+      cacheHits = undefined,
+      apiCalls = undefined,
+    }) {
       const ranges = { scan: [0, 5], ai: [5, 45], import: [45, 99] };
       const [lo, hi] = ranges[phase] || [0, 100];
       const frac = total > 0 ? Math.min(1, Math.max(0, current / total)) : phase === "scan" ? 1 : 0;
       const percent = Math.min(99, Math.max(0, Math.round(lo + (hi - lo) * frac)));
-      emitSse("progress", { phase, current, total, percent, label });
+      // Structured fields only — UI localizes from phase + numbers (no English prose).
+      emitSse("progress", {
+        phase,
+        current,
+        total,
+        percent,
+        ...(paths != null ? { paths } : {}),
+        ...(chunks != null ? { chunks } : {}),
+        ...(games != null ? { games } : {}),
+        ...(cacheHits != null ? { cacheHits } : {}),
+        ...(apiCalls != null ? { apiCalls } : {}),
+      });
     }
     function finishOk(payload) {
       if (wantsStream) {
-        emitSse("progress", { phase: "done", current: 1, total: 1, percent: 100, label: "done" });
+        emitSse("progress", { phase: "done", current: 1, total: 1, percent: 100 });
         emitSse("done", payload);
         res.end();
         return;
@@ -2492,7 +2512,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
 
     try {
     beginStream();
-    reportProgress({ phase: "scan", current: 0, total: 1, label: "scanning" });
+    reportProgress({ phase: "scan", current: 0, total: 1 });
 
     let skeleton;
     try {
@@ -2511,7 +2531,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       phase: "scan",
       current: 1,
       total: 1,
-      label: `skeleton ${skeleton.pathCount} paths / ${skeleton.chunks.length} chunks`,
+      paths: skeleton.pathCount,
+      chunks: skeleton.chunks.length,
     });
 
     const aiCache = loadAiIdentifyCache(metadataPath);
@@ -2866,7 +2887,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         phase: "import",
         current: batchIndex,
         total: Math.max(1, batchCount),
-        label: `ai ${batchIndex}/${batchCount} · imported ${results.length} · cache ${cacheHits} · api ${apiCalls}`,
+        games: results.length,
+        cacheHits,
+        apiCalls,
       });
       return added;
     }
@@ -2882,15 +2905,13 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       chunkCache: skeletonChunkCache,
       onChunkPersisted: persistAiCaches,
       onProgress: ({ batchIndex, batchCount, cacheHits, apiCalls }) => {
-        const extra =
-          Number(cacheHits) > 0 || Number(apiCalls) > 0
-            ? ` · cache ${cacheHits || 0} · api ${apiCalls || 0}`
-            : "";
         reportProgress({
           phase: "ai",
           current: batchIndex,
           total: Math.max(1, batchCount),
-          label: `ai ${batchIndex}/${batchCount}${extra} · library ${results.length}`,
+          games: results.length,
+          cacheHits: Number(cacheHits) || 0,
+          apiCalls: Number(apiCalls) || 0,
         });
       },
       onChunkGames: importAiGamesFromChunk,
@@ -2938,10 +2959,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         : null;
       if (results.length > 0) {
         reportProgress({
-          phase: "import",
+          phase: "partial",
           current: chunkTotal,
           total: chunkTotal,
-          label: "partial import",
+          games: results.length,
         });
         return finishOk({
           status: "partial",
@@ -2971,7 +2992,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       phase: "import",
       current: chunkTotal,
       total: chunkTotal,
-      label: "import done",
+      games: results.length,
     });
     finishOk({ status: "success", folderPath, dryRun, summary, results });
   } catch (error) {
