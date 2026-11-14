@@ -379,7 +379,7 @@ function summarizeAiMessages(messages) {
     return {
       role: m?.role || "?",
       chars: content.length,
-      preview: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+      content,
     };
   });
 }
@@ -408,7 +408,7 @@ async function createChatCompletionLogged(client, params, meta = {}) {
       ms: Date.now() - started,
       finish_reason: choice?.finish_reason || null,
       contentChars: content.length,
-      contentPreview: content.length > 240 ? `${content.slice(0, 240)}…` : content,
+      content,
       usage: completion?.usage || null,
     });
     return completion;
