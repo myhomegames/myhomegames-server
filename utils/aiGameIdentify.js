@@ -39,7 +39,7 @@ function sleep(ms) {
 const SYSTEM_PROMPT =
   "Video-game metadata expert. Reply with one JSON object only, no markdown/prose: " +
   '{"results":[{index,isGame,title,year,platform,confidence}]}. ' +
-  "title=official retail/IGDB name with spaces+Title Case (never slugs/DOS/CD/RIP/EN). " +
+  "title=official retail/IGDB name with spaces, Chicago-style title case (never slugs/DOS/CD/RIP/EN). " +
   "year=first release or null; platform=short hint or null; isGame=false for tools/BIOS/setup; confidence 0..1.";
 
 const SKELETON_SYSTEM_PROMPT =
@@ -48,8 +48,8 @@ const SKELETON_SYSTEM_PROMPT =
   'Reply with one JSON object only, no markdown/prose: {"games":[{path,title,year,platform,confidence}]}. ' +
   "path = full relative game root with slashes (e.g. dosprograms/games/alleycat), never nested-brace syntax. " +
   "Use folder names and nested file names to recognize titles when the folder slug is unclear. " +
-  "title = official retail/IGDB name with spaces + Title Case. year=first release or null; " +
-  "platform=short hint for that dump (DOS, PC, SNES, …) or null; confidence 0..1. " +
+  "title = official retail/IGDB name with spaces, Chicago-style title case. " +
+  "year=first release or null; platform=short hint for that dump (DOS, PC, SNES, …) or null; confidence 0..1. " +
   "Skip tools/BIOS/setup/shared/scripts/soundfonts. Omit non-games entirely.";
 
 function normalizeIdentifyKey(value) {
