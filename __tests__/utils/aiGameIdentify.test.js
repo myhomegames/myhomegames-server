@@ -20,8 +20,12 @@ const {
 const {
   loadAiIdentifyCache,
   saveAiIdentifyCache,
+  loadSkeletonChunkCache,
+  saveSkeletonChunkCache,
   readCacheEntry,
   writeCacheEntry,
+  readSkeletonChunk,
+  hashSkeletonChunk,
 } = require("../../utils/aiIdentifyCache");
 const fs = require("fs");
 const os = require("os");
@@ -624,10 +628,188 @@ describe("identifyGamesFromSkeleton", () => {
       {
         env: { OPENAI_API_KEY: "sk-test" },
         client: { chat: { completions: { create } } },
+        chunkGapMs: 0,
       }
     );
     expect(out.used).toBe(true);
     expect(create).toHaveBeenCalledTimes(3);
     expect(out.games.map((g) => g.title).sort()).toEqual(["Game A", "Game C"]);
+  });
+
+  test("resumes from skeleton chunk cache without re-calling the model", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-cache-"));
+    const chunkA = "dosprograms{games{a{1}}}";
+    const chunkB = "dosprograms{games{b{2}}}";
+    const create = jest.fn(async ({ messages }) => {
+      const prompt = String(messages[1].content);
+      const letter = prompt.includes("a{1}") ? "a" : "b";
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                games: [
+                  {
+                    path: `dosprograms/games/${letter}`,
+                    title: `Game ${letter.toUpperCase()}`,
+                    year: 1991,
+                    platform: "DOS",
+                    confidence: 0.9,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    });
+    const skeleton = {
+      rootPath: path.join("/tmp", "dosprograms"),
+      rootName: "dosprograms",
+      chunks: [chunkA, chunkB],
+    };
+    const chunkCache = loadSkeletonChunkCache(dir);
+    let persists = 0;
+    const first = await identifyGamesFromSkeleton(skeleton, {
+      env: { OPENAI_API_KEY: "sk-test" },
+      client: { chat: { completions: { create } } },
+      chunkCache,
+      chunkGapMs: 0,
+      onChunkPersisted: () => {
+        persists += 1;
+        saveSkeletonChunkCache(dir, chunkCache);
+      },
+    });
+    expect(first.used).toBe(true);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(persists).toBe(2);
+    expect(first.stats.apiCalls).toBe(2);
+
+    // Simulate rate-limit after only chunk A was saved, then resume.
+    const resumedCache = loadSkeletonChunkCache(dir);
+    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA);
+    expect(readSkeletonChunk(resumedCache, hashA)?.games[0]?.title).toBe("Game A");
+
+    create.mockClear();
+    const second = await identifyGamesFromSkeleton(skeleton, {
+      env: { OPENAI_API_KEY: "sk-test", OPENAI_MODEL: "gpt-4o-mini" },
+      model: "gpt-4o-mini",
+      client: { chat: { completions: { create } } },
+      chunkCache: resumedCache,
+      chunkGapMs: 0,
+    });
+    expect(second.used).toBe(true);
+    expect(create).not.toHaveBeenCalled();
+    expect(second.stats.cacheHits).toBe(2);
+    expect(second.stats.apiCalls).toBe(0);
+    expect(second.games.map((g) => g.title).sort()).toEqual(["Game A", "Game B"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("keeps completed chunks when a later chunk hits rate limit", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-partial-"));
+    const chunkA = "dosprograms{games{a{1}}}";
+    const chunkB = "dosprograms{games{b{2}}}";
+    let calls = 0;
+    const create = jest.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  games: [
+                    {
+                      path: "dosprograms/games/a",
+                      title: "Game A",
+                      year: 1991,
+                      confidence: 0.9,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        };
+      }
+      const err = new Error(
+        "429 Rate limit reached ... Please try again in 22m57.648s."
+      );
+      err.status = 429;
+      throw err;
+    });
+    const chunkCache = loadSkeletonChunkCache(dir);
+    const out = await identifyGamesFromSkeleton(
+      {
+        rootPath: path.join("/tmp", "dosprograms"),
+        rootName: "dosprograms",
+        chunks: [chunkA, chunkB],
+      },
+      {
+        env: { OPENAI_API_KEY: "sk-test", OPENAI_MODEL: "gpt-4o-mini" },
+        model: "gpt-4o-mini",
+        client: { chat: { completions: { create } } },
+        chunkCache,
+        chunkGapMs: 0,
+        onChunkPersisted: () => saveSkeletonChunkCache(dir, chunkCache),
+      }
+    );
+    expect(out.error).toMatch(/rate limit/i);
+    expect(out.games.map((g) => g.title)).toEqual(["Game A"]);
+    expect(out.used).toBe(true);
+    const reloaded = loadSkeletonChunkCache(dir);
+    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA);
+    expect(readSkeletonChunk(reloaded, hashA)?.games[0]?.title).toBe("Game A");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("onChunkGames imports each chunk as soon as it is identified", async () => {
+    const seen = [];
+    const create = jest.fn(async ({ messages }) => {
+      const prompt = String(messages[1].content);
+      const letter = prompt.includes("a{1}") ? "a" : "b";
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                games: [
+                  {
+                    path: `dosprograms/games/${letter}`,
+                    title: `Game ${letter.toUpperCase()}`,
+                    year: 1991,
+                    confidence: 0.9,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    });
+    const out = await identifyGamesFromSkeleton(
+      {
+        rootPath: path.join("/tmp", "dosprograms"),
+        rootName: "dosprograms",
+        chunks: ["dosprograms{games{a{1}}}", "dosprograms{games{b{2}}}"],
+      },
+      {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+        chunkGapMs: 0,
+        onChunkGames: async (games, meta) => {
+          seen.push({
+            titles: games.map((g) => g.title),
+            batchIndex: meta.batchIndex,
+          });
+        },
+      }
+    );
+    expect(out.used).toBe(true);
+    expect(seen).toEqual([
+      { titles: ["Game A"], batchIndex: 1 },
+      { titles: ["Game B"], batchIndex: 2 },
+    ]);
   });
 });

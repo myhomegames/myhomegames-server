@@ -2421,6 +2421,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const {
       loadAiIdentifyCache,
       saveAiIdentifyCache,
+      loadSkeletonChunkCache,
+      saveSkeletonChunkCache,
       readCacheEntry,
       writeCacheEntry,
     } = require("../utils/aiIdentifyCache");
@@ -2513,62 +2515,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     });
 
     const aiCache = loadAiIdentifyCache(metadataPath);
-    const aiIdentify = await identifyGamesFromSkeleton(skeleton, {
-      apiKey: aiConfig.apiKey,
-      baseURL: aiConfig.baseURL,
-      model: aiConfig.model,
-      enabled: true,
-      cache: aiCache,
-      readCacheEntry,
-      writeCacheEntry,
-      onProgress: ({ batchIndex, batchCount }) => {
-        reportProgress({
-          phase: "ai",
-          current: batchIndex,
-          total: Math.max(1, batchCount),
-          label: `ai ${batchIndex}/${batchCount}`,
-        });
-      },
-    });
-    if (!aiIdentify.used || aiIdentify.error) {
-      console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
-      const errText = String(aiIdentify.error || "AI game identification failed");
-      const rateLimited =
-        /\brate limit\b/i.test(errText) ||
-        /\b429\b/.test(errText) ||
-        /tokens per day/i.test(errText) ||
-        /try again in about/i.test(errText);
-      return finishErr(rateLimited ? 429 : 502, {
-        error: errText,
-        aiModel: aiIdentify.model || null,
-      });
-    }
-    try {
-      saveAiIdentifyCache(metadataPath, aiCache);
-    } catch (cacheErr) {
-      console.warn("[import-from-folder] AI cache save failed:", cacheErr?.message || cacheErr);
-    }
-    reportProgress({ phase: "ai", current: 1, total: 1, label: "ai done" });
-
-    // Candidates come only from AI paths (no hardcoded games/cd layout).
-    const candidates = (aiIdentify.games || []).map((g) => {
-      const abs = g.absPath;
-      let kind = "game-folder";
+    const skeletonChunkCache = loadSkeletonChunkCache(metadataPath);
+    const persistAiCaches = () => {
       try {
-        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) kind = "rom-file";
-      } catch {
-        // keep folder default
+        saveAiIdentifyCache(metadataPath, aiCache);
+      } catch (cacheErr) {
+        console.warn("[import-from-folder] AI cache save failed:", cacheErr?.message || cacheErr);
       }
-      return {
-        filePath: abs,
-        folderPath: abs,
-        title: g.title,
-        sourceName: path.basename(abs),
-        kind,
-        relativePath: g.path,
-      };
-    });
-
+      try {
+        saveSkeletonChunkCache(metadataPath, skeletonChunkCache);
+      } catch (cacheErr) {
+        console.warn(
+          "[import-from-folder] AI skeleton chunk cache save failed:",
+          cacheErr?.message || cacheErr
+        );
+      }
+    };
     // Catalog match is best-effort: without Twitch/IGDB credentials we still create
     // library entries using the AI title and attach launch scripts.
     const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
@@ -2686,19 +2648,48 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       return newGame;
     }
 
+    function findExistingGameByTitleKey(titleKey) {
+      if (!titleKey) return null;
+      for (const game of Object.values(allGames || {})) {
+        if (normalizeTitleKey(game?.title) === titleKey) return game;
+      }
+      return null;
+    }
+
     const results = [];
     const seenCatalogIds = new Set();
     const seenTitleKeys = new Set();
-    const importTotal = Math.max(1, candidates.length);
-    for (let i = 0; i < candidates.length; i++) {
-      reportProgress({
-        phase: "import",
-        current: i,
-        total: importTotal,
-        label: `import ${i}/${candidates.length}`,
-      });
-      const candidate = candidates[i];
-      const resolved = resolveCandidateTitle(candidate, aiIdentify.results[i]);
+    const seenPaths = new Set();
+    const chunkTotal = Math.max(1, skeleton.chunks.length);
+
+    async function importOneAiGame(game) {
+      const pathKey = String(game.path || "").toLowerCase();
+      if (pathKey && seenPaths.has(pathKey)) return null;
+      if (pathKey) seenPaths.add(pathKey);
+
+      const abs = game.absPath;
+      let kind = "game-folder";
+      try {
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) kind = "rom-file";
+      } catch {
+        // keep folder default
+      }
+      const candidate = {
+        filePath: abs,
+        folderPath: abs,
+        title: game.title,
+        sourceName: path.basename(abs || game.path || ""),
+        kind,
+        relativePath: game.path,
+      };
+      const aiRow = {
+        isGame: true,
+        title: game.title,
+        year: game.year,
+        platform: game.platform,
+        confidence: game.confidence,
+      };
+      const resolved = resolveCandidateTitle(candidate, aiRow);
       const searchTitle = resolved.title;
       const aiYear = resolved.ai?.year ?? null;
       const aiPlatform = resolved.ai?.platform ?? null;
@@ -2719,7 +2710,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.status = dryRun ? "would_skip" : "skipped";
           entry.reason = resolved.reason || "ai_not_a_game";
           results.push(entry);
-          continue;
+          return entry;
         }
 
         const titleKey = normalizeTitleKey(searchTitle);
@@ -2727,7 +2718,32 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.status = dryRun ? "would_skip" : "skipped";
           entry.reason = "duplicate_title";
           results.push(entry);
-          continue;
+          return entry;
+        }
+
+        const existingByTitle = findExistingGameByTitleKey(titleKey);
+        if (existingByTitle && !dryRun) {
+          entry.status = "exists";
+          entry.gameId = existingByTitle.id;
+          entry.catalogName = existingByTitle.title || null;
+          if (titleKey) seenTitleKeys.add(titleKey);
+          writeLocalPathLaunchScript(metadataPath, existingByTitle.id, candidate.filePath, {
+            label:
+              path.basename(candidate.sourceName, path.extname(candidate.sourceName)) ||
+              "folderimport",
+            kind: candidate.kind,
+          });
+          if (allGames[existingByTitle.id]) {
+            allGames[existingByTitle.id].executables = getExecutablesWithOrder(
+              metadataPath,
+              existingByTitle.id
+            );
+            allGames[existingByTitle.id].dateInstalled =
+              allGames[existingByTitle.id].dateInstalled || Date.now();
+            saveGame(metadataPath, allGames[existingByTitle.id]);
+          }
+          results.push(entry);
+          return entry;
         }
 
         let match = null;
@@ -2745,7 +2761,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.status = dryRun ? "would_skip" : "skipped";
           entry.reason = "no_official_catalog_match";
           results.push(entry);
-          continue;
+          return entry;
         }
 
         if (match?.id && seenCatalogIds.has(Number(match.id))) {
@@ -2754,7 +2770,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.catalogGameId = match.id;
           entry.catalogName = match.name;
           results.push(entry);
-          continue;
+          return entry;
         }
 
         if (dryRun) {
@@ -2764,7 +2780,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           if (match?.id) seenCatalogIds.add(Number(match.id));
           if (titleKey) seenTitleKeys.add(titleKey);
           results.push(entry);
-          continue;
+          return entry;
         }
 
         let gameId = null;
@@ -2813,7 +2829,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         entry.gameId = gameId;
         if (gameId != null) {
           writeLocalPathLaunchScript(metadataPath, gameId, candidate.filePath, {
-            label: path.basename(candidate.sourceName, path.extname(candidate.sourceName)) || "folderimport",
+            label:
+              path.basename(candidate.sourceName, path.extname(candidate.sourceName)) ||
+              "folderimport",
             kind: candidate.kind,
           });
           if (allGames[gameId]) {
@@ -2823,20 +2841,70 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           }
         }
         results.push(entry);
+        return entry;
       } catch (error) {
         entry.status = "error";
         entry.error = error?.message || String(error);
         results.push(entry);
+        return entry;
       }
     }
 
-    if (!dryRun) {
+    async function importAiGamesFromChunk(games, meta = {}) {
+      const list = Array.isArray(games) ? games : [];
+      let added = 0;
+      for (const game of list) {
+        const before = results.length;
+        await importOneAiGame(game);
+        if (results.length > before) added += 1;
+      }
+      const batchIndex = Number(meta.batchIndex) || 0;
+      const batchCount = Number(meta.batchCount) || chunkTotal;
+      const cacheHits = Number(meta.cacheHits) || 0;
+      const apiCalls = Number(meta.apiCalls) || 0;
+      reportProgress({
+        phase: "import",
+        current: batchIndex,
+        total: Math.max(1, batchCount),
+        label: `ai ${batchIndex}/${batchCount} · imported ${results.length} · cache ${cacheHits} · api ${apiCalls}`,
+      });
+      return added;
+    }
+
+    const aiIdentify = await identifyGamesFromSkeleton(skeleton, {
+      apiKey: aiConfig.apiKey,
+      baseURL: aiConfig.baseURL,
+      model: aiConfig.model,
+      enabled: true,
+      cache: aiCache,
+      readCacheEntry,
+      writeCacheEntry,
+      chunkCache: skeletonChunkCache,
+      onChunkPersisted: persistAiCaches,
+      onProgress: ({ batchIndex, batchCount, cacheHits, apiCalls }) => {
+        const extra =
+          Number(cacheHits) > 0 || Number(apiCalls) > 0
+            ? ` · cache ${cacheHits || 0} · api ${apiCalls || 0}`
+            : "";
+        reportProgress({
+          phase: "ai",
+          current: batchIndex,
+          total: Math.max(1, batchCount),
+          label: `ai ${batchIndex}/${batchCount}${extra} · library ${results.length}`,
+        });
+      },
+      onChunkGames: importAiGamesFromChunk,
+    });
+    // Always flush caches so a mid-import rate-limit still keeps completed chunks.
+    persistAiCaches();
+
+    if (!dryRun && results.length > 0) {
       scheduleRecommendedSectionsUpdate(updateRecommendedSections, metadataPath, allGames);
       invalidateLibraryGamesResponseCache();
     }
 
     const summary = {
-      scanned: candidates.length,
+      scanned: seenPaths.size || results.length,
       imported: results.filter((r) => r.status === "imported").length,
       created: results.filter((r) => r.status === "created").length,
       exists: results.filter((r) => r.status === "exists").length,
@@ -2846,22 +2914,67 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       errors: results.filter((r) => r.status === "error").length,
       catalogEnabled: canSearchCatalog,
       aiEnabled: true,
-      aiUsed: true,
+      aiUsed: Boolean(aiIdentify.used) || results.length > 0,
       aiModel: aiIdentify.model || null,
-      aiError: null,
+      aiError: aiIdentify.error || null,
       aiChunks: aiIdentify.stats?.chunks ?? skeleton.chunks.length,
-      aiGames: aiIdentify.stats?.games ?? candidates.length,
+      aiGames: aiIdentify.stats?.games ?? seenPaths.size,
+      aiCacheHits: aiIdentify.stats?.cacheHits ?? 0,
+      aiApiCalls: aiIdentify.stats?.apiCalls ?? 0,
       skeletonPaths: skeleton.pathCount,
     };
 
+    if (aiIdentify.error) {
+      console.warn("[import-from-folder] AI identify failed:", aiIdentify.error);
+      const errText = String(aiIdentify.error || "AI game identification failed");
+      const rateLimited =
+        aiIdentify.errorCode === "AI_RATE_LIMIT" ||
+        /\brate limit\b/i.test(errText) ||
+        /\b429\b/.test(errText) ||
+        /tokens per day/i.test(errText) ||
+        /try again in about/i.test(errText);
+      const retryAfterMs = Number.isFinite(aiIdentify.retryAfterMs)
+        ? aiIdentify.retryAfterMs
+        : null;
+      if (results.length > 0) {
+        reportProgress({
+          phase: "import",
+          current: chunkTotal,
+          total: chunkTotal,
+          label: "partial import",
+        });
+        return finishOk({
+          status: "partial",
+          folderPath,
+          dryRun,
+          summary: {
+            ...summary,
+            // English log/debug string; UI builds a localized notice from structured fields.
+            aiError: errText,
+            aiErrorCode: rateLimited ? "AI_RATE_LIMIT" : aiIdentify.errorCode || null,
+            retryAfterMs,
+          },
+          results,
+        });
+      }
+      return finishErr(rateLimited ? 429 : 502, {
+        // English for logs; UI localizes via code + retryAfterMs + stats.
+        error: errText,
+        code: rateLimited ? "AI_RATE_LIMIT" : aiIdentify.errorCode || null,
+        retryAfterMs,
+        aiModel: aiIdentify.model || null,
+        stats: aiIdentify.stats || null,
+      });
+    }
+
     reportProgress({
       phase: "import",
-      current: importTotal,
-      total: importTotal,
+      current: chunkTotal,
+      total: chunkTotal,
       label: "import done",
     });
     finishOk({ status: "success", folderPath, dryRun, summary, results });
-    } catch (error) {
+  } catch (error) {
       console.error("[import-from-folder] unexpected:", error);
       finishErr(500, { error: error?.message || String(error) });
     }

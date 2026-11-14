@@ -874,14 +874,64 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     });
 
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  const onChunkGames =
+    typeof options.onChunkGames === "function" ? options.onChunkGames : null;
   const cache = options.cache && typeof options.cache === "object" ? options.cache : null;
   const readCache =
     typeof options.readCacheEntry === "function" ? options.readCacheEntry : null;
   const writeCache =
     typeof options.writeCacheEntry === "function" ? options.writeCacheEntry : null;
+  const chunkCache =
+    options.chunkCache && typeof options.chunkCache === "object" ? options.chunkCache : null;
+  const {
+    hashSkeletonChunk,
+    readSkeletonChunk,
+    writeSkeletonChunk,
+  } = require("./aiIdentifyCache");
+  const onChunkPersisted =
+    typeof options.onChunkPersisted === "function" ? options.onChunkPersisted : null;
+
+  let cacheHits = 0;
+  let apiCalls = 0;
+
+  function hydrateCachedGames(rows) {
+    const { skeletonPathToAbsolute } = require("./pathSkeleton");
+    return (Array.isArray(rows) ? rows : []).map((g) => ({
+      ...g,
+      isGame: true,
+      absPath: skeletonPathToAbsolute(rootPath, g.path),
+    }));
+  }
+
+  function persistSuccessfulChunk(chunkText, games, label) {
+    if (chunkCache) {
+      const hash = hashSkeletonChunk(config.model, rootName, chunkText);
+      writeSkeletonChunk(chunkCache, hash, games, {
+        model: config.model,
+        label,
+      });
+    }
+    if (cache && writeCache) {
+      for (const game of games) {
+        const cacheKey = candidateIdentifyKey({ sourceName: path.basename(game.path) });
+        if (cacheKey) writeCache(cache, cacheKey, game, { model: config.model });
+      }
+    }
+    if (onChunkPersisted) {
+      try {
+        onChunkPersisted({ label, games: games.length });
+      } catch (persistErr) {
+        console.warn(
+          "[ai-identify] chunk persist callback failed:",
+          persistErr?.message || persistErr
+        );
+      }
+    }
+  }
 
   async function completeChunk(chunkText, label) {
     const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName);
+    apiCalls += 1;
     const completion = await createJsonCompletion(client, {
       model: config.model,
       maxTokens: DEFAULT_MAX_COMPLETION_TOKENS,
@@ -898,8 +948,23 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   }
 
   async function completeChunkWithRetry(chunkText, label) {
+    if (chunkCache) {
+      const hash = hashSkeletonChunk(config.model, rootName, chunkText);
+      const hit = readSkeletonChunk(chunkCache, hash);
+      if (hit) {
+        cacheHits += 1;
+        console.log("[ai-identify] chunk cache hit", {
+          label,
+          hash: hash.slice(0, 12),
+          games: hit.games.length,
+        });
+        return hydrateCachedGames(hit.games);
+      }
+    }
     try {
-      return await completeChunk(chunkText, label);
+      const games = await completeChunk(chunkText, label);
+      persistSuccessfulChunk(chunkText, games, label);
+      return games;
     } catch (error) {
       if (!isRequestTooLargeError(error)) throw error;
       const parts = splitOversizedSkeletonChunk(chunkText);
@@ -922,18 +987,25 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     ? Math.max(0, Math.floor(options.chunkGapMs))
     : DEFAULT_CHUNK_GAP_MS;
 
+  const byPath = new Map();
   try {
     console.log("[ai-identify] skeleton identify start", {
       rootName,
       chunks: chunks.length,
       model: config.model,
       baseURL: config.baseURL || null,
+      chunkCache: Boolean(chunkCache),
     });
-    const byPath = new Map();
     for (let i = 0; i < chunks.length; i++) {
-      if (i > 0 && chunkGapMs > 0) await sleep(chunkGapMs);
       const label = `skeleton ${i + 1}/${chunks.length}`;
+      const hash = chunkCache
+        ? hashSkeletonChunk(config.model, rootName, chunks[i])
+        : null;
+      const willHit =
+        hash && chunkCache ? Boolean(readSkeletonChunk(chunkCache, hash)) : false;
+      if (i > 0 && chunkGapMs > 0 && !willHit) await sleep(chunkGapMs);
       const chunkGames = await completeChunkWithRetry(chunks[i], label);
+      const newlyMerged = [];
       for (const game of chunkGames) {
         const key = String(game.path || "").toLowerCase();
         if (!key) continue;
@@ -948,14 +1020,12 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
           } else if (writeCache && cacheKey) {
             writeCache(cache, cacheKey, game, { model: config.model });
           }
-        } else if (cache && writeCache) {
-          const cacheKey = candidateIdentifyKey({ sourceName: path.basename(game.path) });
-          if (cacheKey) writeCache(cache, cacheKey, game, { model: config.model });
         }
         const prev = byPath.get(key);
         if (!prev || (game.confidence || 0) >= (prev.confidence || 0)) {
           byPath.set(key, game);
         }
+        newlyMerged.push(game);
       }
       if (onProgress) {
         onProgress({
@@ -963,6 +1033,18 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
           batchIndex: i + 1,
           batchCount: chunks.length,
           candidateCount: byPath.size,
+          cacheHits,
+          apiCalls,
+        });
+      }
+      // Import as soon as a chunk is identified (caller may add games immediately).
+      if (onChunkGames && newlyMerged.length > 0) {
+        await onChunkGames(newlyMerged, {
+          batchIndex: i + 1,
+          batchCount: chunks.length,
+          candidateCount: byPath.size,
+          cacheHits,
+          apiCalls,
         });
       }
     }
@@ -976,23 +1058,61 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       confidence: g.confidence,
     }));
 
+    console.log("[ai-identify] skeleton identify done", {
+      games: games.length,
+      cacheHits,
+      apiCalls,
+    });
+
     return {
       enabled: true,
       used: true,
       model: config.model,
       games,
       results,
-      stats: { chunks: chunks.length, games: games.length },
+      stats: {
+        chunks: chunks.length,
+        games: games.length,
+        cacheHits,
+        apiCalls,
+      },
     };
   } catch (error) {
+    const partialGames = Array.from(byPath.values());
+    const retryAfterMs =
+      Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : parseRetryAfterMs(error);
+    const errorCode =
+      error?.code ||
+      (isRateLimitError(error) ? "AI_RATE_LIMIT" : null);
+    console.warn("[ai-identify] skeleton identify failed", {
+      message: error?.message || String(error),
+      code: errorCode,
+      retryAfterMs,
+      cacheHits,
+      apiCalls,
+      partialGames: partialGames.length,
+    });
     return {
       enabled: true,
-      used: false,
+      used: partialGames.length > 0,
       model: config.model,
-      games: [],
-      results: [],
+      games: partialGames,
+      results: partialGames.map((g) => ({
+        isGame: true,
+        title: g.title,
+        year: g.year,
+        platform: g.platform,
+        confidence: g.confidence,
+      })),
       error: error?.message || String(error),
-      stats: { chunks: chunks.length, games: 0 },
+      errorCode,
+      retryAfterMs,
+      stats: {
+        chunks: chunks.length,
+        games: partialGames.length,
+        cacheHits,
+        apiCalls,
+      },
     };
   }
 }
