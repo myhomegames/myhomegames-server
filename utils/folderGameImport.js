@@ -673,12 +673,7 @@ function gameHasPlatformHint(game, platformHint) {
   });
 }
 
-/**
- * Pick an IGDB platform id for a launch script filename suffix.
- * Prefers a platform matching the AI hint; otherwise the first entry with an id.
- * @returns {string} platform id or ""
- */
-function resolveExecutablePlatformId(platforms, platformHint = null) {
+function normalizePlatformEntries(platforms) {
   const list = Array.isArray(platforms) ? platforms : [];
   const normalized = [];
   for (const p of list) {
@@ -695,24 +690,103 @@ function resolveExecutablePlatformId(platforms, platformHint = null) {
     if (typeof p === "object") {
       const id =
         p.id != null && String(p.id).trim() !== "" ? String(p.id).trim() : "";
-      const name = String(p.name || "").trim();
+      const name = String(p.name || p.title || "").trim();
       if (id || name) normalized.push({ id, name });
     }
   }
-  if (normalized.length === 0) return "";
-  const hint = String(platformHint || "")
+  return normalized;
+}
+
+function platformNameMatchesHint(name, hint) {
+  const n = String(name || "")
     .trim()
     .toLowerCase();
-  if (hint) {
-    const hit = normalized.find((p) => {
-      const name = p.name.toLowerCase();
-      if (!name) return false;
-      return name === hint || name.includes(hint) || hint.includes(name);
-    });
-    if (hit?.id) return hit.id;
+  const h = String(hint || "")
+    .trim()
+    .toLowerCase();
+  if (!n || !h) return false;
+  return n === h || n.includes(h) || h.includes(n);
+}
+
+/**
+ * Platform id for Manage Installation filename suffix.
+ * Must be the local library platform tag id (not the raw IGDB platform id).
+ *
+ * @param {Array} catalogPlatforms IGDB platforms (`{id,name}` / names) and/or local numeric ids
+ * @param {string|null} platformHint AI platform hint
+ * @param {{ localTags?: {id:number|string, title?:string, name?:string}[], localPlatformIds?: Array }} [options]
+ * @returns {string} local platform id or ""
+ */
+function resolveExecutablePlatformId(catalogPlatforms, platformHint = null, options = {}) {
+  const localTags = Array.isArray(options.localTags) ? options.localTags : [];
+  const localPlatformIds = Array.isArray(options.localPlatformIds)
+    ? options.localPlatformIds
+    : [];
+  const tagsById = new Map(
+    localTags.map((t) => [String(t.id), t]).filter(([id]) => id && id !== "undefined")
+  );
+  const tagsByTitle = new Map();
+  for (const t of localTags) {
+    const title = String(t.title || t.name || "")
+      .trim()
+      .toLowerCase();
+    if (title) tagsByTitle.set(title, t);
   }
-  const withId = normalized.find((p) => p.id);
-  return withId?.id || "";
+
+  const findLocalIdByName = (name) => {
+    const lower = String(name || "")
+      .trim()
+      .toLowerCase();
+    if (!lower) return "";
+    const exact = tagsByTitle.get(lower);
+    if (exact) return String(exact.id);
+    for (const [title, tag] of tagsByTitle) {
+      if (platformNameMatchesHint(title, lower)) return String(tag.id);
+    }
+    return "";
+  };
+
+  const candidates = [];
+  for (const entry of normalizePlatformEntries(catalogPlatforms)) {
+    if (entry.name) {
+      const localId = findLocalIdByName(entry.name);
+      if (localId) {
+        candidates.push({
+          id: localId,
+          name: entry.name,
+        });
+        continue;
+      }
+    }
+  }
+  for (const raw of localPlatformIds) {
+    const id =
+      raw != null && typeof raw === "object"
+        ? raw.id != null
+          ? String(raw.id)
+          : ""
+        : String(raw).trim();
+    if (!id) continue;
+    const tag = tagsById.get(id);
+    candidates.push({
+      id,
+      name: String(tag?.title || tag?.name || "").trim(),
+    });
+  }
+
+  if (candidates.length === 0) {
+    // Legacy fallback: numeric-only platform lists already use local tag ids.
+    const numericOnly = normalizePlatformEntries(catalogPlatforms).filter((p) => p.id && !p.name);
+    if (numericOnly.length > 0 && localTags.length === 0) return numericOnly[0].id;
+    return "";
+  }
+
+  const hint = String(platformHint || "").trim();
+  if (hint) {
+    const hit = candidates.find((c) => platformNameMatchesHint(c.name, hint));
+    if (hit) return hit.id;
+  }
+  return candidates[0].id;
 }
 
 /**

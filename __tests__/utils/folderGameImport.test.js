@@ -203,29 +203,60 @@ describe("writeLocalPathLaunchScript", () => {
 });
 
 describe("resolveExecutablePlatformId", () => {
-  test("prefers platform matching AI hint when ids are present", () => {
+  const localTags = [
+    { id: 9001, title: "PlayStation 4" },
+    { id: 9002, title: "DOS" },
+    { id: 9003, title: "PC (Microsoft Windows)" },
+  ];
+
+  test("maps IGDB platform names to local library tag ids", () => {
     expect(
       resolveExecutablePlatformId(
         [
           { id: 48, name: "PlayStation 4" },
           { id: 13, name: "DOS" },
         ],
+        "DOS",
+        { localTags }
+      )
+    ).toBe("9002");
+  });
+
+  test("falls back to first local tag matched from catalog names", () => {
+    expect(
+      resolveExecutablePlatformId(
+        [
+          { id: 6, name: "PC (Microsoft Windows)" },
+          { id: 13, name: "DOS" },
+        ],
+        null,
+        { localTags }
+      )
+    ).toBe("9003");
+  });
+
+  test("uses local platform ids already on the game", () => {
+    expect(
+      resolveExecutablePlatformId([], "DOS", {
+        localTags,
+        localPlatformIds: [9002, 9003],
+      })
+    ).toBe("9002");
+  });
+
+  test("returns empty when catalog names cannot be mapped to local tags", () => {
+    expect(
+      resolveExecutablePlatformId(
+        [
+          { id: 13, name: "DOS" },
+          { id: 6, name: "PC (Microsoft Windows)" },
+        ],
         "DOS"
       )
-    ).toBe("13");
+    ).toBe("");
   });
 
-  test("falls back to first platform with an id", () => {
-    expect(
-      resolveExecutablePlatformId([{ id: 6, name: "PC (Microsoft Windows)" }, { id: 13, name: "DOS" }])
-    ).toBe("6");
-  });
-
-  test("returns empty when platforms have names only", () => {
-    expect(resolveExecutablePlatformId(["DOS", "PC"], "DOS")).toBe("");
-  });
-
-  test("accepts numeric platform ids from library tags", () => {
+  test("legacy numeric-only list is treated as local ids when no tag catalog is provided", () => {
     expect(resolveExecutablePlatformId([13, 6], null)).toBe("13");
   });
 });

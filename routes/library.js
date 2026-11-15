@@ -24,6 +24,7 @@ const {
   deletePlatformIfUnused,
   deletePlatformsIfUnusedBatch,
   normalizePlatformFieldToIds,
+  loadPlatforms,
   getTagToGameIdsMap: getPlatformToGameIdsMap,
   addGameToTag: addGameToPlatform,
   removeGameFromTag: removeGameFromPlatform,
@@ -2699,10 +2700,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const seenPaths = new Set();
     const chunkTotal = Math.max(1, skeleton.chunks.length);
 
-    function attachExistingLaunchScripts(gameId, gameAbsPath, platforms, platformHint) {
-      // Executables only with IGDB: filename includes platformId for Manage Installation.
+    function attachExistingLaunchScripts(
+      gameId,
+      gameAbsPath,
+      catalogPlatforms,
+      platformHint,
+      localPlatformIds = null
+    ) {
+      // Executables only with IGDB: filename uses local platform tag id for Manage Installation.
       if (!canSearchCatalog) return 0;
-      const platformId = resolveExecutablePlatformId(platforms, platformHint);
+      const platformId = resolveExecutablePlatformId(catalogPlatforms, platformHint, {
+        localTags: loadPlatforms(metadataPath),
+        localPlatformIds:
+          localPlatformIds != null
+            ? localPlatformIds
+            : allGames[gameId]?.platforms || [],
+      });
       if (!platformId) return 0;
       const launchers = findLaunchScriptsForGame(gameAbsPath);
       for (const launcher of launchers) {
@@ -2789,8 +2802,9 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           attachExistingLaunchScripts(
             existingByTitle.id,
             abs,
-            existingByTitle.platforms,
-            aiPlatform
+            [],
+            aiPlatform,
+            existingByTitle.platforms
           );
           results.push(entry);
           return entry;
@@ -2913,13 +2927,19 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         if (titleKey) seenTitleKeys.add(titleKey);
         entry.gameId = gameId;
         if (gameId != null && match?.id) {
-          const platformSource =
+          const catalogPlatforms =
             catalogDetail?.platforms?.length
               ? catalogDetail.platforms
               : match.platforms?.length
                 ? match.platforms
-                : allGames[gameId]?.platforms || [];
-          attachExistingLaunchScripts(gameId, abs, platformSource, aiPlatform);
+                : [];
+          attachExistingLaunchScripts(
+            gameId,
+            abs,
+            catalogPlatforms,
+            aiPlatform,
+            allGames[gameId]?.platforms || []
+          );
         } else if (gameId != null && allGames[gameId]) {
           // Scratch / no catalog: still stamp dateInstalled, but no invented executables.
           allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
