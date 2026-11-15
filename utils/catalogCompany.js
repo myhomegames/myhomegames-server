@@ -893,6 +893,136 @@ function normalizeStoredCompanyProfile(input) {
   return Object.keys(info).length > 0 ? info : null;
 }
 
+/** Same safety cap as web `refreshRemoteCompanyProfileViaApi`. */
+const MAX_COMPANY_RELATION_SYNC_DEPTH = 16;
+
+/**
+ * Server-side equivalent of web `refreshRemoteCompanyProfileViaApi`:
+ * fetch IGDB company patch, merge into local role storage, link relations, walk related companies.
+ */
+async function refreshRemoteCompanyProfileForRole(
+  metadataPath,
+  roleFolder,
+  companyId,
+  fallbackName,
+  accessToken,
+  clientId,
+  options = {}
+) {
+  const depth = Number.isFinite(options.relationDepth) ? options.relationDepth : 0;
+  const visited = options.visitedIds instanceof Set ? options.visitedIds : new Set();
+  const idKey = String(companyId);
+  if (depth > MAX_COMPANY_RELATION_SYNC_DEPTH) return;
+  if (visited.has(idKey)) return;
+
+  const numericId = Number(companyId);
+  if (!Number.isFinite(numericId) || numericId < 1) return;
+  visited.add(idKey);
+
+  let patch = null;
+  try {
+    patch = await fetchRemoteCompanyStoragePatch(
+      numericId,
+      fallbackName || null,
+      accessToken,
+      clientId
+    );
+  } catch (err) {
+    logWarn(
+      `company sync fetch failed for ${roleFolder}/${numericId}`,
+      err instanceof Error ? err.message : err
+    );
+    return;
+  }
+  if (!patch || typeof patch !== "object") return;
+
+  const existing = loadRoleItemById(metadataPath, roleFolder, numericId);
+  ensureCompanyRoleEntry(metadataPath, roleFolder, numericId, patch, {
+    fillGapsOnly: Boolean(existing),
+  });
+
+  try {
+    await linkCompanyRelationsFromMergeBody(
+      metadataPath,
+      roleFolder,
+      numericId,
+      accessToken,
+      clientId,
+      patch
+    );
+  } catch (err) {
+    logWarn(
+      `company sync relation link failed for ${roleFolder}/${numericId}`,
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  const relatedRefs = [patch.parentCompany, patch.updatedTo, patch.formerly];
+  for (const ref of relatedRefs) {
+    if (ref?.id == null) continue;
+    const relatedId = String(ref.id);
+    if (relatedId === idKey || visited.has(relatedId)) continue;
+    await refreshRemoteCompanyProfileForRole(
+      metadataPath,
+      roleFolder,
+      ref.id,
+      ref.name,
+      accessToken,
+      clientId,
+      {
+        relationDepth: depth + 1,
+        visitedIds: visited,
+      }
+    );
+  }
+}
+
+/**
+ * Server-side equivalent of web `syncCompanyProfilesAfterGameImport`.
+ * @param {string} metadataPath
+ * @param {{
+ *   developers?: Array<{id:number, name?:string}|null>|null,
+ *   publishers?: Array<{id:number, name?:string}|null>|null,
+ *   accessToken?: string|null,
+ *   clientId?: string|null,
+ * }} options
+ */
+async function syncCompanyProfilesAfterGameImport(metadataPath, options = {}) {
+  const accessToken = options.accessToken || null;
+  const clientId = options.clientId || null;
+  if (!metadataPath || !accessToken || !clientId) return;
+
+  const tasks = [];
+  for (const item of Array.isArray(options.developers) ? options.developers : []) {
+    if (item?.id == null) continue;
+    tasks.push(
+      refreshRemoteCompanyProfileForRole(
+        metadataPath,
+        "developers",
+        item.id,
+        item.name,
+        accessToken,
+        clientId
+      )
+    );
+  }
+  for (const item of Array.isArray(options.publishers) ? options.publishers : []) {
+    if (item?.id == null) continue;
+    tasks.push(
+      refreshRemoteCompanyProfileForRole(
+        metadataPath,
+        "publishers",
+        item.id,
+        item.name,
+        accessToken,
+        clientId
+      )
+    );
+  }
+  if (tasks.length === 0) return;
+  await Promise.all(tasks);
+}
+
 module.exports = {
   mapCatalogCompanyToInfo,
   mapCatalogCompanyStoragePatch,
@@ -913,4 +1043,6 @@ module.exports = {
   linkCompanyUnderParentFromCatalog,
   linkCompanyRelationsFromMergeBody,
   resolveParentRefForHierarchyLink,
+  refreshRemoteCompanyProfileForRole,
+  syncCompanyProfilesAfterGameImport,
 };

@@ -121,6 +121,7 @@ const {
   fetchIGDBGameSummaryAndKeywords,
   fetchCatalogGameByIgdbId,
 } = require("./igdb");
+const { syncCompanyProfilesAfterGameImport } = require("../utils/catalogCompany");
 
 
 /**
@@ -2900,6 +2901,20 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 similarGames: catalogDetail.similarGames,
                 type: catalogDetail.type,
               });
+              // Same post-add company sync as web `syncCompanyProfilesAfterGameImport`.
+              try {
+                await syncCompanyProfilesAfterGameImport(metadataPath, {
+                  developers: catalogDetail.developers,
+                  publishers: catalogDetail.publishers,
+                  accessToken,
+                  clientId: resolvedCreds.clientId,
+                });
+              } catch (companySyncErr) {
+                console.warn(
+                  "[import-from-folder] company profile sync failed:",
+                  companySyncErr?.message || companySyncErr
+                );
+              }
               gameId = imported.gameId || imported.game?.id || catalogDetail.id;
               entry.status = "imported";
               entry.catalogGameId = catalogDetail.id;

@@ -65,6 +65,7 @@ const {
   autoTranslateNewCompanySummary,
   retranslateAllSummaryLocales,
 } = require("../utils/autoTranslateGameMetadata");
+const { syncGameExecutablesFromDisk } = require("../utils/gameExecutables");
 
 function companyMergeSnapshot(entry) {
   return JSON.stringify({
@@ -626,13 +627,9 @@ function createCollectionLikeRoutes(config) {
         })
         .filter(Boolean)
         .map((g) => {
-          const executables = g.executables;
-          const execArray =
-            Array.isArray(executables) && executables.length > 0
-              ? executables
-              : executables != null
-                ? [].concat(executables)
-                : null;
+          // Always re-read scripts from disk (same as library games list).
+          // allGames.executables can stay stale after manual script deletes.
+          const execArray = syncGameExecutablesFromDisk(metadataPath, g);
           const typeId = coerceToGameTypeId(g.type);
           return {
             id: g.id,
