@@ -326,6 +326,10 @@ Keep at least `AppIcon.icns` (ideally both files) committed so release builds st
 
 **Dock / Finder PATH:** The Swift (and bash fallback) app wrapper prepends `/opt/homebrew/bin`, `/usr/local/bin`, and `/Applications/Docker.app/Contents/Resources/bin` to `PATH` before launching the server. GUI launches otherwise miss the Docker/Homebrew CLI that Terminal sessions inherit from the shell.
 
+**Open at Login (macOS):** The Swift wrapper enables start-at-login by default (`SMAppService` on macOS 13+, LaunchAgent fallback on older systems). The app menu and status-item menu expose an **Open at Login** / **Apri al login** checkbox. Preference key: `UserDefaults` `startAtLogin`.
+
+**Start with Windows:** The tray script (`windows-tray-launcher.ps1`) creates a Startup-folder shortcut by default and exposes a **Start with Windows** checkbox. Preference file: `%LOCALAPPDATA%\\MyHomeGames\\autostart.enabled` (`1`/`0`). MSIX packages also declare a `windows.startupTask` enabled by default.
+
 **Windows releases (unsigned binaries):** End users may see **SmartScreen** (e.g. *Consenti sull'app* / Run anyway) or **Defender** prompts on first run. This is expected for unsigned `.exe` files; **`scripts/README-WINDOWS.txt`** explains **Allow on device** / **Run anyway** so users can proceed safely when installing from official releases.
 
 **Windows tray script (`windows-tray-launcher.ps1`):** Saved as **UTF-8 with BOM** so **Windows PowerShell 5.1** parses strings correctly. Prefer **ASCII** in quoted strings (e.g. `-` not em dash `—`) to avoid parser errors if the BOM is ever stripped.
