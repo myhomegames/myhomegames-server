@@ -498,6 +498,170 @@ function skeletonPathToAbsolute(rootPath, skeletonPath) {
 }
 
 /**
+ * Normalize a skeleton path to be relative to the import root (no rootName prefix).
+ */
+function skeletonPathRelativeToRoot(rootPath, skeletonPath) {
+  const root = path.resolve(String(rootPath || ""));
+  const rootName = path.basename(root);
+  let rel = String(skeletonPath || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\//, "")
+    .replace(/\{|\}/g, "")
+    .trim();
+  if (!rel || rel === "." || rel === rootName) return "";
+  const prefix = `${rootName}/`;
+  if (rel.startsWith(prefix)) return rel.slice(prefix.length);
+  if (rel === rootName) return "";
+  return rel;
+}
+
+/**
+ * Build basename → relative-path[] index from find listing paths
+ * (`dosprograms/games/budokan-the-martial-spirit`, …).
+ * Used to repair AI paths that drop parent segments (e.g. bare `budokan-the-martial-spirit`).
+ */
+function buildSkeletonBasenameIndex(findPaths, rootName) {
+  const index = new Map();
+  const root = String(rootName || "").trim();
+  const prefix = root ? `${root}/` : "";
+  for (const raw of Array.isArray(findPaths) ? findPaths : []) {
+    let rel = String(raw || "").replace(/\\/g, "/");
+    if (!rel) continue;
+    if (prefix && rel.startsWith(prefix)) rel = rel.slice(prefix.length);
+    else if (root && rel === root) continue;
+    if (!rel) continue;
+    const base = path.basename(rel);
+    if (!base || base === "." || base === "..") continue;
+    const key = base.toLowerCase();
+    let list = index.get(key);
+    if (!list) {
+      list = [];
+      index.set(key, list);
+    }
+    if (!list.includes(rel)) list.push(rel);
+  }
+  return index;
+}
+
+function pathExists(absPath) {
+  try {
+    return Boolean(absPath) && fs.existsSync(absPath);
+  } catch {
+    return false;
+  }
+}
+
+function scoreSkeletonCandidate(rel, rootPath) {
+  const abs = path.join(rootPath, rel);
+  let isDir = false;
+  try {
+    isDir = fs.statSync(abs).isDirectory();
+  } catch {
+    return null;
+  }
+  const gamesBoost = /(^|\/)games(\/|$)/i.test(rel) ? 0 : 1;
+  const cdBoost = /(^|\/)cd(\/|$)/i.test(rel) ? 1 : 2;
+  return {
+    rel,
+    abs,
+    isDir,
+    gamesBoost,
+    cdBoost,
+    depth: rel.split("/").filter(Boolean).length,
+  };
+}
+
+function pickBestSkeletonCandidate(rels, rootPath) {
+  const scored = [];
+  for (const rel of rels || []) {
+    const item = scoreSkeletonCandidate(rel, rootPath);
+    if (item) scored.push(item);
+  }
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    if (a.gamesBoost !== b.gamesBoost) return a.gamesBoost - b.gamesBoost;
+    if (a.cdBoost !== b.cdBoost) return a.cdBoost - b.cdBoost;
+    if (a.depth !== b.depth) return a.depth - b.depth;
+    return a.rel.localeCompare(b.rel);
+  });
+  return scored[0];
+}
+
+/**
+ * Resolve an AI skeleton path to an existing filesystem location under root.
+ * Repairs common model mistakes (dropped `games/` / `dosprograms/` prefixes) using
+ * only local FS checks — no extra AI calls.
+ *
+ * @returns {{ absPath: string, path: string, repaired: boolean, missing: boolean }}
+ */
+function resolveSkeletonGamePath(rootPath, skeletonPath, options = {}) {
+  const root = path.resolve(String(rootPath || ""));
+  const relIn = skeletonPathRelativeToRoot(root, skeletonPath);
+  const originalAbs = relIn ? path.join(root, relIn) : root;
+
+  if (pathExists(originalAbs)) {
+    return {
+      absPath: originalAbs,
+      path: relIn || path.basename(root),
+      repaired: false,
+      missing: false,
+    };
+  }
+
+  const base = path.basename(relIn || String(skeletonPath || "").replace(/\\/g, "/"));
+  if (!base || base === "." || base === "..") {
+    return {
+      absPath: originalAbs,
+      path: relIn || String(skeletonPath || ""),
+      repaired: false,
+      missing: true,
+    };
+  }
+
+  const tried = new Set();
+  const candidates = [];
+
+  const pushCand = (rel) => {
+    const normalized = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!normalized || tried.has(normalized)) return;
+    tried.add(normalized);
+    candidates.push(normalized);
+  };
+
+  // Common collection layouts under the import root.
+  for (const prefix of ["games", "cd", "Games", "CD"]) {
+    pushCand(`${prefix}/${base}`);
+  }
+  // Bare basename directly under root (already tried as relIn when it was bare).
+  pushCand(base);
+
+  const index = options.index instanceof Map ? options.index : null;
+  if (index) {
+    const fromIndex = index.get(base.toLowerCase()) || [];
+    for (const rel of fromIndex) pushCand(rel);
+  }
+
+  const best = pickBestSkeletonCandidate(candidates, root);
+  if (best) {
+    return {
+      absPath: best.abs,
+      path: best.rel,
+      repaired: best.rel !== relIn,
+      missing: false,
+    };
+  }
+
+  return {
+    absPath: originalAbs,
+    path: relIn || String(skeletonPath || ""),
+    repaired: false,
+    missing: true,
+  };
+}
+
+/**
  * Build compressed find skeleton text for a chosen folder.
  * Default mode: nested `a{b{c{…}}}` (token-efficient, keeps internal files).
  */
@@ -549,6 +713,9 @@ module.exports = {
   expandBraceSkeleton,
   chunkCompressedSkeleton,
   skeletonPathToAbsolute,
+  skeletonPathRelativeToRoot,
+  buildSkeletonBasenameIndex,
+  resolveSkeletonGamePath,
   buildCompressedFindSkeleton,
   commonDirPrefixLength,
   buildPathChildrenMap,

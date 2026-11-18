@@ -540,7 +540,41 @@ describe("identifyGamesFromSkeleton", () => {
     );
     expect(games).toHaveLength(1);
     expect(games[0].title).toBe("Alley Cat");
+    // Path may be missing on disk in this unit test; mapping still strips rootName.
     expect(games[0].absPath).toBe(path.join(root, "games", "alleycat"));
+  });
+
+  test("repairs bare AI paths when games/<name> exists on disk", () => {
+    const fs = require("fs");
+    const os = require("os");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ai-skel-"));
+    const gameDir = path.join(root, "games", "budokan-the-martial-spirit");
+    fs.mkdirSync(gameDir, { recursive: true });
+    const { buildSkeletonBasenameIndex } = require("../../utils/pathSkeleton");
+    const index = buildSkeletonBasenameIndex(
+      [`${path.basename(root)}/games/budokan-the-martial-spirit`],
+      path.basename(root)
+    );
+    const games = parseSkeletonIdentifyResponse(
+      JSON.stringify({
+        games: [
+          {
+            path: "budokan-the-martial-spirit",
+            title: "Budokan: The Martial Spirit",
+            year: 1989,
+            platform: "DOS",
+            confidence: 0.9,
+          },
+        ],
+      }),
+      root,
+      { index }
+    );
+    expect(games).toHaveLength(1);
+    expect(games[0].path).toBe("games/budokan-the-martial-spirit");
+    expect(games[0].absPath).toBe(gameDir);
+    expect(games[0].pathRepaired).toBe(true);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   test("sends nested-compressed skeleton chunk to the model", async () => {

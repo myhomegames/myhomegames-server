@@ -11,6 +11,8 @@ const {
   splitOversizedSkeletonChunk,
   buildNestedTreeFromPaths,
   skeletonPathToAbsolute,
+  buildSkeletonBasenameIndex,
+  resolveSkeletonGamePath,
   commonDirPrefixLength,
 } = require("../../utils/pathSkeleton");
 const path = require("path");
@@ -165,6 +167,52 @@ describe("skeletonPathToAbsolute", () => {
       path.join(root, "games", "alleycat")
     );
     expect(skeletonPathToAbsolute(root, "dosprograms")).toBe(root);
+  });
+});
+
+describe("resolveSkeletonGamePath", () => {
+  const fs = require("fs");
+  const os = require("os");
+
+  test("repairs bare basename to games/<name> when that folder exists", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-"));
+    const gameDir = path.join(root, "games", "budokan-the-martial-spirit");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "BUDO.COM"), "");
+    const scriptsDir = path.join(root, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(scriptsDir, "budokan.sh"), "#!/bin/sh\n");
+
+    const index = buildSkeletonBasenameIndex(
+      [
+        `${path.basename(root)}/games/budokan-the-martial-spirit`,
+        `${path.basename(root)}/games/budokan-the-martial-spirit/BUDO.COM`,
+        `${path.basename(root)}/scripts/budokan.sh`,
+      ],
+      path.basename(root)
+    );
+
+    const resolved = resolveSkeletonGamePath(root, "budokan-the-martial-spirit", { index });
+    expect(resolved.missing).toBe(false);
+    expect(resolved.repaired).toBe(true);
+    expect(resolved.path).toBe("games/budokan-the-martial-spirit");
+    expect(resolved.absPath).toBe(gameDir);
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("keeps a valid relative path unchanged", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-"));
+    const gameDir = path.join(root, "games", "alleycat");
+    fs.mkdirSync(gameDir, { recursive: true });
+    const resolved = resolveSkeletonGamePath(root, "games/alleycat");
+    expect(resolved).toMatchObject({
+      path: "games/alleycat",
+      absPath: gameDir,
+      repaired: false,
+      missing: false,
+    });
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 

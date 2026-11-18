@@ -803,10 +803,17 @@ function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
 /**
  * Parse AI skeleton response into game rows with absolute paths.
  * Accepts {"games":[...]}, a bare array, or legacy markdown-wrapped JSON.
+ * Optionally repairs paths that drop parent segments (e.g. bare folder names)
+ * using a basename index from the find listing — filesystem only, no AI.
+ *
+ * @param {string} rawText
+ * @param {string} rootPath
+ * @param {{ index?: Map<string, string[]> }} [options]
  */
-function parseSkeletonIdentifyResponse(rawText, rootPath) {
-  const { skeletonPathToAbsolute } = require("./pathSkeleton");
+function parseSkeletonIdentifyResponse(rawText, rootPath, options = {}) {
+  const { resolveSkeletonGamePath } = require("./pathSkeleton");
   const parsed = extractJsonArray(rawText);
+  const index = options.index instanceof Map ? options.index : null;
 
   const games = [];
   for (const row of parsed) {
@@ -816,14 +823,17 @@ function parseSkeletonIdentifyResponse(rawText, rootPath) {
     if (!relPath || !title) continue;
     const yearNum = Number(row.year);
     const confidence = Math.max(0, Math.min(1, Number(row.confidence) || 0));
+    const resolved = resolveSkeletonGamePath(rootPath, relPath.replace(/^\.\//, ""), { index });
     games.push({
-      path: relPath.replace(/^\.\//, ""),
+      path: resolved.path,
       title,
       year: Number.isFinite(yearNum) && yearNum >= 1970 && yearNum <= 2100 ? Math.floor(yearNum) : null,
       platform: row.platform != null ? String(row.platform).trim() || null : null,
       confidence,
       isGame: true,
-      absPath: skeletonPathToAbsolute(rootPath, relPath),
+      absPath: resolved.absPath,
+      pathRepaired: Boolean(resolved.repaired),
+      pathMissing: Boolean(resolved.missing),
     });
   }
   return games;
@@ -894,13 +904,33 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   let cacheHits = 0;
   let apiCalls = 0;
 
+  const {
+    buildSkeletonBasenameIndex,
+    resolveSkeletonGamePath,
+    listFindPaths,
+  } = require("./pathSkeleton");
+  let findPathsForIndex = Array.isArray(skeleton?.paths) ? skeleton.paths : null;
+  if (!findPathsForIndex) {
+    try {
+      findPathsForIndex = listFindPaths(rootPath).paths;
+    } catch {
+      findPathsForIndex = [];
+    }
+  }
+  const pathIndex = buildSkeletonBasenameIndex(findPathsForIndex, rootName);
+
   function hydrateCachedGames(rows) {
-    const { skeletonPathToAbsolute } = require("./pathSkeleton");
-    return (Array.isArray(rows) ? rows : []).map((g) => ({
-      ...g,
-      isGame: true,
-      absPath: skeletonPathToAbsolute(rootPath, g.path),
-    }));
+    return (Array.isArray(rows) ? rows : []).map((g) => {
+      const resolved = resolveSkeletonGamePath(rootPath, g.path, { index: pathIndex });
+      return {
+        ...g,
+        path: resolved.path || g.path,
+        isGame: true,
+        absPath: resolved.absPath,
+        pathRepaired: Boolean(resolved.repaired),
+        pathMissing: Boolean(resolved.missing),
+      };
+    });
   }
 
   function persistSuccessfulChunk(chunkText, games, label) {
@@ -943,7 +973,8 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     });
     return parseSkeletonIdentifyResponse(
       completion?.choices?.[0]?.message?.content || "",
-      rootPath
+      rootPath,
+      { index: pathIndex }
     );
   }
 
