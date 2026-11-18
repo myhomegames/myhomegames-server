@@ -10,12 +10,17 @@ const {
   splitNestedBraceInHalf,
   splitOversizedSkeletonChunk,
   buildNestedTreeFromPaths,
+  listFindPaths,
+  skeletonPrefixForRoot,
   skeletonPathToAbsolute,
+  skeletonPathRelativeToRoot,
   buildSkeletonBasenameIndex,
   resolveSkeletonGamePath,
   commonDirPrefixLength,
 } = require("../../utils/pathSkeleton");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 
 describe("compressPathSkeletonSpaces", () => {
   test("elides repeated directory prefixes with spaces (legacy example)", () => {
@@ -160,20 +165,54 @@ describe("chunkCompressedSkeleton", () => {
   });
 });
 
+describe("skeletonPrefixForRoot / listFindPaths", () => {
+  test("keeps full path only in rootName; listing paths stay short", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-full-"));
+    const nested = path.join(root, "software", "dreamcast", "scripts");
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, "nba2k.sh"), "#!/bin/sh\n");
+
+    const prefix = skeletonPrefixForRoot(nested);
+    expect(prefix.endsWith("software/dreamcast/scripts")).toBe(true);
+
+    const listed = listFindPaths(nested);
+    expect(listed.rootName).toBe(prefix);
+    expect(listed.listingPrefix).toBe("scripts");
+    expect(listed.paths[0]).toBe("scripts");
+    expect(listed.paths).toContain("scripts/nba2k.sh");
+    expect(listed.paths.some((p) => p.includes("dreamcast/scripts/nba2k"))).toBe(false);
+
+    const { buildCompressedFindSkeleton } = require("../../utils/pathSkeleton");
+    const sk = buildCompressedFindSkeleton(nested, { maxChars: 8000 });
+    expect(sk.rootName).toBe(prefix);
+    expect(sk.listingPrefix).toBe("scripts");
+    expect(sk.chunks).toEqual(["scripts{nba2k.sh}"]);
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("skeletonPathToAbsolute", () => {
-  test("maps skeleton path under chosen root", () => {
+  test("maps skeleton path under chosen root (legacy basename prefix)", () => {
     const root = path.join("/Volumes/Elements/Dropbox/private", "dosprograms");
     expect(skeletonPathToAbsolute(root, "dosprograms/games/alleycat")).toBe(
       path.join(root, "games", "alleycat")
     );
     expect(skeletonPathToAbsolute(root, "dosprograms")).toBe(root);
   });
+
+  test("maps full absolute-style skeleton prefix back under the import root", () => {
+    const root = "/Volumes/Elements/Dropbox/xmame/software/dreamcast/scripts";
+    const prefix = skeletonPrefixForRoot(root);
+    expect(skeletonPathToAbsolute(root, `${prefix}/nba2k.sh`)).toBe(
+      path.join(root, "nba2k.sh")
+    );
+    expect(skeletonPathRelativeToRoot(root, `${prefix}/nba2k.sh`)).toBe("nba2k.sh");
+    expect(skeletonPathToAbsolute(root, prefix)).toBe(path.resolve(root));
+  });
 });
 
 describe("resolveSkeletonGamePath", () => {
-  const fs = require("fs");
-  const os = require("os");
-
   test("repairs bare basename to games/<name> when that folder exists", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-"));
     const gameDir = path.join(root, "games", "budokan-the-martial-spirit");
@@ -183,13 +222,14 @@ describe("resolveSkeletonGamePath", () => {
     fs.mkdirSync(scriptsDir, { recursive: true });
     fs.writeFileSync(path.join(scriptsDir, "budokan.sh"), "#!/bin/sh\n");
 
+    const prefix = skeletonPrefixForRoot(root);
     const index = buildSkeletonBasenameIndex(
       [
-        `${path.basename(root)}/games/budokan-the-martial-spirit`,
-        `${path.basename(root)}/games/budokan-the-martial-spirit/BUDO.COM`,
-        `${path.basename(root)}/scripts/budokan.sh`,
+        `${prefix}/games/budokan-the-martial-spirit`,
+        `${prefix}/games/budokan-the-martial-spirit/BUDO.COM`,
+        `${prefix}/scripts/budokan.sh`,
       ],
-      path.basename(root)
+      prefix
     );
 
     const resolved = resolveSkeletonGamePath(root, "budokan-the-martial-spirit", { index });
@@ -209,6 +249,32 @@ describe("resolveSkeletonGamePath", () => {
     expect(resolved).toMatchObject({
       path: "games/alleycat",
       absPath: gameDir,
+      repaired: false,
+      missing: false,
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("resolves AI paths with listing basename or full absolute-style prefix", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-abs-"));
+    const nested = path.join(root, "software", "dreamcast", "scripts");
+    fs.mkdirSync(nested, { recursive: true });
+    const script = path.join(nested, "sonicadventure.sh");
+    fs.writeFileSync(script, "#!/bin/sh\n");
+    const prefix = skeletonPrefixForRoot(nested);
+    expect(
+      resolveSkeletonGamePath(nested, "scripts/sonicadventure.sh")
+    ).toMatchObject({
+      absPath: script,
+      path: "sonicadventure.sh",
+      repaired: false,
+      missing: false,
+    });
+    expect(
+      resolveSkeletonGamePath(nested, `${prefix}/sonicadventure.sh`)
+    ).toMatchObject({
+      absPath: script,
+      path: "sonicadventure.sh",
       repaired: false,
       missing: false,
     });

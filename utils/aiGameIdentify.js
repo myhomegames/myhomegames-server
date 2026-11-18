@@ -46,10 +46,11 @@ const SKELETON_SYSTEM_PROMPT =
   "Video-game library expert. You receive a compressed filesystem find listing. " +
   "Nested form a{b{c,file1,file2}} — braces nest directories; comma-separated siblings; internal files included. " +
   'Reply with one JSON object only, no markdown/prose: {"games":[{path,title,year,platform,confidence}]}. ' +
-  "path = full relative game root with slashes (e.g. dosprograms/games/alleycat), never nested-brace syntax. " +
-  "Use folder names and nested file names to recognize titles when the folder slug is unclear. " +
+  "path = short path exactly as in the listing (e.g. scripts/nba2k.sh or dosprograms/games/alleycat), never nested-brace syntax. " +
+  "Do NOT prepend the Import root path onto path values — keep paths short. " +
+  "Use the Import root path only as context for platform/title (e.g. …/dreamcast/scripts → Dreamcast). " +
   "title = official retail/IGDB name with spaces, Chicago-style title case. " +
-  "year=first release or null; platform=short hint for that dump (DOS, PC, SNES, …) or null; confidence 0..1. " +
+  "year=first release or null; platform=short hint for that dump (Dreamcast, DOS, PC, SNES, …) or null; confidence 0..1. " +
   "Skip tools/BIOS/setup/shared/scripts/soundfonts. Omit non-games entirely.";
 
 function normalizeIdentifyKey(value) {
@@ -791,10 +792,11 @@ async function identifyGamesWithAi(candidates, options = {}) {
 
 function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
   return [
-    `Root folder name: ${rootName}.`,
+    `Import root path (context only — do NOT put this in path fields): ${rootName}.`,
     "Compressed find listing (nested a{b{c,file}}). Identify every game.",
     'Return ONLY {"games":[{"path","title","year","platform","confidence"}]} — no markdown.',
-    "path = full relative game root with slashes (folder or primary file), not nested-brace syntax.",
+    "path = short path as in the listing below (e.g. scripts/nba2k.sh), never the Import root path, never nested-brace syntax.",
+    "Use Import root path only to infer platform (dreamcast→Dreamcast, psx→PlayStation, …).",
     "",
     skeletonChunk,
   ].join("\n");
@@ -844,8 +846,19 @@ function parseSkeletonIdentifyResponse(rawText, rootPath, options = {}) {
  * Returns one merged list — AI decides which paths are games (no hardcoded games/cd layout).
  */
 async function identifyGamesFromSkeleton(skeleton, options = {}) {
+  const {
+    buildSkeletonBasenameIndex,
+    resolveSkeletonGamePath,
+    listFindPaths,
+    skeletonPrefixForRoot,
+  } = require("./pathSkeleton");
+
   const rootPath = skeleton?.rootPath || options.rootPath;
-  const rootName = skeleton?.rootName || path.basename(String(rootPath || ""));
+  // Full absolute path for prompts/cache; short basename for stripping listing paths.
+  const rootName =
+    skeleton?.rootName || (rootPath ? skeletonPrefixForRoot(rootPath) : "");
+  const listingPrefix =
+    skeleton?.listingPrefix || path.basename(String(rootPath || "")) || rootName;
   const chunks = Array.isArray(skeleton?.chunks)
     ? skeleton.chunks.filter((c) => String(c || "").trim())
     : skeleton?.text
@@ -904,11 +917,6 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   let cacheHits = 0;
   let apiCalls = 0;
 
-  const {
-    buildSkeletonBasenameIndex,
-    resolveSkeletonGamePath,
-    listFindPaths,
-  } = require("./pathSkeleton");
   let findPathsForIndex = Array.isArray(skeleton?.paths) ? skeleton.paths : null;
   if (!findPathsForIndex) {
     try {
@@ -917,7 +925,7 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       findPathsForIndex = [];
     }
   }
-  const pathIndex = buildSkeletonBasenameIndex(findPathsForIndex, rootName);
+  const pathIndex = buildSkeletonBasenameIndex(findPathsForIndex, listingPrefix);
 
   function hydrateCachedGames(rows) {
     return (Array.isArray(rows) ? rows : []).map((g) => {

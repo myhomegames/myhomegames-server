@@ -16,6 +16,7 @@ const {
   candidateIdentifyKey,
   dedupeCandidatesForIdentify,
   buildIdentifyPrompt,
+  buildSkeletonIdentifyPrompt,
 } = require("../../utils/aiGameIdentify");
 const {
   loadAiIdentifyCache,
@@ -577,6 +578,18 @@ describe("identifyGamesFromSkeleton", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  test("skeleton user prompt keeps Import root as context and asks for short paths", () => {
+    const prompt = buildSkeletonIdentifyPrompt(
+      "scripts{nba2k.sh}",
+      "Volumes/Elements/Dropbox/xmame/software/dreamcast/scripts"
+    );
+    expect(prompt).toContain(
+      "Import root path (context only — do NOT put this in path fields): Volumes/Elements/Dropbox/xmame/software/dreamcast/scripts."
+    );
+    expect(prompt).toMatch(/path = short path as in the listing/);
+    expect(prompt).toContain("scripts{nba2k.sh}");
+  });
+
   test("sends nested-compressed skeleton chunk to the model", async () => {
     const create = jest.fn(async (opts) => {
       expect(opts.response_format).toEqual({ type: "json_object" });
@@ -584,6 +597,7 @@ describe("identifyGamesFromSkeleton", () => {
       const prompt = String(opts.messages[1].content);
       expect(prompt).toMatch(/nested a\{b\{c,file\}\}/);
       expect(prompt).toMatch(/dosprograms\{games\{alleycat\{CAT\.EXE,README\.TXT\}\}\}/);
+      expect(prompt).toMatch(/short path as in the listing/);
       expect(prompt).toMatch(/"games"/);
       return {
         choices: [

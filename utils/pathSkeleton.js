@@ -4,12 +4,30 @@ const fs = require("fs");
 const path = require("path");
 
 /**
+ * Absolute import root as a skeleton path prefix (POSIX slashes, no leading `/`).
+ * Keeps parent folders (e.g. …/dreamcast/scripts) so the AI sees platform context.
+ *
+ *   /Volumes/Elements/Dropbox/xmame/software/dreamcast/scripts
+ *     → Volumes/Elements/Dropbox/xmame/software/dreamcast/scripts
+ *   C:\Games\dosprograms → C:/Games/dosprograms
+ */
+function skeletonPrefixForRoot(rootPath) {
+  return path
+    .resolve(String(rootPath || "").trim())
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/\/$/, "")
+    .replace(/^\//, "");
+}
+
+/**
  * List paths like `find <root>` (root + every dir/file), sorted depth-first as walk order
- * with names sorted per directory. Paths are relative to the parent of `root`, so the
- * chosen folder basename is the first segment (e.g. dosprograms/games/…).
+ * with names sorted per directory. Listing paths stay short (chosen-folder basename +
+ * relatives) so AI prompts stay small. The full absolute path is returned separately as
+ * `rootName` for prompt context only (e.g. …/dreamcast/scripts → platform hint).
  *
  * @param {string} rootPath absolute folder chosen by the user
- * @returns {{ rootPath: string, rootName: string, paths: string[] }}
+ * @returns {{ rootPath: string, rootName: string, listingPrefix: string, paths: string[] }}
  */
 function listFindPaths(rootPath, options = {}) {
   const root = path.resolve(String(rootPath || "").trim());
@@ -25,9 +43,11 @@ function listFindPaths(rootPath, options = {}) {
     throw err;
   }
 
-  const rootName = path.basename(root);
+  // Short listing prefix (keeps skeleton compact). Full path only in rootName for the AI.
+  const listingPrefix = path.basename(root);
+  const rootName = skeletonPrefixForRoot(root);
   const maxEntries = Number.isFinite(options.maxEntries) ? options.maxEntries : 0;
-  const paths = [rootName];
+  const paths = [listingPrefix];
 
   function walk(absDir, relFromRoot) {
     if (maxEntries > 0 && paths.length >= maxEntries) return;
@@ -48,18 +68,18 @@ function listFindPaths(rootPath, options = {}) {
     for (const ent of dirs) {
       if (maxEntries > 0 && paths.length >= maxEntries) return;
       const rel = relFromRoot ? `${relFromRoot}/${ent.name}` : ent.name;
-      paths.push(`${rootName}/${rel}`);
+      paths.push(`${listingPrefix}/${rel}`);
       walk(path.join(absDir, ent.name), rel);
     }
     for (const ent of files) {
       if (maxEntries > 0 && paths.length >= maxEntries) return;
       const rel = relFromRoot ? `${relFromRoot}/${ent.name}` : ent.name;
-      paths.push(`${rootName}/${rel}`);
+      paths.push(`${listingPrefix}/${rel}`);
     }
   }
 
   walk(root, "");
-  return { rootPath: root, rootName, paths };
+  return { rootPath: root, rootName, listingPrefix, paths };
 }
 
 /**
@@ -482,38 +502,50 @@ function chunkCompressedSkeleton(compressedLines, maxChars) {
 }
 
 /**
- * Map a skeleton-relative path (dosprograms/games/X) back to an absolute filesystem path.
+ * Strip the import-root prefix from an AI/skeleton path.
+ * Accepts full absolute-style prefixes and legacy basename-only prefixes.
  */
-function skeletonPathToAbsolute(rootPath, skeletonPath) {
+function stripSkeletonRootPrefix(rootPath, skeletonPath) {
   const root = path.resolve(String(rootPath || ""));
-  const rootName = path.basename(root);
-  let rel = String(skeletonPath || "").replace(/\\/g, "/").replace(/^\//, "");
-  // Strip accidental brace leftovers.
-  rel = rel.replace(/\{|\}/g, "");
-  if (rel === rootName) return root;
-  const prefix = `${rootName}/`;
-  if (rel.startsWith(prefix)) rel = rel.slice(prefix.length);
-  else if (rel.startsWith(rootName)) rel = rel.slice(rootName.length).replace(/^\//, "");
-  return path.join(root, rel);
-}
-
-/**
- * Normalize a skeleton path to be relative to the import root (no rootName prefix).
- */
-function skeletonPathRelativeToRoot(rootPath, skeletonPath) {
-  const root = path.resolve(String(rootPath || ""));
-  const rootName = path.basename(root);
+  const fullPrefix = skeletonPrefixForRoot(root);
+  const shortPrefix = path.basename(root);
   let rel = String(skeletonPath || "")
     .replace(/\\/g, "/")
     .replace(/^\.\//, "")
     .replace(/^\//, "")
     .replace(/\{|\}/g, "")
     .trim();
-  if (!rel || rel === "." || rel === rootName) return "";
-  const prefix = `${rootName}/`;
-  if (rel.startsWith(prefix)) return rel.slice(prefix.length);
-  if (rel === rootName) return "";
+  if (!rel || rel === ".") return "";
+
+  const stripOne = (prefix) => {
+    if (!prefix) return null;
+    if (rel === prefix) return "";
+    const withSlash = `${prefix}/`;
+    if (rel.startsWith(withSlash)) return rel.slice(withSlash.length);
+    return null;
+  };
+
+  for (const prefix of [fullPrefix, shortPrefix]) {
+    const stripped = stripOne(prefix);
+    if (stripped != null) return stripped;
+  }
   return rel;
+}
+
+/**
+ * Map a skeleton path (full absolute-style or legacy basename-relative) back to FS.
+ */
+function skeletonPathToAbsolute(rootPath, skeletonPath) {
+  const root = path.resolve(String(rootPath || ""));
+  const rel = stripSkeletonRootPrefix(root, skeletonPath);
+  return rel ? path.join(root, rel) : root;
+}
+
+/**
+ * Normalize a skeleton path to be relative to the import root (no root prefix).
+ */
+function skeletonPathRelativeToRoot(rootPath, skeletonPath) {
+  return stripSkeletonRootPrefix(rootPath, skeletonPath);
 }
 
 /**
@@ -680,13 +712,16 @@ function buildCompressedFindSkeleton(rootPath, options = {}) {
   } else {
     compressed = compressPathSkeletonNested(listed.paths);
     const tree = buildNestedTreeFromPaths(listed.paths);
-    chunks = chunkNestedSkeleton(tree, listed.rootName, options.maxChars);
+    // Listing uses short basename prefix (scripts, dosprograms, …) as the tree root key.
+    chunks = chunkNestedSkeleton(tree, listed.listingPrefix, options.maxChars);
   }
 
   const text = compressed.join("\n");
   return {
     rootPath: listed.rootPath,
+    // Full absolute path for AI prompt context only (not repeated on every listing line).
     rootName: listed.rootName,
+    listingPrefix: listed.listingPrefix,
     pathCount: listed.paths.length,
     paths: listed.paths,
     compressed,
@@ -698,6 +733,7 @@ function buildCompressedFindSkeleton(rootPath, options = {}) {
 
 module.exports = {
   listFindPaths,
+  skeletonPrefixForRoot,
   compressPathSkeleton,
   compressPathSkeletonBrace,
   compressPathSkeletonNested,
@@ -714,6 +750,7 @@ module.exports = {
   chunkCompressedSkeleton,
   skeletonPathToAbsolute,
   skeletonPathRelativeToRoot,
+  stripSkeletonRootPrefix,
   buildSkeletonBasenameIndex,
   resolveSkeletonGamePath,
   buildCompressedFindSkeleton,
