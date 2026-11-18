@@ -195,7 +195,8 @@ function isJunkGameBasename(name) {
   if (compact.length <= 2) return true;
   if (/^b\d+[a-z]*$/i.test(compact)) return true;
   if (JUNK_BASENAMES.has(title.toLowerCase()) || JUNK_BASENAMES.has(compact)) return true;
-  if (/^(setup|install|config|dosbox|uninstall)/i.test(baseNoExt)) return true;
+  if (/^(setup|install|instal|config|dosbox|uninstall)/i.test(baseNoExt)) return true;
+  if (/instal/i.test(baseNoExt) && /hd|setup|soft/i.test(baseNoExt)) return true;
   if (/^dosbox/i.test(baseNoExt)) return true;
   return false;
 }
@@ -336,29 +337,91 @@ function isLaunchScriptBasename(name) {
 }
 
 /**
- * Optional matching launcher under scripts/ for a game folder (launch only; not used for naming).
+ * True when a launch script's body references the game folder path
+ * (e.g. bobmorane1.sh → …/Bob-Morane-Chevalerie-1_DOS_FR/dosbox.conf).
  */
-function findMatchingLaunchScript(scriptsDir, folderName) {
-  if (!scriptsDir || !fs.existsSync(scriptsDir)) return null;
+function scriptReferencesGamePath(scriptPath, gameAbsPath) {
+  const gameAbs = path.resolve(String(gameAbsPath || ""));
+  if (!gameAbs) return false;
+  let text;
+  try {
+    const st = fs.statSync(scriptPath);
+    // Keep reads small — DOSBox one-liners are tiny.
+    if (!st.isFile() || st.size <= 0 || st.size > 256 * 1024) return false;
+    text = fs.readFileSync(scriptPath, "utf8");
+  } catch {
+    return false;
+  }
+  if (!text) return false;
+
+  const gamePosix = gameAbs.replace(/\\/g, "/");
+  const base = path.basename(gameAbs);
+  const variants = new Set([
+    gameAbs,
+    gamePosix,
+    gameAbs.replace(/ /g, "\\ "),
+    gamePosix.replace(/ /g, "\\ "),
+  ]);
+  // Quoted path fragments with spaces.
+  if (base.includes(" ")) {
+    variants.add(`"${gamePosix}"`);
+    variants.add(`'${gamePosix}'`);
+    variants.add(gamePosix.replace(/ /g, "\\ "));
+  }
+  for (const v of variants) {
+    if (v && text.includes(v)) return true;
+  }
+  return false;
+}
+
+/**
+ * Optional matching launcher under scripts/ for a game folder (launch only; not used for naming).
+ * Matches by normalized basename, then by script content referencing the game folder path.
+ */
+function findMatchingLaunchScript(scriptsDir, folderName, gameAbsPath = null) {
+  const matches = findMatchingLaunchScripts(scriptsDir, folderName, gameAbsPath);
+  return matches[0] || null;
+}
+
+/**
+ * All matching launchers under a collection scripts/ directory.
+ * @returns {string[]} absolute script paths (name matches first, then content matches)
+ */
+function findMatchingLaunchScripts(scriptsDir, folderName, gameAbsPath = null) {
+  if (!scriptsDir || !fs.existsSync(scriptsDir)) return [];
   const key = normalizeTitleKey(folderName);
-  if (!key) return null;
-  let best = null;
+  const byNameExact = [];
+  const byNameFuzzy = [];
+  const byContent = [];
   for (const ent of listDirents(scriptsDir)) {
     if (!ent.isFile() || !isLaunchScriptBasename(ent.name)) continue;
+    const full = path.join(scriptsDir, ent.name);
     const scriptKey = normalizeTitleKey(guessTitleFromBasename(ent.name));
-    if (!scriptKey) continue;
-    if (scriptKey === key || scriptKey.includes(key) || key.includes(scriptKey)) {
-      const full = path.join(scriptsDir, ent.name);
-      if (scriptKey === key) return full;
-      best = best || full;
+    let nameHit = false;
+    if (key && scriptKey) {
+      if (scriptKey === key) {
+        byNameExact.push(full);
+        nameHit = true;
+      } else if (scriptKey.includes(key) || key.includes(scriptKey)) {
+        byNameFuzzy.push(full);
+        nameHit = true;
+      }
+    }
+    if (
+      !nameHit &&
+      gameAbsPath &&
+      scriptReferencesGamePath(full, gameAbsPath)
+    ) {
+      byContent.push(full);
     }
   }
-  return best;
+  return [...byNameExact, ...byNameFuzzy, ...byContent];
 }
 
 /**
  * Discover real .sh/.bat launchers for a game path.
  * Never invents open/xdg-open wrappers — only returns existing scripts on disk.
+ * Collection `scripts/` may match by folder name or by referencing the game path in the script body.
  * @returns {{ path: string, label: string }[]}
  */
 function findLaunchScriptsForGame(gamePath) {
@@ -398,10 +461,29 @@ function findLaunchScriptsForGame(gamePath) {
 
   if (!st.isDirectory()) return found;
 
-  const walkGameDir = (dir, depth) => {
-    for (const ent of listDirents(dir)) {
+  const gameAbs = path.resolve(gamePath);
+
+  // Collection layout first: sibling/ancestor scripts/ (name or content match).
+  // Prefer these over in-folder SETUP/HDINSTAL leftovers.
+  const folderName = path.basename(gamePath);
+  let dir = path.dirname(gamePath);
+  for (let i = 0; i < 4; i += 1) {
+    for (const match of findMatchingLaunchScripts(
+      path.join(dir, "scripts"),
+      folderName,
+      gameAbs
+    )) {
+      add(match);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  const walkGameDir = (dirWalk, depth) => {
+    for (const ent of listDirents(dirWalk)) {
       if (ent.name.startsWith(".")) continue;
-      const full = path.join(dir, ent.name);
+      const full = path.join(dirWalk, ent.name);
       if (ent.isFile()) {
         add(full);
         continue;
@@ -414,17 +496,6 @@ function findLaunchScriptsForGame(gamePath) {
   };
   walkGameDir(gamePath, 0);
 
-  // Collection layout: sibling/ancestor scripts/<matching-name>.sh|bat
-  const folderName = path.basename(gamePath);
-  let dir = path.dirname(gamePath);
-  for (let i = 0; i < 4; i += 1) {
-    const match = findMatchingLaunchScript(path.join(dir, "scripts"), folderName);
-    if (match) add(match);
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-
   return found;
 }
 
@@ -434,7 +505,7 @@ function buildFolderCandidate(folderPath, options = {}) {
   const tree = sampleDirectoryTree(folderPath);
   const launch =
     options.launchPath ||
-    findMatchingLaunchScript(options.scriptsDir, name) ||
+    findMatchingLaunchScript(options.scriptsDir, name, folderPath) ||
     folderPath;
   return {
     filePath: launch,
@@ -933,6 +1004,8 @@ module.exports = {
   isAcceptableIgdbMatch,
   writeLocalPathLaunchScript,
   findLaunchScriptsForGame,
+  findMatchingLaunchScript,
+  scriptReferencesGamePath,
   resolveExecutablePlatformId,
   resolveUserFolderPath,
 };

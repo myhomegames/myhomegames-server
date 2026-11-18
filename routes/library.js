@@ -2701,6 +2701,48 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const seenPaths = new Set();
     const chunkTotal = Math.max(1, skeleton.chunks.length);
 
+    /**
+     * No-IGDB import only: ensure the AI platform hint exists as a local tag and link it.
+     * Prefer matching an existing tag (e.g. "DOS"); create one only when nothing matches.
+     * @returns {Array<number|string>} platform ids linked (may be empty)
+     */
+    function applyAiPlatformHintToGame(gameId, platformHint) {
+      const hint = String(platformHint || "").trim();
+      if (!hint || gameId == null || !allGames[gameId]) return [];
+
+      const localTags = loadPlatforms(metadataPath);
+      // Fuzzy-match existing local tags by name (same rules as executable platform pick).
+      let platformId = "";
+      const hintLower = hint.toLowerCase();
+      for (const tag of localTags) {
+        const title = String(tag.title || tag.name || "").trim();
+        if (!title) continue;
+        const t = title.toLowerCase();
+        if (t === hintLower || t.includes(hintLower) || hintLower.includes(t)) {
+          platformId = String(tag.id);
+          break;
+        }
+      }
+      if (!platformId) {
+        ensurePlatformsExistBatch(metadataPath, [hint]);
+        const created = normalizePlatformFieldToIds(metadataPath, [hint]);
+        if (created && created.length) platformId = String(created[0]);
+      }
+      if (!platformId) return [];
+
+      const idNum = Number(platformId);
+      const tagId = Number.isFinite(idNum) && !Number.isNaN(idNum) ? idNum : platformId;
+      const gidNum = Number(gameId);
+      const gid = Number.isFinite(gidNum) && !Number.isNaN(gidNum) ? gidNum : gameId;
+      addGameToPlatform(metadataPath, tagId, gid);
+
+      if (!Array.isArray(allGames[gameId].platforms)) allGames[gameId].platforms = [];
+      if (!allGames[gameId].platforms.some((p) => String(p) === String(tagId))) {
+        allGames[gameId].platforms.push(tagId);
+      }
+      return [tagId];
+    }
+
     function attachExistingLaunchScripts(
       gameId,
       gameAbsPath,
@@ -2708,8 +2750,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       platformHint,
       localPlatformIds = null
     ) {
-      // Executables only with IGDB: filename uses local platform tag id for Manage Installation.
-      if (!canSearchCatalog) return 0;
+      // Filename uses local platform tag id for Manage Installation.
       const platformId = resolveExecutablePlatformId(catalogPlatforms, platformHint, {
         localTags: loadPlatforms(metadataPath),
         localPlatformIds:
@@ -2733,6 +2774,20 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
       saveGame(metadataPath, allGames[gameId]);
       return launchers.length;
+    }
+
+    /**
+     * No-IGDB only: link AI platform onto the game, then attach on-disk launch scripts.
+     */
+    function attachLaunchersWithoutCatalog(gameId, gameAbsPath, platformHint) {
+      applyAiPlatformHintToGame(gameId, platformHint);
+      return attachExistingLaunchScripts(
+        gameId,
+        gameAbsPath,
+        [],
+        platformHint,
+        allGames[gameId]?.platforms || []
+      );
     }
 
     async function importOneAiGame(game) {
@@ -2800,13 +2855,18 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.gameId = existingByTitle.id;
           entry.catalogName = existingByTitle.title || null;
           if (titleKey) seenTitleKeys.add(titleKey);
-          attachExistingLaunchScripts(
-            existingByTitle.id,
-            abs,
-            [],
-            aiPlatform,
-            existingByTitle.platforms
-          );
+          if (canSearchCatalog) {
+            // IGDB mode: only re-attach when the game already has local platform tags.
+            attachExistingLaunchScripts(
+              existingByTitle.id,
+              abs,
+              [],
+              aiPlatform,
+              existingByTitle.platforms
+            );
+          } else {
+            attachLaunchersWithoutCatalog(existingByTitle.id, abs, aiPlatform);
+          }
           results.push(entry);
           return entry;
         }
@@ -2932,8 +2992,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           }
           seenCatalogIds.add(Number(match.id));
         } else {
-          // No IGDB: create with the AI title only (never a folder/filename heuristic).
-          // Launch scripts are skipped — they require an IGDB platform id.
+          // No IGDB: create with the AI title; platform + launchers come from the AI hint.
           const created = await createScratchGame(searchTitle);
           gameId = created.id;
           entry.status = "created";
@@ -2948,6 +3007,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
               : match.platforms?.length
                 ? match.platforms
                 : [];
+          // IGDB import: attach only from catalog/local platform ids (no AI-platform fallback).
           attachExistingLaunchScripts(
             gameId,
             abs,
@@ -2956,9 +3016,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             allGames[gameId]?.platforms || []
           );
         } else if (gameId != null && allGames[gameId]) {
-          // Scratch / no catalog: still stamp dateInstalled, but no invented executables.
-          allGames[gameId].dateInstalled = allGames[gameId].dateInstalled || Date.now();
-          saveGame(metadataPath, allGames[gameId]);
+          attachLaunchersWithoutCatalog(gameId, abs, aiPlatform);
+          if (!allGames[gameId].dateInstalled) {
+            allGames[gameId].dateInstalled = Date.now();
+            saveGame(metadataPath, allGames[gameId]);
+          }
         }
         results.push(entry);
         return entry;

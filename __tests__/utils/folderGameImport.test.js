@@ -302,6 +302,47 @@ describe("findLaunchScriptsForGame", () => {
     expect(found[0].path).toBe(path.join(scriptsDir, "fallout.sh"));
   });
 
+  test("matches collection scripts by content when basename differs (bobmoraneN)", () => {
+    const gameDir = path.join(tmpRoot, "games", "Bob-Morane-Chevalerie-1_DOS_FR");
+    const scriptsDir = path.join(tmpRoot, "scripts");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "dosbox.conf"), "[autoexec]\n");
+    fs.writeFileSync(
+      path.join(scriptsDir, "bobmorane1.sh"),
+      `/Applications/dosbox-x.app/Contents/MacOS/dosbox-x -conf ${gameDir}/dosbox.conf\n`
+    );
+    fs.writeFileSync(
+      path.join(scriptsDir, "bobmorane2.sh"),
+      `/Applications/dosbox-x.app/Contents/MacOS/dosbox-x -conf ${tmpRoot}/games/other/dosbox.conf\n`
+    );
+    const found = findLaunchScriptsForGame(gameDir);
+    expect(found.map((f) => f.label)).toEqual(["bobmorane1"]);
+    expect(found[0].path).toBe(path.join(scriptsDir, "bobmorane1.sh"));
+  });
+
+  test("matches scripts that escape spaces in the game path", () => {
+    const gameDir = path.join(tmpRoot, "games", "Bob Morane Ocean");
+    const scriptsDir = path.join(tmpRoot, "scripts");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const escaped = gameDir.replace(/ /g, "\\ ");
+    fs.writeFileSync(
+      path.join(scriptsDir, "bobmorane4.sh"),
+      `/Applications/dosbox-x.app/Contents/MacOS/dosbox-x -conf ${escaped}/dosbox.conf\n`
+    );
+    const found = findLaunchScriptsForGame(gameDir);
+    expect(found).toHaveLength(1);
+    expect(found[0].label).toBe("bobmorane4");
+  });
+
+  test("skips HDINSTAL.BAT style installers inside the game folder", () => {
+    const gameDir = path.join(tmpRoot, "games", "Bob Morane Ocean");
+    fs.mkdirSync(gameDir, { recursive: true });
+    fs.writeFileSync(path.join(gameDir, "HDINSTAL.BAT"), "@echo install\n");
+    expect(findLaunchScriptsForGame(gameDir)).toEqual([]);
+  });
+
   test("accepts a game path that is itself a launch script", () => {
     const launcher = path.join(tmpRoot, "xonix.sh");
     fs.writeFileSync(launcher, "#!/bin/bash\necho x\n");
