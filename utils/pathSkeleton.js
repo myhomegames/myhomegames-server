@@ -272,6 +272,67 @@ function compressPathSkeletonNested(paths) {
   return [formatNestedBraceNode(tree, "")];
 }
 
+const LAUNCH_SCRIPT_LEAF_RE = /\.(sh|bat)$/i;
+
+function isLaunchScriptLeafName(name) {
+  return LAUNCH_SCRIPT_LEAF_RE.test(String(name || ""));
+}
+
+/**
+ * True when a tree node is mostly flat launch-script siblings (.sh/.bat).
+ * Name-agnostic: works for scripts/, launchers/, bins/, etc.
+ * False for deep trees like dosprograms/{games,cd,…} so char-based chunking stays.
+ */
+function isFlatLaunchCandidateTree(node, options = {}) {
+  if (!node || typeof node !== "object") return false;
+  const minScripts = Number.isFinite(options.minScripts) ? Math.max(2, options.minScripts) : 10;
+  const keys = Object.keys(node);
+  if (keys.length < minScripts) return false;
+  let scriptLeaves = 0;
+  let otherLeaves = 0;
+  let dirs = 0;
+  for (const key of keys) {
+    const value = node[key];
+    if (value === null) {
+      if (isLaunchScriptLeafName(key)) scriptLeaves += 1;
+      else otherLeaves += 1;
+    } else if (value && typeof value === "object") {
+      dirs += 1;
+    }
+  }
+  const total = scriptLeaves + otherLeaves + dirs;
+  if (total === 0 || scriptLeaves < minScripts) return false;
+  // ≥80% launch scripts, ≤10% nested dirs (allow .DS_Store and a stray folder).
+  return scriptLeaves / total >= 0.8 && dirs / total <= 0.1;
+}
+
+/**
+ * Split a flat launch-script tree into sibling batches so each AI call can
+ * return one JSON row per script without blowing max_tokens.
+ */
+function chunkFlatLaunchSiblings(rootNode, label, maxPerChunk) {
+  const limit =
+    Number.isFinite(maxPerChunk) && maxPerChunk > 0 ? Math.floor(maxPerChunk) : 20;
+  const childKeys = Object.keys(rootNode || {}).sort((a, b) => a.localeCompare(b));
+  if (childKeys.length === 0) return [];
+  const chunks = [];
+  let batch = {};
+  let batchCount = 0;
+  const flush = () => {
+    if (batchCount === 0) return;
+    chunks.push(formatNestedBraceNode(batch, label));
+    batch = {};
+    batchCount = 0;
+  };
+  for (const key of childKeys) {
+    if (batchCount >= limit) flush();
+    batch[key] = rootNode[key];
+    batchCount += 1;
+  }
+  flush();
+  return chunks.length ? chunks : [formatNestedBraceNode(rootNode, label)].filter(Boolean);
+}
+
 /**
  * Split a nested tree into chunks under maxChars by grouping sibling subtrees.
  * Each chunk is a valid nested string rooted at `rootName` (or the shared parent path).
@@ -712,8 +773,25 @@ function buildCompressedFindSkeleton(rootPath, options = {}) {
   } else {
     compressed = compressPathSkeletonNested(listed.paths);
     const tree = buildNestedTreeFromPaths(listed.paths);
-    // Listing uses short basename prefix (scripts, dosprograms, …) as the tree root key.
-    chunks = chunkNestedSkeleton(tree, listed.listingPrefix, options.maxChars);
+    // Listing uses short basename prefix (folder name) as the tree root key.
+    const rootNode =
+      listed.listingPrefix &&
+      tree &&
+      typeof tree[listed.listingPrefix] === "object" &&
+      tree[listed.listingPrefix] !== null
+        ? tree[listed.listingPrefix]
+        : tree;
+    // Flat folders of .sh/.bat (any name) need small sibling batches for AI completion size.
+    // Deep trees (dosprograms/games/…) keep char-based chunking only.
+    const maxLaunchSiblings =
+      Number.isFinite(options.maxLaunchScriptSiblings) && options.maxLaunchScriptSiblings > 0
+        ? Math.floor(options.maxLaunchScriptSiblings)
+        : 20;
+    if (isFlatLaunchCandidateTree(rootNode)) {
+      chunks = chunkFlatLaunchSiblings(rootNode, listed.listingPrefix, maxLaunchSiblings);
+    } else {
+      chunks = chunkNestedSkeleton(tree, listed.listingPrefix, options.maxChars);
+    }
   }
 
   const text = compressed.join("\n");
@@ -741,6 +819,9 @@ module.exports = {
   buildNestedTreeFromPaths,
   formatNestedBraceNode,
   chunkNestedSkeleton,
+  isFlatLaunchCandidateTree,
+  isLaunchScriptLeafName,
+  chunkFlatLaunchSiblings,
   splitTopLevelCommaParts,
   splitNestedBraceInHalf,
   splitOversizedSkeletonChunk,

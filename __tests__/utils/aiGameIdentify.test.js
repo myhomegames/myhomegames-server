@@ -522,6 +522,18 @@ describe("aiIdentifyCache", () => {
     expect(hit.year).toBe(1997);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  test("does not cache or reuse empty skeleton chunk results", () => {
+    const { writeSkeletonChunk, loadSkeletonChunkCache, hashSkeletonChunk } = require("../../utils/aiIdentifyCache");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-skel-empty-"));
+    const cache = loadSkeletonChunkCache(dir);
+    const hash = hashSkeletonChunk("gpt-4o-mini", "scripts", "scripts{alleycat.sh}");
+    writeSkeletonChunk(cache, hash, [], { model: "gpt-4o-mini", label: "skeleton 1/1" });
+    expect(cache.chunks[hash]).toBeUndefined();
+    cache.chunks[hash] = { games: [], model: "gpt-4o-mini", updatedAt: Date.now() };
+    expect(readSkeletonChunk(cache, hash)).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("identifyGamesFromSkeleton", () => {
@@ -810,6 +822,50 @@ describe("identifyGamesFromSkeleton", () => {
     const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA);
     expect(readSkeletonChunk(reloaded, hashA)?.games[0]?.title).toBe("Game A");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("splits and retries when a chunk returns empty games", async () => {
+    let calls = 0;
+    const create = jest.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { choices: [{ message: { content: JSON.stringify({ games: [] }) } }] };
+      }
+      const letter = calls === 2 ? "a" : "b";
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                games: [
+                  {
+                    path: `scripts/${letter}.sh`,
+                    title: `Game ${letter.toUpperCase()}`,
+                    year: 1991,
+                    confidence: 0.9,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    });
+    const out = await identifyGamesFromSkeleton(
+      {
+        rootPath: path.join("/tmp", "scripts"),
+        rootName: "scripts",
+        chunks: ["scripts{a.sh,b.sh}"],
+      },
+      {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+        chunkGapMs: 0,
+      }
+    );
+    expect(out.used).toBe(true);
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(out.games.map((g) => g.title).sort()).toEqual(["Game A", "Game B"]);
   });
 
   test("onChunkGames imports each chunk as soon as it is identified", async () => {

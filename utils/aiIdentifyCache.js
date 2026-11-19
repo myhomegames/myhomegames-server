@@ -143,17 +143,20 @@ function readSkeletonChunk(cache, hash) {
   if (!key || !cache?.chunks) return null;
   const row = cache.chunks[key];
   if (!row || typeof row !== "object" || !Array.isArray(row.games)) return null;
+  const games = row.games
+    .filter((g) => g && typeof g === "object" && g.path && g.title)
+    .map((g) => ({
+      path: String(g.path),
+      title: String(g.title),
+      year: g.year ?? null,
+      platform: g.platform ?? null,
+      confidence: Math.max(0, Math.min(1, Number(g.confidence) || 0)),
+      isGame: true,
+    }));
+  // Never reuse empty identifies — they poison retries after truncated model replies.
+  if (games.length === 0) return null;
   return {
-    games: row.games
-      .filter((g) => g && typeof g === "object" && g.path && g.title)
-      .map((g) => ({
-        path: String(g.path),
-        title: String(g.title),
-        year: g.year ?? null,
-        platform: g.platform ?? null,
-        confidence: Math.max(0, Math.min(1, Number(g.confidence) || 0)),
-        isGame: true,
-      })),
+    games,
     model: row.model || null,
     updatedAt: row.updatedAt || null,
     fromCache: true,
@@ -164,17 +167,20 @@ function writeSkeletonChunk(cache, hash, games, meta = {}) {
   const key = String(hash || "").trim();
   if (!key || !cache) return;
   if (!cache.chunks || typeof cache.chunks !== "object") cache.chunks = {};
-  const list = Array.isArray(games) ? games : [];
+  const list = (Array.isArray(games) ? games : []).filter((g) => g && g.path && g.title);
+  // Do not persist empty results — next import must call the model again.
+  if (list.length === 0) {
+    delete cache.chunks[key];
+    return;
+  }
   cache.chunks[key] = {
-    games: list
-      .filter((g) => g && g.path && g.title)
-      .map((g) => ({
-        path: String(g.path),
-        title: String(g.title),
-        year: g.year ?? null,
-        platform: g.platform ?? null,
-        confidence: g.confidence ?? 0,
-      })),
+    games: list.map((g) => ({
+      path: String(g.path),
+      title: String(g.title),
+      year: g.year ?? null,
+      platform: g.platform ?? null,
+      confidence: g.confidence ?? 0,
+    })),
     model: meta.model || null,
     label: meta.label || null,
     updatedAt: Date.now(),

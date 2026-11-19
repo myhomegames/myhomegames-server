@@ -2526,6 +2526,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       // Full find listing as nested braces; keep each chunk well under Groq ~8k TPM.
       skeleton = buildCompressedFindSkeleton(folderPath, {
         maxChars: Math.max(1500, Math.floor((aiConfig.maxPromptChars || 4500) * 0.75)),
+        // Flat .sh/.bat folders only (any name); deep trees like dosprograms stay char-chunked.
+        maxLaunchScriptSiblings: 20,
       });
     } catch (error) {
       const status = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? 400 : 500;

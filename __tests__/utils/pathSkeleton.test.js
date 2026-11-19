@@ -123,6 +123,66 @@ describe("chunkNestedSkeleton", () => {
   });
 });
 
+describe("flat launch-script chunking", () => {
+  const {
+    isFlatLaunchCandidateTree,
+    chunkFlatLaunchSiblings,
+    buildCompressedFindSkeleton,
+  } = require("../../utils/pathSkeleton");
+
+  test("detects flat .sh/.bat trees regardless of folder name", () => {
+    const paths = ["launchers"];
+    for (let i = 0; i < 30; i += 1) {
+      paths.push(`launchers/game${String(i).padStart(2, "0")}.sh`);
+    }
+    const tree = buildNestedTreeFromPaths(paths);
+    expect(isFlatLaunchCandidateTree(tree.launchers)).toBe(true);
+  });
+
+  test("does not treat deep game trees as flat launch listings", () => {
+    const tree = buildNestedTreeFromPaths([
+      "dosprograms",
+      "dosprograms/games",
+      "dosprograms/games/alleycat",
+      "dosprograms/games/alleycat/CAT.EXE",
+      "dosprograms/games/budokan",
+      "dosprograms/games/budokan/BUDO.COM",
+      "dosprograms/scripts",
+      "dosprograms/scripts/alleycat.sh",
+    ]);
+    expect(isFlatLaunchCandidateTree(tree.dosprograms)).toBe(false);
+  });
+
+  test("batches flat launch siblings under maxLaunchScriptSiblings", () => {
+    const paths = ["bins"];
+    for (let i = 0; i < 45; i += 1) {
+      paths.push(`bins/g${String(i).padStart(2, "0")}.sh`);
+    }
+    const tree = buildNestedTreeFromPaths(paths);
+    const chunks = chunkFlatLaunchSiblings(tree.bins, "bins", 20);
+    expect(chunks.length).toBe(3);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("bins{")).toBe(true);
+    }
+  });
+
+  test("buildCompressedFindSkeleton uses flat batches for a launchers-style folder", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-launchers-"));
+    const folder = path.join(root, "my-launchers");
+    fs.mkdirSync(folder, { recursive: true });
+    for (let i = 0; i < 45; i += 1) {
+      fs.writeFileSync(path.join(folder, `g${String(i).padStart(2, "0")}.sh`), "#!/bin/sh\n");
+    }
+    const sk = buildCompressedFindSkeleton(folder, {
+      maxChars: 8000,
+      maxLaunchScriptSiblings: 20,
+    });
+    expect(sk.chunks.length).toBe(3);
+    expect(sk.listingPrefix).toBe("my-launchers");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("splitNestedBraceInHalf / splitOversizedSkeletonChunk", () => {
   test("halves a nested one-liner by top-level siblings", () => {
     const chunk = "dosprograms{games{a{1},b{2},c{3},d{4}}}";

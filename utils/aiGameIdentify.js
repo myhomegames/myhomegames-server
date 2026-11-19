@@ -51,7 +51,7 @@ const SKELETON_SYSTEM_PROMPT =
   "Use the Import root path only as context for platform/title (e.g. …/dreamcast/scripts → Dreamcast). " +
   "title = official retail/IGDB name with spaces, Chicago-style title case. " +
   "year=first release or null; platform=short hint for that dump (Dreamcast, DOS, PC, SNES, …) or null; confidence 0..1. " +
-  "Skip tools/BIOS/setup/shared/scripts/soundfonts. Omit non-games entirely.";
+  "Skip tools/BIOS/setup/shared/soundfonts. Omit non-games entirely.";
 
 function normalizeIdentifyKey(value) {
   return String(value || "")
@@ -942,22 +942,23 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   }
 
   function persistSuccessfulChunk(chunkText, games, label) {
+    const list = Array.isArray(games) ? games : [];
     if (chunkCache) {
       const hash = hashSkeletonChunk(config.model, rootName, chunkText);
-      writeSkeletonChunk(chunkCache, hash, games, {
+      writeSkeletonChunk(chunkCache, hash, list, {
         model: config.model,
         label,
       });
     }
     if (cache && writeCache) {
-      for (const game of games) {
+      for (const game of list) {
         const cacheKey = candidateIdentifyKey({ sourceName: path.basename(game.path) });
         if (cacheKey) writeCache(cache, cacheKey, game, { model: config.model });
       }
     }
     if (onChunkPersisted) {
       try {
-        onChunkPersisted({ label, games: games.length });
+        onChunkPersisted({ label, games: list.length });
       } catch (persistErr) {
         console.warn(
           "[ai-identify] chunk persist callback failed:",
@@ -1002,6 +1003,24 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     }
     try {
       const games = await completeChunk(chunkText, label);
+      if (!games.length) {
+        const parts = splitOversizedSkeletonChunk(chunkText);
+        if (parts.length >= 2) {
+          console.warn("[ai-identify] empty identify; splitting chunk", {
+            label,
+            parts: parts.length,
+          });
+          const out = [];
+          for (let p = 0; p < parts.length; p += 1) {
+            out.push(
+              ...(await completeChunkWithRetry(parts[p], `${label}/empty-split${p + 1}`))
+            );
+          }
+          return out;
+        }
+        console.warn("[ai-identify] empty identify for unsplittable chunk", { label });
+        return games;
+      }
       persistSuccessfulChunk(chunkText, games, label);
       return games;
     } catch (error) {
