@@ -2795,6 +2795,23 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     async function importOneAiGame(game) {
       const pathKey = String(game.path || "").toLowerCase();
       if (pathKey && seenPaths.has(pathKey)) return null;
+      // Safety net: never create games from voice-pack leaves (TALK/.P0x).
+      try {
+        const { isNonGameAssetPath } = require("../utils/pathSkeleton");
+        if (isNonGameAssetPath(game.path) || isNonGameAssetPath(game.absPath)) {
+          results.push({
+            filePath: game.absPath || game.path,
+            guessedTitle: game.title,
+            identifiedTitle: game.title,
+            status: dryRun ? "would_skip" : "skipped",
+            reason: "asset_evidence_path",
+            gameId: null,
+          });
+          return null;
+        }
+      } catch {
+        // ignore
+      }
       if (pathKey) seenPaths.add(pathKey);
 
       const abs = game.absPath;

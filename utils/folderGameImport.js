@@ -924,12 +924,68 @@ function shellQuote(value) {
 }
 
 /**
+ * True when a game scripts/ wrapper body already targets this local path
+ * (posix, escaped spaces, or Windows JSON-quoted form).
+ */
+function scriptBodyTargetsLocalPath(body, localPath) {
+  const target = path.resolve(String(localPath || ""));
+  if (!target || !body) return false;
+  const posix = target.replace(/\\/g, "/");
+  const variants = [
+    target,
+    posix,
+    shellQuote(target),
+    shellQuote(posix),
+    JSON.stringify(String(target)),
+    JSON.stringify(posix),
+    target.replace(/ /g, "\\ "),
+    posix.replace(/ /g, "\\ "),
+  ];
+  return variants.some((v) => v && body.includes(v));
+}
+
+/**
+ * Existing wrapper under content/games/<id>/scripts that already launches localPath.
+ * @returns {string|null} absolute script path
+ */
+function findExistingLaunchScriptForLocalPath(metadataPath, gameId, localPath) {
+  const scriptsDir = path.join(metadataPath, "content", "games", String(gameId), "scripts");
+  if (!fs.existsSync(scriptsDir)) return null;
+  let files;
+  try {
+    files = fs.readdirSync(scriptsDir);
+  } catch {
+    return null;
+  }
+  for (const file of files) {
+    const ext = path.extname(file).toLowerCase();
+    if (ext !== ".sh" && ext !== ".bat" && ext !== ".cmd") continue;
+    const full = path.join(scriptsDir, file);
+    let body;
+    try {
+      const st = fs.statSync(full);
+      if (!st.isFile() || st.size <= 0 || st.size > 256 * 1024) continue;
+      body = fs.readFileSync(full, "utf8");
+    } catch {
+      continue;
+    }
+    if (scriptBodyTargetsLocalPath(body, localPath)) return full;
+  }
+  return null;
+}
+
+/**
  * Write a launch script that opens/runs the local game path.
+ * Skips creating a new file when one already targets the same localPath
+ * (folder-import exists/re-attach must not duplicate executables).
  * @returns {string} script file path
  */
 function writeLocalPathLaunchScript(metadataPath, gameId, localPath, options = {}) {
   const scriptsDir = path.join(metadataPath, "content", "games", String(gameId), "scripts");
   ensureDirectoryExists(scriptsDir);
+
+  const existing = findExistingLaunchScriptForLocalPath(metadataPath, gameId, localPath);
+  if (existing) return existing;
 
   const label = String(options.label || "folderimport")
     .replace(/[^a-zA-Z0-9_-]/g, "_")
@@ -1003,6 +1059,8 @@ module.exports = {
   pickBestIgdbMatch,
   isAcceptableIgdbMatch,
   writeLocalPathLaunchScript,
+  findExistingLaunchScriptForLocalPath,
+  scriptBodyTargetsLocalPath,
   findLaunchScriptsForGame,
   findMatchingLaunchScript,
   scriptReferencesGamePath,

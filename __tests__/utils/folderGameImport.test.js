@@ -200,6 +200,25 @@ describe("writeLocalPathLaunchScript", () => {
     expect(body).toMatch(/exec /);
     expect(body).toContain(launcher);
   });
+
+  test("does not duplicate when the same localPath is attached again", () => {
+    const launcher = path.join(tmpMeta, "lemm3.sh");
+    fs.writeFileSync(launcher, "#!/bin/bash\necho play\n");
+    const first = writeLocalPathLaunchScript(tmpMeta, 99, launcher, {
+      label: "lemm3",
+      kind: "script",
+      platformId: "13",
+    });
+    const second = writeLocalPathLaunchScript(tmpMeta, 99, launcher, {
+      label: "lemm3",
+      kind: "script",
+      platformId: "13",
+    });
+    expect(second).toBe(first);
+    const scriptsDir = path.join(tmpMeta, "content", "games", "99", "scripts");
+    const files = fs.readdirSync(scriptsDir).filter((f) => /\.(sh|bat)$/i.test(f));
+    expect(files).toHaveLength(1);
+  });
 });
 
 describe("resolveExecutablePlatformId", () => {

@@ -8,8 +8,15 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { buildCompressedFindSkeleton } = require("../../utils/pathSkeleton");
-const { identifyGamesFromSkeleton } = require("../../utils/aiGameIdentify");
+const {
+  buildCompressedFindSkeleton,
+  isAssetEvidenceOnlyChunk,
+  isNonGameAssetPath,
+} = require("../../utils/pathSkeleton");
+const {
+  identifyGamesFromSkeleton,
+  parseSkeletonIdentifyResponse,
+} = require("../../utils/aiGameIdentify");
 const {
   findLaunchScriptsForGame,
   normalizeTitleKey,
@@ -207,6 +214,22 @@ describe("folder import cases", () => {
         "utf8"
       );
       expect(body).toContain(launcherPath);
+
+      // exists/re-attach again must not duplicate wrappers (Lemmings/Battle Chess bug).
+      const before = fs
+        .readdirSync(path.join(gameMetaDir, "scripts"))
+        .filter((f) => /\.(sh|bat)$/i.test(f));
+      for (const launcher of launchers) {
+        writeLocalPathLaunchScript(metadataPath, gameId, launcher.path, {
+          label: launcher.label,
+          kind: "script",
+          platformId: "13",
+        });
+      }
+      const after = fs
+        .readdirSync(path.join(gameMetaDir, "scripts"))
+        .filter((f) => /\.(sh|bat)$/i.test(f));
+      expect(after).toEqual(before);
     });
 
     test("different AI title later does not share titleKey (second game, no exists re-attach)", () => {
@@ -305,6 +328,106 @@ describe("folder import cases", () => {
       const found = findLaunchScriptsForGame(gameDir);
       expect(found.map((f) => f.label)).toEqual(["magiccarpet2"]);
       expect(found[0].path).toBe(launcher);
+    });
+  });
+
+  /**
+   * Voice packs under an install (winginstall/TALK) stay as compact evidence so the
+   * parent game can still be recognized; .P0x / TALK leaves must not become games.
+   */
+  describe("case: voice-pack assets are evidence, not games", () => {
+    let tmpRoot;
+
+    afterEach(() => {
+      if (tmpRoot) {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+        tmpRoot = null;
+      }
+    });
+
+    test("compacts TALK clips and keeps BAT launchers in the skeleton", () => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-wing-"));
+      const wing = path.join(tmpRoot, "dosprograms", "cd", "winginstall");
+      const talk = path.join(wing, "TALK", "ACKBAR");
+      fs.mkdirSync(talk, { recursive: true });
+      fs.writeFileSync(path.join(wing, "XWINGCD.BAT"), "@echo xwing\n");
+      fs.writeFileSync(path.join(wing, "XWINGCD2.BAT"), "@echo xwing2\n");
+      for (let i = 0; i < 40; i += 1) {
+        fs.writeFileSync(path.join(talk, `CLIP${i}.P02`), "x");
+      }
+
+      const sk = buildCompressedFindSkeleton(path.join(tmpRoot, "dosprograms"), {
+        maxChars: 8000,
+        maxLaunchScriptSiblings: 20,
+      });
+      const joined = sk.chunks.join("\n");
+      expect(joined).toMatch(/XWINGCD\.BAT/i);
+      expect(joined).toMatch(/TALK/i);
+      expect(joined).toMatch(/\.\.\.\(\d+\s+assets?\)/i);
+      expect(joined).not.toMatch(/CLIP0\.P02/i);
+      expect(joined).not.toMatch(/HELLO\.P02/i);
+    });
+
+    test("asset-only chunks are detected; .P0x AI paths are dropped", () => {
+      expect(
+        isAssetEvidenceOnlyChunk(
+          "dosprograms{cd{winginstall{TALK{ACKBAR{...(40 assets)}}}}}"
+        )
+      ).toBe(true);
+      expect(
+        isAssetEvidenceOnlyChunk(
+          "dosprograms{cd{winginstall{XWINGCD.BAT,TALK{...(40 assets)}}}}"
+        )
+      ).toBe(false);
+
+      expect(isNonGameAssetPath("cd/winginstall/TALK/ACKBAR/HELLO.P02")).toBe(true);
+      expect(isNonGameAssetPath("cd/winginstall/TALK/ACKBAR")).toBe(true);
+      expect(isNonGameAssetPath("cd/winginstall")).toBe(false);
+      expect(isNonGameAssetPath("cd/winginstall/XWINGCD.BAT")).toBe(false);
+
+      const parsed = parseSkeletonIdentifyResponse(
+        JSON.stringify({
+          games: [
+            {
+              path: "cd/winginstall/TALK/ACKBAR/HELLO.P02",
+              title: "Hello",
+              year: null,
+              platform: "DOS",
+              confidence: 0.9,
+            },
+            {
+              path: "cd/winginstall",
+              title: "X-Wing",
+              year: 1993,
+              platform: "DOS",
+              confidence: 0.95,
+            },
+          ],
+        }),
+        path.join("/tmp", "dosprograms")
+      );
+      expect(parsed.map((g) => g.title)).toEqual(["X-Wing"]);
+    });
+
+    test("identify skips asset-evidence-only chunks without calling the model", async () => {
+      const create = jest.fn(async () => {
+        throw new Error("model should not be called for asset-only chunks");
+      });
+      const out = await identifyGamesFromSkeleton(
+        {
+          rootPath: path.join("/tmp", "dosprograms"),
+          rootName: "dosprograms",
+          chunks: ["dosprograms{cd{winginstall{TALK{ACKBAR{HELLO.P02,DSTAR1.P02}}}}}"],
+        },
+        {
+          env: { OPENAI_API_KEY: "sk-test" },
+          client: { chat: { completions: { create } } },
+          chunkGapMs: 0,
+        }
+      );
+      expect(out.used).toBe(true);
+      expect(create).not.toHaveBeenCalled();
+      expect(out.games).toEqual([]);
     });
   });
 });

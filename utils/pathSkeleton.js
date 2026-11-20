@@ -20,11 +20,88 @@ function skeletonPrefixForRoot(rootPath) {
     .replace(/^\//, "");
 }
 
+/** Voice/speech pack folders — keep as evidence, do not expand every clip. */
+const ASSET_PACK_DIR_NAMES = new Set(["talk", "speech", "voice", "voices", "vocals", "voc"]);
+
+/** Wing Commander-style voice clips and similar non-game leaves. */
+const ASSET_LEAF_EXT_RE = /\.p\d{2}$/i;
+
+function isAssetPackDirName(name) {
+  return ASSET_PACK_DIR_NAMES.has(String(name || "").toLowerCase());
+}
+
+function isAssetLeafName(name) {
+  return ASSET_LEAF_EXT_RE.test(String(name || ""));
+}
+
+/**
+ * True when a skeleton/AI path points at a non-game asset (voice clip, TALK leaf, …).
+ * Parent install folders (winginstall) stay valid game paths.
+ */
+function isNonGameAssetPath(skeletonPath) {
+  const rel = String(skeletonPath || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+  if (!rel) return false;
+  const parts = rel.split("/").filter(Boolean);
+  const base = parts[parts.length - 1] || "";
+  if (isAssetLeafName(base)) return true;
+  if (/^\.\.\.\(\d+\s+assets?\)$/i.test(base)) return true;
+  // Path inside a voice pack folder (…/TALK/… or …/SPEECH/file).
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (isAssetPackDirName(parts[i])) return true;
+  }
+  return false;
+}
+
+/** Count files under a directory (for compact asset markers). */
+function countFilesRecursive(absDir, limit = 50000) {
+  let n = 0;
+  const stack = [absDir];
+  while (stack.length && n < limit) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (ent.name === "." || ent.name === "..") continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) stack.push(full);
+      else if (ent.isFile() || ent.isSymbolicLink()) n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * Chunk is only voice/asset evidence (no BAT/EXE/ISO/… signals).
+ * Used to skip identify / avoid empty-split into Hello/DStar phantoms.
+ */
+function isAssetEvidenceOnlyChunk(chunkText) {
+  const text = String(chunkText || "");
+  if (!text.trim()) return false;
+  const assetLeaves = (text.match(/[^,{}\s/]+\.p\d{2}\b/gi) || []).length;
+  const assetMarkers = (text.match(/\.\.\.\(\d+\s+assets?\)/gi) || []).length;
+  const hasTalk = /(?:^|[/{,])(?:talk|speech|voice|voices|vocals|voc)\{/i.test(text);
+  if (assetLeaves === 0 && assetMarkers === 0 && !hasTalk) return false;
+  const gameSignals = (
+    text.match(/\.(bat|exe|com|sh|iso|cue|img|ima|gog|zip|conf|d64|bin|ccd|mdf)\b/gi) || []
+  ).length;
+  if (gameSignals > 0) return false;
+  return true;
+}
+
 /**
  * List paths like `find <root>` (root + every dir/file), sorted depth-first as walk order
  * with names sorted per directory. Listing paths stay short (chosen-folder basename +
  * relatives) so AI prompts stay small. The full absolute path is returned separately as
  * `rootName` for prompt context only (e.g. …/dreamcast/scripts → platform hint).
+ *
+ * Voice/speech packs (TALK, …) stay as a single folder + `...(N assets)` marker so the AI
+ * still sees evidence without exploding into identify-able clip leaves.
  *
  * @param {string} rootPath absolute folder chosen by the user
  * @returns {{ rootPath: string, rootName: string, listingPrefix: string, paths: string[] }}
@@ -69,10 +146,20 @@ function listFindPaths(rootPath, options = {}) {
       if (maxEntries > 0 && paths.length >= maxEntries) return;
       const rel = relFromRoot ? `${relFromRoot}/${ent.name}` : ent.name;
       paths.push(`${listingPrefix}/${rel}`);
+      // Keep pack as evidence under the parent game; do not list every clip.
+      if (isAssetPackDirName(ent.name)) {
+        const n = countFilesRecursive(path.join(absDir, ent.name));
+        if (n > 0 && (maxEntries <= 0 || paths.length < maxEntries)) {
+          paths.push(`${listingPrefix}/${rel}/...(${n} assets)`);
+        }
+        continue;
+      }
       walk(path.join(absDir, ent.name), rel);
     }
     for (const ent of files) {
       if (maxEntries > 0 && paths.length >= maxEntries) return;
+      // Stray voice clips outside pack dirs still skip as individual listing leaves.
+      if (isAssetLeafName(ent.name)) continue;
       const rel = relFromRoot ? `${relFromRoot}/${ent.name}` : ent.name;
       paths.push(`${listingPrefix}/${rel}`);
     }
@@ -822,6 +909,11 @@ module.exports = {
   isFlatLaunchCandidateTree,
   isLaunchScriptLeafName,
   chunkFlatLaunchSiblings,
+  isAssetPackDirName,
+  isAssetLeafName,
+  isNonGameAssetPath,
+  isAssetEvidenceOnlyChunk,
+  countFilesRecursive,
   splitTopLevelCommaParts,
   splitNestedBraceInHalf,
   splitOversizedSkeletonChunk,

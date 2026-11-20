@@ -51,6 +51,7 @@ const SKELETON_SYSTEM_PROMPT =
   "Use the Import root path only as context for platform/title (e.g. …/dreamcast/scripts → Dreamcast). " +
   "title = official retail/IGDB name with spaces, Chicago-style title case. " +
   "year=first release or null; platform=short hint for that dump (Dreamcast, DOS, PC, SNES, …) or null; confidence 0..1. " +
+  "TALK/SPEECH/VOICE folders and ...(N assets) markers are evidence only — never emit those paths or .P00–.P99 clips as games. " +
   "Skip tools/BIOS/setup/shared/soundfonts. Omit non-games entirely.";
 
 function normalizeIdentifyKey(value) {
@@ -793,10 +794,11 @@ async function identifyGamesWithAi(candidates, options = {}) {
 function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
   return [
     `Import root path (context only — do NOT put this in path fields): ${rootName}.`,
-    "Compressed find listing (nested a{b{c,file}}). Identify every game.",
+    "Compressed find listing (nested a{b{c,file}}). Identify every game dump/folder/launcher.",
     'Return ONLY {"games":[{"path","title","year","platform","confidence"}]} — no markdown.',
     "path = short path as in the listing below (e.g. scripts/nba2k.sh), never the Import root path, never nested-brace syntax.",
     "Use Import root path only to infer platform (dreamcast→Dreamcast, psx→PlayStation, …).",
+    "Voice packs (TALK{...(N assets)}) are context for the parent install — do not invent games from them.",
     "",
     skeletonChunk,
   ].join("\n");
@@ -813,7 +815,7 @@ function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
  * @param {{ index?: Map<string, string[]> }} [options]
  */
 function parseSkeletonIdentifyResponse(rawText, rootPath, options = {}) {
-  const { resolveSkeletonGamePath } = require("./pathSkeleton");
+  const { resolveSkeletonGamePath, isNonGameAssetPath } = require("./pathSkeleton");
   const parsed = extractJsonArray(rawText);
   const index = options.index instanceof Map ? options.index : null;
 
@@ -823,9 +825,12 @@ function parseSkeletonIdentifyResponse(rawText, rootPath, options = {}) {
     const relPath = String(row.path || row.relativePath || "").trim().replace(/\\/g, "/");
     const title = String(row.title || "").trim();
     if (!relPath || !title) continue;
+    // Drop voice-clip / TALK leaf paths even if the model invents titles for them.
+    if (isNonGameAssetPath(relPath)) continue;
     const yearNum = Number(row.year);
     const confidence = Math.max(0, Math.min(1, Number(row.confidence) || 0));
     const resolved = resolveSkeletonGamePath(rootPath, relPath.replace(/^\.\//, ""), { index });
+    if (isNonGameAssetPath(resolved.path)) continue;
     games.push({
       path: resolved.path,
       title,
@@ -988,6 +993,12 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
   }
 
   async function completeChunkWithRetry(chunkText, label) {
+    const { isAssetEvidenceOnlyChunk } = require("./pathSkeleton");
+    // Do not call the model (or empty-split) on TALK-only / voice-only fragments.
+    if (isAssetEvidenceOnlyChunk(chunkText)) {
+      console.warn("[ai-identify] skipping asset-evidence-only chunk", { label });
+      return [];
+    }
     if (chunkCache) {
       const hash = hashSkeletonChunk(config.model, rootName, chunkText);
       const hit = readSkeletonChunk(chunkCache, hash);
@@ -1004,11 +1015,13 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     try {
       const games = await completeChunk(chunkText, label);
       if (!games.length) {
-        const parts = splitOversizedSkeletonChunk(chunkText);
-        if (parts.length >= 2) {
+        const rawParts = splitOversizedSkeletonChunk(chunkText);
+        const parts = rawParts.filter((part) => !isAssetEvidenceOnlyChunk(part));
+        if (rawParts.length >= 2 && parts.length >= 1) {
           console.warn("[ai-identify] empty identify; splitting chunk", {
             label,
             parts: parts.length,
+            droppedAssetParts: rawParts.length - parts.length,
           });
           const out = [];
           for (let p = 0; p < parts.length; p += 1) {
@@ -1025,11 +1038,13 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       return games;
     } catch (error) {
       if (!isRequestTooLargeError(error)) throw error;
-      const parts = splitOversizedSkeletonChunk(chunkText);
-      if (parts.length < 2) throw error;
+      const rawParts = splitOversizedSkeletonChunk(chunkText);
+      const parts = rawParts.filter((part) => !isAssetEvidenceOnlyChunk(part));
+      if (rawParts.length < 2 || parts.length < 1) throw error;
       console.warn("[ai-identify] splitting oversized skeleton chunk", {
         label,
         parts: parts.length,
+        droppedAssetParts: rawParts.length - parts.length,
       });
       const out = [];
       for (let p = 0; p < parts.length; p += 1) {
