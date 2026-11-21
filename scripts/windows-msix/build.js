@@ -206,9 +206,11 @@ function stagePayload() {
 
 function buildLauncher() {
   const outExe = path.join(LAYOUT_DIR, "MyHomeGames.exe");
+  // -buildvcs=false: Go 1.18+ stamps VCS metadata and aborts if `git status
+  // --porcelain` fails (common with newer Go/Apple Git even on a clean tree).
   const result = spawnSync(
     "go",
-    ["build", "-ldflags=-s -w -H windowsgui", "-o", outExe, "."],
+    ["build", "-buildvcs=false", "-ldflags=-s -w -H windowsgui", "-o", outExe, "."],
     {
       cwd: MSIX_DIR,
       env: { ...process.env, GOOS: "windows", GOARCH: "amd64", CGO_ENABLED: "0" },

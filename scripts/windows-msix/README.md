@@ -16,7 +16,7 @@ From `myhomegames-server/`:
 npm run build:win-msix
 ```
 
-Requires **Go 1.21+**. Runs `pkg` (`node18-win-x64`) if `build/` has no Windows server exe.
+Requires **Go 1.21+**. Runs `pkg` (`node18-win-x64`) if `build/` has no Windows server exe. The launcher `go build` uses `-buildvcs=false` so a failing `git status` probe (seen with newer Go / Apple Git) does not abort the pack.
 
 On macOS and Linux this writes a signed `build/MyHomeGames-<version>-win-x64.msix` and `build/MyHomeGames-<version>.cer`, where `<version>` is the same as `package.json` (for example `1.3.0`). The MSIX `Identity` version is that value padded to four parts (`1.3.0.0`). Packing uses [openappx](https://github.com/gianlucamazza/openappx) (Python 3.10+). The first run creates `build/openappx-venv` and a self-signed certificate for `CN=E85A2E78-E3FE-4829-96B9-294CD6CDD7C2` in `build/msix-signing/`, valid through 9999-12-31. Keep that directory: a new certificate must be trusted again on Windows. The package identity is `lucastancapiano.myhomegames-server`.
 

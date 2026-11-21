@@ -203,9 +203,10 @@ function buildWindowsUnifiedExe() {
   ensureWindowsExeIconResources(version);
   const outExe = path.join(BUILD_DIR, `MyHomeGames-${version}-win-x64.exe`);
   const ldflags = `-s -w -H windowsgui -X main.appVersion=${version}`;
+  // -buildvcs=false: avoid hard fail when Go cannot stamp git metadata (Go 1.18+).
   const result = spawnSync(
     "go",
-    ["build", "-ldflags=" + ldflags, "-o", outExe, "."],
+    ["build", "-buildvcs=false", "-ldflags=" + ldflags, "-o", outExe, "."],
     {
       cwd: UNIFIED_EXE_DIR,
       env: { ...process.env, GOOS: "windows", GOARCH: "amd64", CGO_ENABLED: "0" },
