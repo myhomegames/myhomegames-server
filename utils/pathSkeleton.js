@@ -26,12 +26,76 @@ const ASSET_PACK_DIR_NAMES = new Set(["talk", "speech", "voice", "voices", "voca
 /** Wing Commander-style voice clips and similar non-game leaves. */
 const ASSET_LEAF_EXT_RE = /\.p\d{2}$/i;
 
+/** Audio / cutscene / driver blobs that rarely help retail naming. */
+const BULK_MEDIA_EXT_RE =
+  /\.(wav|dig|voc|yop|mid|rmi|xmi|cms|cmp|xa|raw|pcm|vab|vh|vb|smp|snd|voc|iff|lbm|pic|anm)$/i;
+
+/** Launch / disc signals — do not compact a tree that contains these. */
+const LAUNCH_OR_DISC_EXT_RE = /\.(exe|com|bat|cmd|iso|cue|chd|sh|conf)$/i;
+
 function isAssetPackDirName(name) {
   return ASSET_PACK_DIR_NAMES.has(String(name || "").toLowerCase());
 }
 
 function isAssetLeafName(name) {
   return ASSET_LEAF_EXT_RE.test(String(name || ""));
+}
+
+function isBulkMediaLeafName(name) {
+  const base = String(name || "");
+  return isAssetLeafName(base) || BULK_MEDIA_EXT_RE.test(base);
+}
+
+/**
+ * If a subdirectory tree has no launchers/discs and is mostly media blobs,
+ * return file count so the listing can keep a single `...(N assets)` marker.
+ * Saves tokens without removing parent game folders that still have EXE/BAT.
+ *
+ * @returns {number|null}
+ */
+function countBulkMediaOnlyTree(absDir, options = {}) {
+  const minFiles = Number.isFinite(options.minFiles) ? Math.max(4, options.minFiles) : 12;
+  const mediaRatio = Number.isFinite(options.mediaRatio) ? options.mediaRatio : 0.65;
+  const visitLimit = Number.isFinite(options.visitLimit) ? options.visitLimit : 8000;
+  let files = 0;
+  let media = 0;
+  let launchers = 0;
+  let visited = 0;
+  const stack = [absDir];
+
+  while (stack.length && visited < visitLimit) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (ent.name === "." || ent.name === "..") continue;
+      visited += 1;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (isAssetPackDirName(ent.name)) {
+          const n = countFilesRecursive(full);
+          files += n;
+          media += n;
+        } else {
+          stack.push(full);
+        }
+        continue;
+      }
+      if (!(ent.isFile() || ent.isSymbolicLink())) continue;
+      files += 1;
+      if (LAUNCH_OR_DISC_EXT_RE.test(ent.name)) launchers += 1;
+      else if (isBulkMediaLeafName(ent.name)) media += 1;
+    }
+  }
+
+  if (launchers > 0) return null;
+  if (files < minFiles) return null;
+  if (files > 0 && media / files < mediaRatio) return null;
+  return files;
 }
 
 /**
@@ -153,6 +217,17 @@ function listFindPaths(rootPath, options = {}) {
           paths.push(`${listingPrefix}/${rel}/...(${n} assets)`);
         }
         continue;
+      }
+      // Compact WAV/DIG/YOP-only trees (e.g. COLC/LANGE) — titles come from
+      // file_id.diz / ISO PVD evidence, not from hundreds of media basenames.
+      if (options.compactBulkMedia !== false) {
+        const bulkCount = countBulkMediaOnlyTree(path.join(absDir, ent.name));
+        if (bulkCount != null) {
+          if (maxEntries <= 0 || paths.length < maxEntries) {
+            paths.push(`${listingPrefix}/${rel}/...(${bulkCount} assets)`);
+          }
+          continue;
+        }
       }
       walk(path.join(absDir, ent.name), rel);
     }
@@ -911,8 +986,10 @@ module.exports = {
   chunkFlatLaunchSiblings,
   isAssetPackDirName,
   isAssetLeafName,
+  isBulkMediaLeafName,
   isNonGameAssetPath,
   isAssetEvidenceOnlyChunk,
+  countBulkMediaOnlyTree,
   countFilesRecursive,
   splitTopLevelCommaParts,
   splitNestedBraceInHalf,

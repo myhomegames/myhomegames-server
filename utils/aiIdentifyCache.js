@@ -7,7 +7,8 @@ const { ensureDirectoryExists } = require("./fileUtils");
 
 const CACHE_VERSION = 1;
 const CACHE_RELATIVE = path.join("cache", "ai-game-identify.json");
-const CHUNK_CACHE_VERSION = 1;
+/** Bumped when prompt/evidence hashing changes so stale Cite/AI130 titles are not reused. */
+const CHUNK_CACHE_VERSION = 2;
 const CHUNK_CACHE_RELATIVE = path.join("cache", "ai-skeleton-chunks.json");
 
 function cacheFilePath(metadataPath) {
@@ -28,11 +29,16 @@ function emptyChunkCache() {
 
 /**
  * Stable key for a skeleton AI request so retries can skip completed chunks.
+ * Include title-evidence text so file_id.diz / ISO PVD changes invalidate the cache.
  */
-function hashSkeletonChunk(model, rootName, chunkText) {
+function hashSkeletonChunk(model, rootName, chunkText, evidenceText = "") {
   return crypto
     .createHash("sha256")
-    .update(`${String(model || "")}\n${String(rootName || "")}\n${String(chunkText || "")}`)
+    .update(
+      `${String(model || "")}\n${String(rootName || "")}\n${String(chunkText || "")}\n${String(
+        evidenceText || ""
+      )}`
+    )
     .digest("hex");
 }
 

@@ -430,4 +430,173 @@ describe("folder import cases", () => {
       expect(out.games).toEqual([]);
     });
   });
+
+  /**
+   * Opaque DOS folders (COLC) and ISO dumps: title evidence in the prompt,
+   * bulk media compacted, ISO+unpacked collapsed to one retail title.
+   */
+  describe("case: title evidence and lean skeletons", () => {
+    let tmpRoot;
+
+    afterEach(() => {
+      if (tmpRoot) {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+        tmpRoot = null;
+      }
+    });
+
+    function writeMinimalIso(filePath, { volumeId = "TEST", application = "" } = {}) {
+      const sector = 2048;
+      const buf = Buffer.alloc(17 * sector, 0);
+      const pvd = Buffer.alloc(sector, 0x20);
+      pvd[0] = 1;
+      pvd.write("CD001", 1, "ascii");
+      pvd.write(String(volumeId).padEnd(32).slice(0, 32), 40, "ascii");
+      pvd.write(String(application).padEnd(128).slice(0, 128), 574, "ascii");
+      pvd.copy(buf, 16 * sector);
+      fs.writeFileSync(filePath, buf);
+    }
+
+    test("COLC skeleton keeps file_id.diz and compacts LANGE media trees", () => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-colc-sk-"));
+      const root = path.join(tmpRoot, "dosprograms");
+      const colc = path.join(root, "games", "COLC");
+      const lange = path.join(colc, "LANGE", "S101");
+      fs.mkdirSync(lange, { recursive: true });
+      fs.writeFileSync(path.join(colc, "CITE.EXE"), "x");
+      fs.writeFileSync(
+        path.join(colc, "file_id.diz"),
+        "Name:City of Lost Children, The\nYear:1997\nPublisher:Psygnosis Limited\n"
+      );
+      for (let i = 0; i < 20; i += 1) {
+        fs.writeFileSync(path.join(lange, `101PE${i}.WAV`), "x");
+      }
+
+      const sk = buildCompressedFindSkeleton(root, { maxChars: 8000 });
+      const joined = sk.chunks.join("\n");
+      expect(joined).toMatch(/CITE\.EXE/i);
+      expect(joined).toMatch(/file_id\.diz/i);
+      expect(joined).toMatch(/LANGE/i);
+      expect(joined).toMatch(/\.\.\.\(\d+\s+assets?\)/i);
+      expect(joined).not.toMatch(/101PE0\.WAV/i);
+      // Listing is much smaller than expanding every WAV.
+      expect(joined.length).toBeLessThan(2500);
+    });
+
+    test("identify prompt includes COLC file_id.diz evidence for naming", async () => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-colc-ai-"));
+      const root = path.join(tmpRoot, "dosprograms");
+      const colc = path.join(root, "games", "COLC");
+      fs.mkdirSync(colc, { recursive: true });
+      fs.writeFileSync(path.join(colc, "CITE.EXE"), "x");
+      fs.writeFileSync(
+        path.join(colc, "file_id.diz"),
+        "Name:City of Lost Children, The\nYear:1997\n"
+      );
+
+      const sk = buildCompressedFindSkeleton(root, { maxChars: 8000 });
+      const create = jest.fn(async ({ messages }) => {
+        const prompt = String(messages[1].content);
+        expect(prompt).toMatch(/Title evidence/i);
+        expect(prompt).toMatch(/City of Lost Children/i);
+        expect(prompt).toMatch(/Prefer Title evidence/i);
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  games: [
+                    {
+                      path: "games/COLC",
+                      title: "The City of Lost Children",
+                      year: 1997,
+                      platform: "DOS",
+                      confidence: 0.95,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        };
+      });
+
+      const out = await identifyGamesFromSkeleton(sk, {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+        chunkGapMs: 0,
+      });
+      expect(create).toHaveBeenCalled();
+      expect(out.games).toHaveLength(1);
+      expect(out.games[0].title).toMatch(/City of Lost Children/i);
+    });
+
+    test("ISO PVD evidence is attached and ISO+unpacked merge to one title", async () => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ai130-"));
+      const root = path.join(tmpRoot, "dosprograms");
+      const cd = path.join(root, "cd");
+      const unpacked = path.join(root, "games", "alienincident");
+      fs.mkdirSync(cd, { recursive: true });
+      fs.mkdirSync(unpacked, { recursive: true });
+      writeMinimalIso(path.join(cd, "AI130.iso"), {
+        volumeId: "AI130",
+        application: "Alien Incident v1.11",
+      });
+      fs.writeFileSync(path.join(unpacked, "AI.EXE"), "x");
+      fs.writeFileSync(
+        path.join(unpacked, "file_id.diz"),
+        "Name:Alien Incident\nYear:1996\n"
+      );
+
+      const sk = buildCompressedFindSkeleton(root, { maxChars: 8000 });
+      const create = jest.fn(async ({ messages }) => {
+        const prompt = String(messages[1].content);
+        const games = [];
+        if (/AI130\.iso/i.test(prompt)) {
+          expect(prompt).toMatch(/Alien Incident/i);
+          games.push({
+            path: "cd/AI130.iso",
+            title: "Alien Incident",
+            year: 1996,
+            platform: "DOS",
+            confidence: 0.85,
+          });
+        }
+        if (/alienincident/i.test(prompt)) {
+          expect(prompt).toMatch(/Alien Incident/i);
+          games.push({
+            path: "games/alienincident",
+            title: "Alien Incident",
+            year: 1996,
+            platform: "DOS",
+            confidence: 0.95,
+          });
+        }
+        return {
+          choices: [{ message: { content: JSON.stringify({ games }) } }],
+        };
+      });
+
+      const imported = [];
+      const out = await identifyGamesFromSkeleton(sk, {
+        env: { OPENAI_API_KEY: "sk-test" },
+        client: { chat: { completions: { create } } },
+        chunkGapMs: 0,
+        onChunkGames: async (games) => {
+          imported.push(...games.map((g) => ({ path: g.path, title: g.title })));
+        },
+      });
+
+      expect(out.games).toHaveLength(1);
+      expect(out.games[0].title).toBe("Alien Incident");
+      expect(out.games[0].path).toBe("games/alienincident");
+      expect(out.games[0].alternatePaths || []).toEqual(
+        expect.arrayContaining(["cd/AI130.iso"])
+      );
+      // Both paths were offered to the importer (re-attach), same retail title.
+      const titles = new Set(imported.map((g) => normalizeTitleKey(g.title)));
+      expect(titles.has("alienincident")).toBe(true);
+      expect([...titles]).toHaveLength(1);
+    });
+  });
 });

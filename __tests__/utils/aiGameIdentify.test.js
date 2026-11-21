@@ -600,6 +600,20 @@ describe("identifyGamesFromSkeleton", () => {
     );
     expect(prompt).toMatch(/path = short path as in the listing/);
     expect(prompt).toContain("scripts{nba2k.sh}");
+    expect(prompt).toMatch(/Prefer Title evidence/);
+  });
+
+  test("skeleton user prompt appends Title evidence when provided", () => {
+    const prompt = buildSkeletonIdentifyPrompt(
+      "dosprograms{games{COLC{CITE.EXE,file_id.diz}}}",
+      "dosprograms",
+      {
+        evidenceText:
+          "games/COLC: file_id.diz: Name:City of Lost Children, The | Year:1997",
+      }
+    );
+    expect(prompt).toMatch(/Title evidence \(prefer for official names\)/);
+    expect(prompt).toMatch(/City of Lost Children/);
   });
 
   test("sends nested-compressed skeleton chunk to the model", async () => {
@@ -747,7 +761,7 @@ describe("identifyGamesFromSkeleton", () => {
 
     // Simulate rate-limit after only chunk A was saved, then resume.
     const resumedCache = loadSkeletonChunkCache(dir);
-    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA);
+    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA, "");
     expect(readSkeletonChunk(resumedCache, hashA)?.games[0]?.title).toBe("Game A");
 
     create.mockClear();
@@ -819,7 +833,7 @@ describe("identifyGamesFromSkeleton", () => {
     expect(out.games.map((g) => g.title)).toEqual(["Game A"]);
     expect(out.used).toBe(true);
     const reloaded = loadSkeletonChunkCache(dir);
-    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA);
+    const hashA = hashSkeletonChunk("gpt-4o-mini", "dosprograms", chunkA, "");
     expect(readSkeletonChunk(reloaded, hashA)?.games[0]?.title).toBe("Game A");
     fs.rmSync(dir, { recursive: true, force: true });
   });

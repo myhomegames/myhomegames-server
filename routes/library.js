@@ -2700,6 +2700,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     const results = [];
     const seenCatalogIds = new Set();
     const seenTitleKeys = new Set();
+    /** titleKey → gameId created/seen in this import (ISO + unpacked re-attach). */
+    const titleKeyToGameId = new Map();
     const seenPaths = new Set();
     const chunkTotal = Math.max(1, skeleton.chunks.length);
 
@@ -2861,7 +2863,28 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         }
 
         const titleKey = normalizeTitleKey(searchTitle);
+        // Same retail title already imported this run (e.g. cd/*.iso then games/unpacked).
         if (titleKey && seenTitleKeys.has(titleKey)) {
+          const priorId = titleKeyToGameId.get(titleKey);
+          if (priorId && !dryRun) {
+            entry.status = "exists";
+            entry.gameId = priorId;
+            entry.reason = "duplicate_title_reattach";
+            entry.catalogName = allGames[priorId]?.title || searchTitle;
+            if (canSearchCatalog) {
+              attachExistingLaunchScripts(
+                priorId,
+                abs,
+                [],
+                aiPlatform,
+                allGames[priorId]?.platforms || []
+              );
+            } else {
+              attachLaunchersWithoutCatalog(priorId, abs, aiPlatform);
+            }
+            results.push(entry);
+            return entry;
+          }
           entry.status = dryRun ? "would_skip" : "skipped";
           entry.reason = "duplicate_title";
           results.push(entry);
@@ -2873,7 +2896,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.status = "exists";
           entry.gameId = existingByTitle.id;
           entry.catalogName = existingByTitle.title || null;
-          if (titleKey) seenTitleKeys.add(titleKey);
+          if (titleKey) {
+            seenTitleKeys.add(titleKey);
+            titleKeyToGameId.set(titleKey, existingByTitle.id);
+          }
           if (canSearchCatalog) {
             // IGDB mode: only re-attach when the game already has local platform tags.
             attachExistingLaunchScripts(
@@ -3017,7 +3043,10 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
           entry.status = "created";
         }
 
-        if (titleKey) seenTitleKeys.add(titleKey);
+        if (titleKey) {
+          seenTitleKeys.add(titleKey);
+          if (gameId != null) titleKeyToGameId.set(titleKey, gameId);
+        }
         entry.gameId = gameId;
         if (gameId != null && match?.id) {
           const catalogPlatforms =

@@ -49,7 +49,12 @@ const SKELETON_SYSTEM_PROMPT =
   "path = short path exactly as in the listing (e.g. scripts/nba2k.sh or dosprograms/games/alleycat), never nested-brace syntax. " +
   "Do NOT prepend the Import root path onto path values — keep paths short. " +
   "Use the Import root path only as context for platform/title (e.g. …/dreamcast/scripts → Dreamcast). " +
-  "title = official retail/IGDB name with spaces, Chicago-style title case. " +
+  "title = official retail name with spaces, Chicago-style title case. " +
+  "When a Title evidence section is present, prefer that text over folder/exe acronyms " +
+  "(file_id.diz Name:, ISO application/volume ids, README). " +
+  "Never invent a retail title from a short acronym alone (COLC, AFT, AI130, DTU) when evidence exists. " +
+  "ISO dumps and unpacked folders of the same game must share one retail title. " +
+  "Emit one path per distinct game (prefer the install folder or disc image root, not nested SETUP/data leaves). " +
   "year=first release or null; platform=short hint for that dump (Dreamcast, DOS, PC, SNES, …) or null; confidence 0..1. " +
   "TALK/SPEECH/VOICE folders and ...(N assets) markers are evidence only — never emit those paths or .P00–.P99 clips as games. " +
   "Skip tools/BIOS/setup/shared/soundfonts. Omit non-games entirely.";
@@ -791,17 +796,24 @@ async function identifyGamesWithAi(candidates, options = {}) {
   }
 }
 
-function buildSkeletonIdentifyPrompt(skeletonChunk, rootName) {
-  return [
+function buildSkeletonIdentifyPrompt(skeletonChunk, rootName, options = {}) {
+  const evidenceText = String(options.evidenceText || "").trim();
+  const lines = [
     `Import root path (context only — do NOT put this in path fields): ${rootName}.`,
     "Compressed find listing (nested a{b{c,file}}). Identify every game dump/folder/launcher.",
     'Return ONLY {"games":[{"path","title","year","platform","confidence"}]} — no markdown.',
     "path = short path as in the listing below (e.g. scripts/nba2k.sh), never the Import root path, never nested-brace syntax.",
     "Use Import root path only to infer platform (dreamcast→Dreamcast, psx→PlayStation, …).",
-    "Voice packs (TALK{...(N assets)}) are context for the parent install — do not invent games from them.",
+    "Prefer Title evidence (file_id.diz / ISO PVD / README) over folder or exe acronyms when naming.",
+    "ISO + unpacked install of the same game → one retail title (do not emit slug titles like AI 130).",
+    "Voice packs and ...(N assets) markers are context for the parent install — do not invent games from them.",
     "",
     skeletonChunk,
-  ].join("\n");
+  ];
+  if (evidenceText) {
+    lines.push("", "Title evidence (prefer for official names):", evidenceText);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -946,10 +958,10 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     });
   }
 
-  function persistSuccessfulChunk(chunkText, games, label) {
+  function persistSuccessfulChunk(chunkText, games, label, evidenceText = "") {
     const list = Array.isArray(games) ? games : [];
     if (chunkCache) {
-      const hash = hashSkeletonChunk(config.model, rootName, chunkText);
+      const hash = hashSkeletonChunk(config.model, rootName, chunkText, evidenceText);
       writeSkeletonChunk(chunkCache, hash, list, {
         model: config.model,
         label,
@@ -973,8 +985,29 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
     }
   }
 
-  async function completeChunk(chunkText, label) {
-    const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName);
+  function evidenceForChunk(chunkText) {
+    try {
+      const { collectChunkTitleEvidence } = require("./titleEvidence");
+      return collectChunkTitleEvidence(rootPath, chunkText, findPathsForIndex, {
+        listingPrefix,
+        maxChars: Number.isFinite(options.maxEvidenceChars)
+          ? options.maxEvidenceChars
+          : undefined,
+      });
+    } catch (err) {
+      console.warn("[ai-identify] title evidence failed:", err?.message || err);
+      return "";
+    }
+  }
+
+  function chunkCacheHash(chunkText, evidenceText) {
+    return hashSkeletonChunk(config.model, rootName, chunkText, evidenceText);
+  }
+
+  async function completeChunk(chunkText, label, evidenceText) {
+    const prompt = buildSkeletonIdentifyPrompt(chunkText, rootName, {
+      evidenceText,
+    });
     apiCalls += 1;
     const completion = await createJsonCompletion(client, {
       model: config.model,
@@ -999,8 +1032,9 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       console.warn("[ai-identify] skipping asset-evidence-only chunk", { label });
       return [];
     }
+    const evidenceText = evidenceForChunk(chunkText);
     if (chunkCache) {
-      const hash = hashSkeletonChunk(config.model, rootName, chunkText);
+      const hash = chunkCacheHash(chunkText, evidenceText);
       const hit = readSkeletonChunk(chunkCache, hash);
       if (hit) {
         cacheHits += 1;
@@ -1008,12 +1042,13 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
           label,
           hash: hash.slice(0, 12),
           games: hit.games.length,
+          evidenceChars: evidenceText.length,
         });
         return hydrateCachedGames(hit.games);
       }
     }
     try {
-      const games = await completeChunk(chunkText, label);
+      const games = await completeChunk(chunkText, label, evidenceText);
       if (!games.length) {
         const rawParts = splitOversizedSkeletonChunk(chunkText);
         const parts = rawParts.filter((part) => !isAssetEvidenceOnlyChunk(part));
@@ -1034,7 +1069,7 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
         console.warn("[ai-identify] empty identify for unsplittable chunk", { label });
         return games;
       }
-      persistSuccessfulChunk(chunkText, games, label);
+      persistSuccessfulChunk(chunkText, games, label, evidenceText);
       return games;
     } catch (error) {
       if (!isRequestTooLargeError(error)) throw error;
@@ -1069,10 +1104,14 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       baseURL: config.baseURL || null,
       chunkCache: Boolean(chunkCache),
     });
+    const { mergeGamesByTitleKey } = require("./titleEvidence");
+    const { normalizeTitleKey } = require("./folderGameImport");
+
     for (let i = 0; i < chunks.length; i++) {
       const label = `skeleton ${i + 1}/${chunks.length}`;
+      const evidencePreview = evidenceForChunk(chunks[i]);
       const hash = chunkCache
-        ? hashSkeletonChunk(config.model, rootName, chunks[i])
+        ? hashSkeletonChunk(config.model, rootName, chunks[i], evidencePreview)
         : null;
       const willHit =
         hash && chunkCache ? Boolean(readSkeletonChunk(chunkCache, hash)) : false;
@@ -1100,6 +1139,9 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
         }
         newlyMerged.push(game);
       }
+      // Within a chunk, collapse nested leaves that share a retail title.
+      // Cross-chunk ISO + unpacked re-attach is handled by the import caller.
+      const dedupedForImport = mergeGamesByTitleKey(newlyMerged, normalizeTitleKey);
       if (onProgress) {
         onProgress({
           phase: "ai",
@@ -1111,8 +1153,8 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
         });
       }
       // Import as soon as a chunk is identified (caller may add games immediately).
-      if (onChunkGames && newlyMerged.length > 0) {
-        await onChunkGames(newlyMerged, {
+      if (onChunkGames && dedupedForImport.length > 0) {
+        await onChunkGames(dedupedForImport, {
           batchIndex: i + 1,
           batchCount: chunks.length,
           candidateCount: byPath.size,
@@ -1122,7 +1164,7 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       }
     }
 
-    const games = Array.from(byPath.values());
+    const games = mergeGamesByTitleKey(Array.from(byPath.values()), normalizeTitleKey);
     const results = games.map((g) => ({
       isGame: true,
       title: g.title,
@@ -1151,7 +1193,9 @@ async function identifyGamesFromSkeleton(skeleton, options = {}) {
       },
     };
   } catch (error) {
-    const partialGames = Array.from(byPath.values());
+    const { mergeGamesByTitleKey: mergePartial } = require("./titleEvidence");
+    const { normalizeTitleKey: normPartial } = require("./folderGameImport");
+    const partialGames = mergePartial(Array.from(byPath.values()), normPartial);
     const retryAfterMs =
       Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : parseRetryAfterMs(error);
     const errorCode =
