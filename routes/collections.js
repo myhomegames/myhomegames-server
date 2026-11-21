@@ -29,6 +29,7 @@ const {
   applySummaryEdit,
 } = require("../utils/metadataLocale");
 const { retranslateAllSummaryLocales } = require("../utils/autoTranslateGameMetadata");
+const { syncGameExecutablesFromDisk } = require("../utils/gameExecutables");
 
 const CONTENT_FOLDER = "collections";
 
@@ -321,6 +322,8 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           ? game.websites.map((u) => (typeof u === "string" ? { url: u } : (u && u.url ? { url: String(u.url) } : null))).filter(Boolean)
           : null;
         const typeId = coerceToGameTypeId(game.type);
+        // Always re-read scripts from disk (same as library games list).
+        const executables = syncGameExecutablesFromDisk(metadataPath, game);
         const row = {
           id: game.id,
           title: game.title,
@@ -330,7 +333,7 @@ function registerCollectionsRoutes(app, requireToken, metadataPath, metadataGame
           month: game.month || null,
           year: game.year || null,
           stars: game.stars || null,
-          executables: game.executables || null,
+          executables,
           themes: game.themes || null,
           platforms: game.platforms || null,
           gameModes: game.gameModes || null,

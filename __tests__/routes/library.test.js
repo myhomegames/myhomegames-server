@@ -2557,6 +2557,44 @@ describe('POST /catalog/import-game', () => {
   });
 });
 
+describe('POST /games/import-from-folder', () => {
+  test('should return 503 when AI is not configured', async () => {
+    const prevKey = process.env.OPENAI_API_KEY;
+    const prevAlias = process.env.MHG_AI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.MHG_AI_API_KEY;
+    try {
+      const response = await request(app)
+        .post('/games/import-from-folder')
+        .set('X-Auth-Token', 'test-token')
+        .send({ folderPath: '/tmp' })
+        .expect(503);
+      expect(response.body.error).toMatch(/AI game identification/i);
+    } finally {
+      if (prevKey != null) process.env.OPENAI_API_KEY = prevKey;
+      else delete process.env.OPENAI_API_KEY;
+      if (prevAlias != null) process.env.MHG_AI_API_KEY = prevAlias;
+      else delete process.env.MHG_AI_API_KEY;
+    }
+  });
+
+  test('should return 400 if folderPath is missing when AI is configured', async () => {
+    const prevKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-test-import-folder';
+    try {
+      const response = await request(app)
+        .post('/games/import-from-folder')
+        .set('X-Auth-Token', 'test-token')
+        .send({})
+        .expect(400);
+      expect(response.body).toHaveProperty('error', 'Missing required field: folderPath');
+    } finally {
+      if (prevKey != null) process.env.OPENAI_API_KEY = prevKey;
+      else delete process.env.OPENAI_API_KEY;
+    }
+  });
+});
+
 describe('POST /games/create', () => {
   test('should create game from scratch and return game with timestamp-based id', async () => {
     const response = await request(app)

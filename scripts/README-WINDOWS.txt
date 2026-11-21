@@ -25,10 +25,14 @@ This starts the server in the background (no server console window) and shows an
 in the system tray (notification area, near the clock). After the first launch you can
 also start it from the Windows Start Menu: **MyHomeGames Server**.
 
+By default the server starts automatically at Windows logon (Startup folder shortcut).
+Right-click the tray icon and uncheck **Start with Windows** to disable that.
+
 Right-click the tray icon for:
 
   - Open web app
   - Open API (browser)
+  - Start with Windows (checkbox; on by default)
   - About…
   - Quit server
 

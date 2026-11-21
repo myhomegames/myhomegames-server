@@ -13,6 +13,7 @@ const {
   pickCompanyByTitle,
   resolveParentRefForHierarchyLink,
   linkCompanyRelationsFromMergeBody,
+  syncCompanyProfilesAfterGameImport,
 } = require("../../utils/catalogCompany");
 const { loadRoleItemById, saveRoleItem } = require("../../utils/companyStorage");
 
@@ -540,5 +541,24 @@ describe("linkCompanyRelationsFromMergeBody", () => {
     const parent = loadRoleItemById(metadataPath, "developers", 10);
     expect(parent?.childs).toEqual(expect.arrayContaining([11]));
     expect(loadRoleItemById(metadataPath, "developers", 11)?.title).toBe("Former Dev");
+  });
+});
+
+describe("syncCompanyProfilesAfterGameImport", () => {
+  test("no-ops without IGDB credentials or company lists", async () => {
+    await expect(
+      syncCompanyProfilesAfterGameImport("/tmp/mhg-unused", {
+        developers: [{ id: 1, name: "A" }],
+        publishers: [{ id: 2, name: "B" }],
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      syncCompanyProfilesAfterGameImport("/tmp/mhg-unused", {
+        accessToken: "tok",
+        clientId: "cid",
+        developers: [],
+        publishers: null,
+      })
+    ).resolves.toBeUndefined();
   });
 });

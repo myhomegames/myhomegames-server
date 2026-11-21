@@ -146,6 +146,7 @@ func ensureStartMenuShortcut(targetExe string) error {
 		return fmt.Errorf("missing APPDATA or target")
 	}
 	programsDir := filepath.Dir(lnk)
+	// IconLocation points at the exe resource index 0 (embedded via go-winres at build).
 	ps := fmt.Sprintf(
 		"$ErrorActionPreference='Stop'; "+
 			"New-Item -ItemType Directory -Force -Path '%s' | Out-Null; "+
@@ -153,11 +154,13 @@ func ensureStartMenuShortcut(targetExe string) error {
 			"$s.TargetPath='%s'; "+
 			"$s.WorkingDirectory='%s'; "+
 			"$s.Description='MyHomeGames Server'; "+
+			"$s.IconLocation='%s,0'; "+
 			"$s.Save()",
 		escapePSSingleQuoted(programsDir),
 		escapePSSingleQuoted(lnk),
 		escapePSSingleQuoted(targetExe),
 		escapePSSingleQuoted(filepath.Dir(targetExe)),
+		escapePSSingleQuoted(targetExe),
 	)
 	cmd := exec.Command(
 		"powershell.exe",

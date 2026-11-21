@@ -6,7 +6,9 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 
-const GITHUB_RELEASES_API = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest";
+const { releaseAssetName, resolveGithubReleaseAsset } = require("./githubRelease");
+
+const SUNSHINE_GITHUB_REPO = "LizardByte/Sunshine";
 const INSTALL_MANIFEST = "install.json";
 const MIN_DMG_BYTES = 5 * 1024 * 1024;
 const MIN_ARCHIVE_BYTES = 1024 * 1024;
@@ -64,41 +66,6 @@ function detectPlatformAsset() {
   return null;
 }
 
-function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    const request = https.get(
-      url,
-      {
-        headers: {
-          "User-Agent": "myhomegames-server",
-          Accept: "application/vnd.github+json",
-        },
-      },
-      (response) => {
-        let body = "";
-        response.on("data", (chunk) => {
-          body += chunk;
-        });
-        response.on("end", () => {
-          if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-            try {
-              resolve(JSON.parse(body));
-            } catch (error) {
-              reject(error);
-            }
-            return;
-          }
-          reject(new Error(`HTTP ${response.statusCode} for ${url}`));
-        });
-      },
-    );
-    request.on("error", reject);
-    request.setTimeout(30_000, () => {
-      request.destroy(new Error(`Timed out fetching ${url}`));
-    });
-  });
-}
-
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
@@ -146,25 +113,18 @@ async function resolveLatestSunshineAsset(env = process.env) {
   if (!platformAsset) {
     throw new Error(`Sunshine auto-install is not supported on ${process.platform}/${process.arch}`);
   }
-
-  const release = pinned
-    ? await fetchJson(`https://api.github.com/repos/LizardByte/Sunshine/releases/tags/v${pinned.replace(/^v/i, "")}`)
-    : await fetchJson(GITHUB_RELEASES_API);
-
-  const tag = String(release.tag_name || "").replace(/^v/i, "");
-  const assets = Array.isArray(release.assets) ? release.assets : [];
-  const asset = assets.find((item) => platformAsset.assetPattern.test(item.name));
-  if (!asset?.browser_download_url) {
+  const assetName = releaseAssetName(platformAsset.assetPattern);
+  if (!assetName) {
     throw new Error(`No Sunshine release asset found for ${process.platform}/${process.arch}`);
   }
 
-  return {
-    version: tag,
-    name: asset.name,
-    url: asset.browser_download_url,
-    kind: platformAsset.kind,
-    size: typeof asset.size === "number" ? asset.size : null,
-  };
+  const asset = await resolveGithubReleaseAsset({
+    repo: SUNSHINE_GITHUB_REPO,
+    assetName,
+    tag: pinned ? `v${pinned.replace(/^v/i, "")}` : null,
+    env,
+  });
+  return { ...asset, kind: platformAsset.kind };
 }
 
 function validateDownloadedArchive(archivePath, kind, expectedSize) {
@@ -440,7 +400,20 @@ async function ensureSunshineBinary({ metadataPath, env = process.env } = {}) {
   const downloadsDir = resolveSunshineDownloadsDir(installDir);
   fs.mkdirSync(downloadsDir, { recursive: true });
 
-  const asset = await resolveLatestSunshineAsset(env);
+  let asset;
+  try {
+    asset = await resolveLatestSunshineAsset(env);
+  } catch (error) {
+    const manifest = readInstallManifest(installDir);
+    const existingExecutable = findSunshineExecutable(installDir);
+    if (manifest?.version && existingExecutable) {
+      console.warn(
+        `Could not check Sunshine releases (${error.message}). Using installed ${manifest.version}.`,
+      );
+      return { installDir, executable: existingExecutable, version: manifest.version };
+    }
+    throw error;
+  }
   const manifest = readInstallManifest(installDir);
   const existingExecutable = findSunshineExecutable(installDir);
   if (manifest?.version === asset.version && existingExecutable) {

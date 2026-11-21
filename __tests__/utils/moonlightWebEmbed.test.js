@@ -1,3 +1,7 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
 jest.mock("../../utils/moonlightWebCredentials", () => ({
   requestMoonlightWebJson: jest.fn(),
 }));
@@ -9,9 +13,13 @@ const {
   attachMoonlightStopHook,
   buildMoonlightDesktopStreamUrl,
   ensureMoonlightEnterFullscreenDefault,
+  ensureMoonlightWebDefaultUser,
+  patchMoonlightStaticFullscreenAssets,
+  repairMoonlightWebV3Config,
   shouldUseMoonlightTvProfile,
   MOONLIGHT_TV_STREAM_SETTINGS,
   MOONLIGHT_STREAM_HTML_PATH,
+  MOONLIGHT_MODULE_ALIAS,
 } = require("../../utils/moonlightWebEmbed");
 
 describe("moonlightWebEmbed", () => {
@@ -120,5 +128,201 @@ describe("moonlightWebEmbed", () => {
     const url = buildMoonlightDesktopStreamUrl("https://ml.example", 9, 1);
     expect(url).toBe(`https://ml.example/${MOONLIGHT_STREAM_HTML_PATH}?hostId=9&appId=1`);
     expect(new URL(url).pathname.endsWith("stream.html")).toBe(true);
+  });
+
+  it("sets the v3 default user through the API and drops the legacy config field", async () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-user-"));
+    fs.mkdirSync(path.join(packageRoot, "server"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "server", "config.json"),
+      `${JSON.stringify({ web_server: { default_user_id: 1 }, webrtc: { ice_servers: [] } }, null, 2)}\n`,
+    );
+    requestMoonlightWebJson
+      .mockResolvedValueOnce({
+        body: JSON.stringify({ users: [{ id: 7, name: "sunshine", role: "Admin" }] }),
+      })
+      .mockResolvedValueOnce({ body: JSON.stringify({ id: null }) })
+      .mockResolvedValueOnce({ body: "" });
+
+    const result = await ensureMoonlightWebDefaultUser({
+      baseUrl: "http://127.0.0.1:8080",
+      cookie: "mlSession=x",
+      username: "sunshine",
+      packageRoot,
+    });
+
+    expect(result).toEqual({ applied: true, userId: 7, restarted: false });
+    const put = requestMoonlightWebJson.mock.calls.find((call) => call[0].method === "PUT");
+    expect(put[0].urlString).toBe("http://127.0.0.1:8080/api/user/default");
+    expect(put[0].body).toEqual({ id: 7 });
+    const config = JSON.parse(fs.readFileSync(path.join(packageRoot, "server", "config.json"), "utf8"));
+    expect(config.web_server).toBeUndefined();
+    expect(config.webrtc).toEqual({ ice_servers: [] });
+  });
+
+  it("keeps the v2 config.json default user when the v3 route is missing", async () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-user-"));
+    fs.mkdirSync(path.join(packageRoot, "server"), { recursive: true });
+    requestMoonlightWebJson
+      .mockResolvedValueOnce({
+        body: JSON.stringify({ users: [{ id: 7, name: "sunshine", role: "Admin" }] }),
+      })
+      .mockRejectedValueOnce(new Error("GET /api/user/default failed (404): not found"));
+
+    const result = await ensureMoonlightWebDefaultUser({
+      baseUrl: "http://127.0.0.1:8080/",
+      cookie: "mlSession=x",
+      packageRoot,
+    });
+
+    expect(result.restarted).toBe(true);
+    expect(result.userId).toBe(7);
+    const config = JSON.parse(fs.readFileSync(path.join(packageRoot, "server", "config.json"), "utf8"));
+    expect(config.web_server.default_user_id).toBe(7);
+    expect(requestMoonlightWebJson.mock.calls.some((call) => call[0].method === "PUT")).toBe(false);
+  });
+
+  it("patches the v3 webpack bundle without loading the old module graph", () => {
+    const staticRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-static-"));
+    const bundle = [
+      `// MHG entry ${MOONLIGHT_MODULE_ALIAS}`,
+      '(()=>{"use strict";',
+      "this.autoEnterFullscreenOnStart=s.enterFullscreenOnStreamStart;",
+      'this.exitStreamButton.addEventListener("click",()=>pu(this,void 0,void 0,function*(){const e=this.app.getStream();e&&((yield e.stop())||console.debug("Failed to close stream correctly")),yu()}));',
+      '"connectionComplete"==l.type){const e=bu.stream.connectionComplete;this.text.innerText=e,this.debugLog(e),j(null)}',
+      "onClose(){j(null)}",
+      "registerBufferedControllers(){const e=navigator.getGamepads();",
+      "const n=navigator.getGamepads()[t.gamepadIndex];if(!n)continue;",
+      "const r=this.gamepadRumbleCurrent[n],o=navigator.getGamepads()[n];",
+      "for(const e of navigator.getGamepads())null!=e&&this.onGamepadAdd(e)",
+      "this.audioElement.autoplay=!0,this.audioElement.muted=!0,this.audioElement.srcObject=this.stream",
+      "onUserInteraction(){this.audioElement.muted=!1}",
+      "onUserInteraction(){if(this.tryRequestMicrophone(),",
+      "setTrack(e){this.oldTrack&&(this.stream.removeTrack(this.oldTrack),this.oldTrack=null),this.stream.addTrack(e),this.oldTrack=e}",
+      'catch(e){return null===(t=this.logger)||void 0===t||t.debug(`Failed to aquire microphone: ${e}`),void d("Failed to aquire microphone!")}',
+      'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
+      'const e=()=>{document.removeEventListener("pointerlockerror",e),t.requestPointerLock()};',
+      "requestPointerLock(){return pu(this,arguments,void 0,function*(e=!1){this.previousMouseMode=this.inputConfig.mouseMode;",
+      "this.requestFullscreen().then(()=>{this.isFullscreen()||this.armFullscreenOnNextInteraction()}),0)",
+      "navigator.mediaDevices.getUserMedia({audio:!0})",
+      '"/host/stream/web_socket"',
+      "})();",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(staticRoot, "stream.js"), bundle);
+    fs.writeFileSync(
+      path.join(staticRoot, `mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js`),
+      `import { Stream } from '/stream/index.${MOONLIGHT_MODULE_ALIAS}.js';\n`,
+    );
+    fs.writeFileSync(path.join(staticRoot, `stream.${MOONLIGHT_MODULE_ALIAS}.js`), bundle);
+    fs.writeFileSync(
+      path.join(staticRoot, "stream.html"),
+      '<!doctype html><html><head><base href="/" /><script src=./config.js></script>' +
+        `<script type="module" src="/mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js"></script>` +
+        `<script type="module" src="/stream.${MOONLIGHT_MODULE_ALIAS}.js"></script>` +
+        '</head><body><script src=stream.js></script></body></html>',
+    );
+
+    const first = patchMoonlightStaticFullscreenAssets(staticRoot);
+    const second = patchMoonlightStaticFullscreenAssets(staticRoot);
+    expect(first.applied).toBeGreaterThan(0);
+    expect(second.applied).toBe(0);
+
+    const js = fs.readFileSync(path.join(staticRoot, "stream.js"), "utf8");
+    expect(js.startsWith("(()=>")).toBe(true);
+    expect(js).toContain("this.autoEnterFullscreenOnStart=true");
+    expect(js).toContain('get("mhgStop")');
+    expect(js).toContain('dispatchEvent(new Event("ml-connected"))');
+    expect(js).toContain("getGamepads()||[]");
+    expect(js).toContain("catch(_mhgGp){return}");
+    expect(js).toContain("catch(_mhgGp){o=null}");
+    expect(js).toContain("window.__MHG_TV__");
+    expect(js).toContain("this.audioElement.play()");
+    expect(js).toContain(
+      '!(typeof window!=="undefined"&&window.__MHG_TV__)&&this.tryRequestMicrophone()',
+    );
+    expect(js).not.toContain("0&&this.tryRequestMicrophone()");
+    expect(js).not.toContain("catch(_mhgPl){}");
+    expect(js).toContain('window.__MHG_TV__)return;this.previousMouseMode');
+    expect(js).toContain("Failed to aquire microphone");
+    expect(js).toContain(
+      'catch(e){if(!(e instanceof Error&&"NotSupportedError"==e.name))throw e;t.requestPointerLock()}',
+    );
+    expect(js).not.toContain('_mhgP.innerHTML=""');
+    expect(js).not.toContain("import { Stream }");
+    expect(fs.existsSync(path.join(staticRoot, "stream", "index.js"))).toBe(false);
+    expect(fs.existsSync(path.join(staticRoot, `mhg-boot.${MOONLIGHT_MODULE_ALIAS}.js`))).toBe(false);
+    expect(fs.existsSync(path.join(staticRoot, `stream.${MOONLIGHT_MODULE_ALIAS}.js`))).toBe(false);
+
+    const html = fs.readFileSync(path.join(staticRoot, "stream.html"), "utf8");
+    expect(html).not.toContain("type=\"module\"");
+    expect(html.match(new RegExp(`<script src="/stream\\.js\\?mhg=42"><\\/script>`, "g"))).toHaveLength(1);
+    expect(html).toContain('id="mhg-v3-boot"');
+    expect(html).toContain("mlSettings");
+    expect(html).toContain("tv-modal-focus");
+    expect(html).toContain("10009");
+    expect(html).toContain("data-mhg-tv");
+    expect(html).toContain("100vw");
+    expect(html).toContain("unlockMedia");
+    expect(html).toContain("setInterval(unlockMedia");
+    expect(html).toContain('proto.requestFullscreen = noopResolved');
+    expect(html).toContain("enterFullscreenOnStreamStart\":false");
+    expect(html).not.toContain("req.call(el");
+    expect(html).not.toContain("innerHTML = \"\"");
+    expect(js).toContain(".catch(function(){}),0)");
+    expect(js).toContain("this.audioElement.volume=1");
+    expect(js).toContain("this.stream.addTrack(e),this.oldTrack=e;if(typeof window");
+    const versioned = fs.readFileSync(
+      path.join(staticRoot, MOONLIGHT_MODULE_ALIAS, "stream.html"),
+      "utf8",
+    );
+    expect(versioned).toBe(html);
+  });
+
+  it("removes a v3 web_server section that only stored the legacy default user", () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-cfg-"));
+    fs.mkdirSync(path.join(packageRoot, "server"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "server", "config.json"),
+      `${JSON.stringify({ web_server: { default_user_id: 7 }, webrtc: { ice_servers: [] } }, null, 2)}\n`,
+    );
+
+    expect(repairMoonlightWebV3Config(packageRoot, "3.0.0")).toBe(true);
+    expect(repairMoonlightWebV3Config(packageRoot, "3.0.0")).toBe(false);
+    const config = JSON.parse(fs.readFileSync(path.join(packageRoot, "server", "config.json"), "utf8"));
+    expect(config.web_server).toBeUndefined();
+    expect(config.webrtc).toEqual({ ice_servers: [] });
+  });
+
+  it("keeps other v3 web_server settings and fills the required fields", () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-cfg-"));
+    fs.mkdirSync(path.join(packageRoot, "server"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "server", "config.json"),
+      `${JSON.stringify({ web_server: { url_path_prefix: "/ml", default_user_id: 1 } }, null, 2)}\n`,
+    );
+
+    expect(repairMoonlightWebV3Config(packageRoot, "3.0.0")).toBe(true);
+    const config = JSON.parse(fs.readFileSync(path.join(packageRoot, "server", "config.json"), "utf8"));
+    expect(config.web_server).toEqual({
+      url_path_prefix: "/ml",
+      certificate: null,
+      forwarded_header: null,
+      first_login_create_admin: true,
+      first_login_assign_global_hosts: true,
+    });
+  });
+
+  it("leaves a v2 config.json default user in place", () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-ml-cfg-"));
+    fs.mkdirSync(path.join(packageRoot, "server"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "server", "config.json"),
+      `${JSON.stringify({ web_server: { default_user_id: 4 } }, null, 2)}\n`,
+    );
+
+    expect(repairMoonlightWebV3Config(packageRoot, "2.9.0")).toBe(false);
+    const config = JSON.parse(fs.readFileSync(path.join(packageRoot, "server", "config.json"), "utf8"));
+    expect(config.web_server.default_user_id).toBe(4);
   });
 });

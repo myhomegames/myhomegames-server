@@ -79,6 +79,7 @@ fs.chmodSync(originalExecutablePath, '755');
 // This solves the bouncing icon issue by providing a proper GUI app
 const swiftWrapper = `import Cocoa
 import Foundation
+import ServiceManagement
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var serverProcess: Process?
@@ -86,9 +87,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var serverReady = false
     private let readyLock = NSLock()
     private var readyFlagPath = ""
+    /// Menu items that mirror the "Open at Login" preference (app menu + status menu).
+    var startAtLoginMenuItems: [NSMenuItem] = []
     
     /// Wait until Node writes the ready flag / "Server ready" (Sunshine, Moonlight, tunnel).
     private let readyTimeoutSeconds: TimeInterval = 600
+    private let startAtLoginDefaultsKey = "startAtLogin"
+    private let launchAgentLabel = "com.myhomegames.server"
     
     private func isServerReady() -> Bool {
         readyLock.lock()
@@ -99,6 +104,104 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         return false
+    }
+    
+    private var launchAgentPlistURL: URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\\(launchAgentLabel).plist")
+    }
+    
+    private func preferredStartAtLogin() -> Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: startAtLoginDefaultsKey) == nil {
+            return true // default ON
+        }
+        return defaults.bool(forKey: startAtLoginDefaultsKey)
+    }
+    
+    private func isLaunchAgentInstalled() -> Bool {
+        FileManager.default.fileExists(atPath: launchAgentPlistURL.path)
+    }
+    
+    private func setLaunchAgent(enabled: Bool) {
+        let fm = FileManager.default
+        let plistURL = launchAgentPlistURL
+        if enabled {
+            let appPath = Bundle.main.bundlePath
+            let plist: [String: Any] = [
+                "Label": launchAgentLabel,
+                "ProgramArguments": ["/usr/bin/open", "-a", appPath],
+                "RunAtLoad": true,
+            ]
+            do {
+                try fm.createDirectory(
+                    at: plistURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let data = try PropertyListSerialization.data(
+                    fromPropertyList: plist,
+                    format: .xml,
+                    options: 0
+                )
+                try data.write(to: plistURL, options: .atomic)
+                let load = Process()
+                load.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                load.arguments = ["load", "-w", plistURL.path]
+                try? load.run()
+                load.waitUntilExit()
+            } catch {
+                print("Failed to install LaunchAgent: \\(error)")
+            }
+        } else {
+            if fm.fileExists(atPath: plistURL.path) {
+                let unload = Process()
+                unload.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                unload.arguments = ["unload", "-w", plistURL.path]
+                try? unload.run()
+                unload.waitUntilExit()
+                try? fm.removeItem(at: plistURL)
+            }
+        }
+    }
+    
+    private func applyStartAtLogin(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: startAtLoginDefaultsKey)
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    if SMAppService.mainApp.status != .enabled {
+                        try SMAppService.mainApp.register()
+                    }
+                } else if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("SMAppService start-at-login failed (\\(error)); falling back to LaunchAgent")
+                setLaunchAgent(enabled: enabled)
+                refreshStartAtLoginMenuState()
+                return
+            }
+            // Prefer SMAppService; remove any legacy LaunchAgent so we do not double-launch.
+            setLaunchAgent(enabled: false)
+        } else {
+            setLaunchAgent(enabled: enabled)
+        }
+        refreshStartAtLoginMenuState()
+    }
+    
+    func refreshStartAtLoginMenuState() {
+        let on = preferredStartAtLogin()
+        let state: NSControl.StateValue = on ? .on : .off
+        for item in startAtLoginMenuItems {
+            item.state = state
+        }
+    }
+    
+    @objc func toggleStartAtLogin(_ sender: Any?) {
+        let next = !preferredStartAtLogin()
+        applyStartAtLogin(next)
     }
     
     private func consumeStdout(_ chunk: String) {
@@ -135,6 +238,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Default ON: register login item on first launch; re-apply saved preference afterwards.
+        applyStartAtLogin(preferredStartAtLogin())
+        
         beginLoadingDockCue()
         
         // Get the bundle path
@@ -355,6 +461,7 @@ struct AboutStrings {
 
 struct MenuStrings {
     let aboutApp: String
+    let startAtLogin: String
     let quitApp: String
     let quit: String
     static var current: MenuStrings {
@@ -363,11 +470,13 @@ struct MenuStrings {
     }
     static let en = MenuStrings(
         aboutApp: "About ${APP_NAME}",
+        startAtLogin: "Open at Login",
         quitApp: "Quit ${APP_NAME}",
         quit: "Quit"
     )
     static let it = MenuStrings(
         aboutApp: "Informazioni su ${APP_NAME}",
+        startAtLogin: "Apri al login",
         quitApp: "Esci da ${APP_NAME}",
         quit: "Esci"
     )
@@ -388,6 +497,14 @@ appMenuItem.submenu = appMenu
 let aboutItem = NSMenuItem(title: menuL.aboutApp, action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
 aboutItem.target = delegate
 appMenu.addItem(aboutItem)
+let startAtLoginAppItem = NSMenuItem(
+    title: menuL.startAtLogin,
+    action: #selector(AppDelegate.toggleStartAtLogin(_:)),
+    keyEquivalent: ""
+)
+startAtLoginAppItem.target = delegate
+appMenu.addItem(startAtLoginAppItem)
+delegate.startAtLoginMenuItems.append(startAtLoginAppItem)
 appMenu.addItem(NSMenuItem.separator())
 appMenu.addItem(NSMenuItem(title: menuL.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 NSApp.mainMenu = mainMenu
@@ -399,8 +516,18 @@ if let button = statusItem.button {
     button.toolTip = "MyHomeGames Server"
 }
 let statusMenu = NSMenu()
+let startAtLoginStatusItem = NSMenuItem(
+    title: menuL.startAtLogin,
+    action: #selector(AppDelegate.toggleStartAtLogin(_:)),
+    keyEquivalent: ""
+)
+startAtLoginStatusItem.target = delegate
+statusMenu.addItem(startAtLoginStatusItem)
+delegate.startAtLoginMenuItems.append(startAtLoginStatusItem)
+statusMenu.addItem(NSMenuItem.separator())
 statusMenu.addItem(NSMenuItem(title: menuL.quit, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 statusItem.menu = statusMenu
+delegate.refreshStartAtLoginMenuState()
 
 app.run()
 `;
@@ -413,10 +540,13 @@ fs.writeFileSync(swiftSourcePath, swiftWrapper);
 const swiftExecutablePath = path.join(MACOS_PATH, APP_NAME);
 try {
   console.log('Compiling Swift wrapper...');
-  execSync(`swiftc -o "${swiftExecutablePath}" "${swiftSourcePath}"`, {
-    stdio: 'inherit',
-    cwd: BUILD_DIR
-  });
+  execSync(
+    `swiftc -framework ServiceManagement -framework AppKit -o "${swiftExecutablePath}" "${swiftSourcePath}"`,
+    {
+      stdio: 'inherit',
+      cwd: BUILD_DIR
+    }
+  );
   fs.chmodSync(swiftExecutablePath, '755');
   // Clean up Swift source
   fs.unlinkSync(swiftSourcePath);

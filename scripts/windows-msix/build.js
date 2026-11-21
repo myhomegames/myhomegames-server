@@ -27,11 +27,12 @@ const PUBLISHER_DISPLAY_NAME = "it.vige";
 const PACKAGE_NAME = "lucastancapiano.myhomegames-server";
 const DISPLAY_NAME = "myhomegames-server";
 
-function readPackageJson() {
-  return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
+/** Same version as the server (`package.json`). */
+function packageVersion() {
+  return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8")).version;
 }
 
-/** MSIX Identity Version is four numeric parts. */
+/** MSIX Identity Version is four numeric parts (prerelease suffixes are dropped). */
 function msixVersion(version) {
   const core = String(version).split("-")[0];
   const parts = core.split(".").map((n) => {
@@ -117,7 +118,8 @@ function manifestXml(version) {
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
-  IgnorableNamespaces="uap rescap virtualization">
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  IgnorableNamespaces="uap uap5 rescap virtualization">
   <Identity
     Name="${PACKAGE_NAME}"
     Publisher="${PUBLISHER}"
@@ -148,6 +150,17 @@ function manifestXml(version) {
         BackgroundColor="#1a1a1a"
         Square150x150Logo="Assets\\Square150x150Logo.png"
         Square44x44Logo="Assets\\Square44x44Logo.png" />
+      <Extensions>
+        <uap5:Extension
+          Category="windows.startupTask"
+          Executable="MyHomeGames.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:StartupTask
+            TaskId="MyHomeGamesServer"
+            Enabled="true"
+            DisplayName="MyHomeGames Server" />
+        </uap5:Extension>
+      </Extensions>
     </Application>
   </Applications>
   <Capabilities>
@@ -393,21 +406,21 @@ function packOnWindows(outFile, cerOut) {
 }
 
 /**
- * Stage build/msix-layout and, on Windows, produce a signed build/MyHomeGames-<ver>-win-x64.msix.
+ * Stage build/msix-layout and produce a signed build/MyHomeGames-<package.json version>-win-x64.msix.
  * @param {{ ensurePkg?: boolean }} [options]
  */
 function buildWindowsMsix(options = {}) {
   if (options.ensurePkg && !findWinExe()) {
     runPkgWindowsOnly();
   }
-  const packageVersion = readPackageJson().version;
-  const version = msixVersion(packageVersion);
-  const outFile = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}-win-x64.msix`);
-  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${packageVersion}.cer`);
+  const pkgVersion = packageVersion();
+  const identityVersion = msixVersion(pkgVersion);
+  const outFile = path.join(BUILD_DIR, `MyHomeGames-${pkgVersion}-win-x64.msix`);
+  const cerOut = path.join(BUILD_DIR, `MyHomeGames-${pkgVersion}.cer`);
   resetLayout();
   stagePayload();
   buildLauncher();
-  fs.writeFileSync(path.join(LAYOUT_DIR, "AppxManifest.xml"), manifestXml(version));
+  fs.writeFileSync(path.join(LAYOUT_DIR, "AppxManifest.xml"), manifestXml(identityVersion));
   const assets = path.join(LAYOUT_DIR, "Assets");
   writeLogo(path.join(assets, "Square44x44Logo.png"), 44);
   writeLogo(path.join(assets, "Square150x150Logo.png"), 150);
@@ -419,7 +432,7 @@ function buildWindowsMsix(options = {}) {
     packSignedMsix(LAYOUT_DIR, outFile, cerOut);
   }
 
-  console.log(`✅ Windows MSIX: ${path.basename(outFile)}`);
+  console.log(`✅ Windows MSIX: ${path.basename(outFile)} (Identity ${identityVersion})`);
   console.log(`   Public cert: ${cerOut}`);
   console.log("   On Windows, enable sideload (or Developer Mode), then:");
   console.log(`   Import-Certificate -FilePath ${path.basename(cerOut)} -CertStoreLocation Cert:\\CurrentUser\\TrustedPeople`);
@@ -430,6 +443,7 @@ function buildWindowsMsix(options = {}) {
 module.exports = {
   PACKAGE_NAME,
   PUBLISHER,
+  packageVersion,
   msixVersion,
   buildWindowsMsix,
   packSignedMsix,

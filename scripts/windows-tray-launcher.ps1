@@ -212,6 +212,89 @@ if (Test-Path -LiteralPath $trayIconPath) {
 $notifyIcon.Visible = $true
 $notifyIcon.Text = "MyHomeGames Server - running"
 
+# --- Start with Windows (default ON; tray checkbox can disable) ---
+$AutostartPrefPath = Join-Path $env:LOCALAPPDATA "MyHomeGames\autostart.enabled"
+$StartupLnkPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\MyHomeGames Server.lnk"
+$StableLauncher = Join-Path $env:LOCALAPPDATA "MyHomeGames\MyHomeGames.exe"
+
+function Get-AutostartPreferred {
+  if (-not (Test-Path -LiteralPath $AutostartPrefPath)) { return $true }
+  try {
+    $v = (Get-Content -LiteralPath $AutostartPrefPath -Raw -ErrorAction Stop).Trim()
+    return ($v -ne "0")
+  } catch {
+    return $true
+  }
+}
+
+function Get-AutostartShortcutTarget {
+  if ($StableLauncher -and (Test-Path -LiteralPath $StableLauncher)) {
+    return @{ TargetPath = $StableLauncher; Arguments = ""; WorkingDirectory = (Split-Path -Parent $StableLauncher) }
+  }
+  # MSIX / packaged: launch via AppsFolder AUMID when possible
+  try {
+    $pkg = Get-AppxPackage -Name "lucastancapiano.myhomegames-server" -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($pkg -and $pkg.PackageFamilyName) {
+      $aumid = "$($pkg.PackageFamilyName)!Server"
+      return @{
+        TargetPath = (Join-Path $env:WINDIR "explorer.exe")
+        Arguments = "shell:AppsFolder\$aumid"
+        WorkingDirectory = $env:WINDIR
+      }
+    }
+  } catch {}
+  return $null
+}
+
+function Set-AutostartEnabled([bool]$Enabled) {
+  $prefDir = Split-Path -Parent $AutostartPrefPath
+  try {
+    if (-not (Test-Path -LiteralPath $prefDir)) {
+      New-Item -ItemType Directory -Force -Path $prefDir | Out-Null
+    }
+    Set-Content -LiteralPath $AutostartPrefPath -Value ($(if ($Enabled) { "1" } else { "0" })) -NoNewline -Encoding ascii
+  } catch {
+    Write-TrayErrorLog -Section "Autostart preference" -Detail $_.Exception.ToString()
+  }
+
+  if (-not $Enabled) {
+    try {
+      if (Test-Path -LiteralPath $StartupLnkPath) {
+        Remove-Item -LiteralPath $StartupLnkPath -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+    return
+  }
+
+  $target = Get-AutostartShortcutTarget
+  if (-not $target) {
+    Write-TrayErrorLog -Section "Autostart shortcut" -Detail "No stable launcher or MSIX package found for Startup shortcut."
+    return
+  }
+  try {
+    $startupDir = Split-Path -Parent $StartupLnkPath
+    if (-not (Test-Path -LiteralPath $startupDir)) {
+      New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
+    }
+    $w = New-Object -ComObject WScript.Shell
+    $s = $w.CreateShortcut($StartupLnkPath)
+    $s.TargetPath = $target.TargetPath
+    $s.Arguments = $target.Arguments
+    $s.WorkingDirectory = $target.WorkingDirectory
+    $s.Description = "MyHomeGames Server"
+    if ($target.TargetPath -like "*.exe") {
+      $s.IconLocation = "$($target.TargetPath),0"
+    }
+    $s.Save()
+  } catch {
+    Write-TrayErrorLog -Section "Autostart shortcut" -Detail $_.Exception.ToString()
+  }
+}
+
+# Apply preference on every tray start (first run defaults to ON).
+Set-AutostartEnabled (Get-AutostartPreferred)
+
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
 $itemOpenWeb = New-Object System.Windows.Forms.ToolStripMenuItem("Open web app")
@@ -225,6 +308,16 @@ $itemOpenApi.add_Click({
   try { Start-Process $apiBase } catch {}
 })
 [void]$menu.Items.Add($itemOpenApi)
+
+[void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$itemAutostart = New-Object System.Windows.Forms.ToolStripMenuItem("Start with Windows")
+$itemAutostart.CheckOnClick = $true
+$itemAutostart.Checked = Get-AutostartPreferred
+$itemAutostart.add_Click({
+  Set-AutostartEnabled $itemAutostart.Checked
+})
+[void]$menu.Items.Add($itemAutostart)
 
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 

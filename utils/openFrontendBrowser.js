@@ -9,6 +9,7 @@ const MAC_BROWSERS = [
   { name: "Microsoft Edge", kind: "chromium" },
   { name: "Brave Browser", kind: "chromium" },
   { name: "Arc", kind: "chromium" },
+  { name: "Comet", kind: "chromium" },
   { name: "Vivaldi", kind: "chromium" },
   { name: "Chromium", kind: "chromium" },
   { name: "Opera", kind: "chromium" },
@@ -16,17 +17,27 @@ const MAC_BROWSERS = [
   { name: "Safari", kind: "safari" },
 ];
 
+/**
+ * Split an http(s) URL without the URL constructor.
+ * macOS JXA (JavaScriptCore) does not provide URL, so tab matching must stay on strings.
+ */
+function splitHttpUrl(value) {
+  const match = /^(https?):\/\/([^/?#]+)([^?#]*)/i.exec(String(value || "").trim());
+  if (!match) return null;
+  let pathname = match[3] || "/";
+  if (!pathname.startsWith("/")) pathname = `/${pathname}`;
+  return {
+    protocol: `${match[1].toLowerCase()}:`,
+    host: match[2].toLowerCase(),
+    pathname,
+  };
+}
+
 /** True when an open tab is already the FRONTEND_URL app, including its routes. */
 function urlMatchesFrontend(openUrl, target) {
-  let open;
-  let want;
-  try {
-    open = new URL(openUrl);
-    want = new URL(target);
-  } catch {
-    return false;
-  }
-  if (open.protocol !== "http:" && open.protocol !== "https:") return false;
+  const open = splitHttpUrl(openUrl);
+  const want = splitHttpUrl(target);
+  if (!open || !want) return false;
   if (open.protocol !== want.protocol || open.host !== want.host) return false;
   const base = want.pathname.endsWith("/") ? want.pathname : `${want.pathname}/`;
   const path = open.pathname.endsWith("/") ? open.pathname : `${open.pathname}/`;
@@ -50,18 +61,26 @@ function run(argv) {
   var target = argv[0];
   var browsers = ${JSON.stringify(MAC_BROWSERS)};
 
+  function splitHttpUrl(value) {
+    var match = /^(https?):\/\/([^/?#]+)([^?#]*)/i.exec(String(value || "").trim());
+    if (!match) return null;
+    var pathname = match[3] || "/";
+    if (pathname.charAt(0) !== "/") pathname = "/" + pathname;
+    return {
+      protocol: match[1].toLowerCase() + ":",
+      host: match[2].toLowerCase(),
+      pathname: pathname
+    };
+  }
+
   function matches(openUrl) {
-    try {
-      var open = new URL(openUrl);
-      var want = new URL(target);
-      if (open.protocol !== "http:" && open.protocol !== "https:") return false;
-      if (open.protocol !== want.protocol || open.host !== want.host) return false;
-      var base = want.pathname.charAt(want.pathname.length - 1) === "/" ? want.pathname : want.pathname + "/";
-      var path = open.pathname.charAt(open.pathname.length - 1) === "/" ? open.pathname : open.pathname + "/";
-      return path === base || path.indexOf(base) === 0;
-    } catch (error) {
-      return false;
-    }
+    var open = splitHttpUrl(openUrl);
+    var want = splitHttpUrl(target);
+    if (!open || !want) return false;
+    if (open.protocol !== want.protocol || open.host !== want.host) return false;
+    var base = want.pathname.charAt(want.pathname.length - 1) === "/" ? want.pathname : want.pathname + "/";
+    var path = open.pathname.charAt(open.pathname.length - 1) === "/" ? open.pathname : open.pathname + "/";
+    return path === base || path.indexOf(base) === 0;
   }
 
   var running = [];

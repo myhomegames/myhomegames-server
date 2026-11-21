@@ -179,11 +179,17 @@ function readLaunchScriptCommandLine(scriptPath) {
 /**
  * Absolute paths embedded in a launch command (ROM, conf, iso, exe, …).
  * Longer / more specific paths are preferred for pkill matching.
+ *
+ * Unquoted tokens may use shell escapes (`Monster\ World\ IV.zip`, `\(USA\)`);
+ * those must be consumed as one path so pgrep matches the real process argv
+ * (which has spaces, not backslashes).
  */
 function extractLaunchCommandPaths(commandLine) {
   if (!commandLine) return [];
   const paths = [];
-  const re = /(?:^|[\s=])("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:\/|~\/|[A-Za-z]:\\)[^\s"']+)/g;
+  // Quoted string, or absolute path whose body allows \-escaped spaces/parens.
+  const re =
+    /(?:^|[\s=])("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:\/|~\/|[A-Za-z]:[\\/])(?:\\.|[^\s"'])+)/g;
   let match;
   while ((match = re.exec(commandLine)) !== null) {
     let token = match[1];
@@ -193,6 +199,7 @@ function extractLaunchCommandPaths(commandLine) {
     ) {
       token = token.slice(1, -1);
     }
+    // Unescape shell sequences (`\ `, `\(`, `\)`) so the matcher matches process argv.
     token = token.replace(/\\(.)/g, "$1").trim();
     if (!token) continue;
     if (token.startsWith("~/")) {

@@ -16,3 +16,5 @@ npm run build:win-unified
 ```
 
 Requires **Go 1.21+**. Requires the Windows server exe in `build/` (script runs `pkg` if missing). Output includes **`MyHomeGames-<ver>-win-x64.zip`** (archive of the `.exe`).
+
+The build runs **`go-winres`** (auto-installed if missing) to embed `scripts/assets/app-icon-1024.png` into the PE so Explorer / Start Menu show the MyHomeGames icon instead of the generic Windows application icon.
