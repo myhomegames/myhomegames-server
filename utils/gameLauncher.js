@@ -164,16 +164,28 @@ function killProcessTree(pid) {
 }
 
 /**
- * First non-empty, non-comment line of a launch script (typical MHG one-liner).
+ * Non-empty, non-comment body of a launch script, joined into one line for path
+ * extraction / process matching.
+ *
+ * Wine/Crossover scripts are often split across lines:
+ *   cd "/…/Goody_…(Bennu2007)" &&
+ *   WINEPREFIX=… wine64 "/…/Goody the remake.exe"
+ * Using only the first line would match the folder `cd` and miss the .exe, so
+ * TV Back /streaming/stop cannot find the running Wine process.
  */
 function readLaunchScriptCommandLine(scriptPath) {
   const raw = fs.readFileSync(scriptPath, "utf8");
+  const parts = [];
   for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
+    let trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    return trimmed;
+    // Shell line-continuation backslash.
+    if (trimmed.endsWith("\\")) {
+      trimmed = trimmed.slice(0, -1).trimEnd();
+    }
+    parts.push(trimmed);
   }
-  return "";
+  return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -277,14 +289,29 @@ function killProcessesMatchingLaunchScript(scriptPath) {
     const compact = commandLine.replace(/\s+/g, " ").trim().slice(0, 180);
     if (compact.length >= 12) matchers.push(compact);
   }
+  // Wine often shows only the Windows .exe basename in ps/pgrep, not the Unix path.
+  for (const p of [...matchers]) {
+    if (!/\.(exe|bat|cmd)$/i.test(p)) continue;
+    const base = path.basename(p);
+    if (base.length >= 8 && !matchers.includes(base)) matchers.push(base);
+  }
   if (matchers.length === 0) {
     return { ok: false, reason: "no-matcher" };
   }
 
-  const tryMatchers =
+  // Prefer content/.exe matchers; still try a Wine basename when present.
+  const tryMatchers = [];
+  const primary =
     matchers.length > 1 && scoreLaunchMatcher(matchers[0]) >= 1000
       ? matchers.slice(0, 1)
       : matchers.slice(0, 2);
+  for (const m of primary) {
+    if (!tryMatchers.includes(m)) tryMatchers.push(m);
+  }
+  for (const m of matchers) {
+    if (tryMatchers.length >= 3) break;
+    if (/\.(exe|bat|cmd)$/i.test(m) && !tryMatchers.includes(m)) tryMatchers.push(m);
+  }
 
   if (process.platform === "win32") {
     const matched = [];

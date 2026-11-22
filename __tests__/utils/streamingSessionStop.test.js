@@ -97,4 +97,35 @@ describe("streamingSessionStop", () => {
     );
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("joins multiline Wine cd && wine64 scripts so the .exe is used for stop matching", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mhg-wine-launch-"));
+    const script = path.join(dir, "01-goody.sh");
+    fs.writeFileSync(
+      script,
+      [
+        "#!/bin/bash",
+        "",
+        'cd "/Volumes/Elements/Dropbox/private/winprograms/prefix/drive_c/Program Files/Goody_the_remake_version1.5(Bennu2007)" &&',
+        "WINE_FULLSCREEN_FSR=1 WINEPREFIX=/Volumes/Elements/Dropbox/private/winprograms/prefix /Applications/Wine\\ Crossover.app/Contents/Resources/wine/bin/wine64 /Volumes/Elements/Dropbox/private/winprograms/prefix/drive_c/Program\\ Files/Goody_the_remake_version1.5\\(Bennu2007\\)/Goody\\ the\\ remake.exe",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const line = readLaunchScriptCommandLine(script);
+    expect(line).toMatch(/wine64/);
+    expect(line).toMatch(/Goody\\ the\\ remake\.exe/);
+    // Must not stop at the cd-only first line (that broke TV Back for Goody).
+    expect(line.startsWith("cd ")).toBe(true);
+    expect(line).toContain("&&");
+
+    const paths = extractLaunchCommandPaths(line);
+    expect(paths[0]).toBe(
+      "/Volumes/Elements/Dropbox/private/winprograms/prefix/drive_c/Program Files/Goody_the_remake_version1.5(Bennu2007)/Goody the remake.exe",
+    );
+    expect(paths).toContain(
+      "/Applications/Wine Crossover.app/Contents/Resources/wine/bin/wine64",
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
