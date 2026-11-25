@@ -2442,6 +2442,38 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       String(req.headers.accept || "").includes("text/event-stream");
 
     let streamStarted = false;
+    /**
+     * Keep proxies/tunnels from idle-closing long AI imports with no progress bytes.
+     * Cloudflare Worker subrequest streams drop around ~100s of silence — ping often.
+     * Do NOT bind stopHeartbeat to req "close": on POST that fires when the body is
+     * consumed, which kills keepalives while the response is still streaming.
+     */
+    let heartbeatTimer = null;
+    function stopHeartbeat() {
+      if (!heartbeatTimer) return;
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    function writeSsePing() {
+      if (!streamStarted || res.writableEnded || res.destroyed) return false;
+      try {
+        // SSE comment — ignored by clients; resets idle timeouts on the wire.
+        res.write(`: ping ${Date.now()}\n\n`);
+        if (typeof res.flush === "function") res.flush();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    function startHeartbeat() {
+      if (!wantsStream || heartbeatTimer) return;
+      // Immediate ping so the first keepalive is not delayed by the interval.
+      if (!writeSsePing()) return;
+      heartbeatTimer = setInterval(() => {
+        if (!writeSsePing()) stopHeartbeat();
+      }, 10_000);
+      if (typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
+    }
     function beginStream() {
       if (!wantsStream || streamStarted || res.headersSent) return;
       streamStarted = true;
@@ -2451,10 +2483,19 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
       if (typeof res.flushHeaders === "function") res.flushHeaders();
+      // Avoid socket idle timeouts on long AI/IGDB work between SSE events.
+      try {
+        if (req.socket) req.socket.setTimeout(0);
+        if (res.socket) res.socket.setTimeout(0);
+      } catch (_) {
+        /* ignore */
+      }
+      startHeartbeat();
     }
     function emitSse(event, data) {
       if (!wantsStream) return;
       beginStream();
+      if (res.writableEnded || res.destroyed) return;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       if (typeof res.flush === "function") res.flush();
     }
@@ -2486,6 +2527,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       });
     }
     function finishOk(payload) {
+      stopHeartbeat();
       if (wantsStream) {
         emitSse("progress", { phase: "done", current: 1, total: 1, percent: 100 });
         emitSse("done", payload);
@@ -2495,6 +2537,7 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       res.json(payload);
     }
     function finishErr(status, payload) {
+      stopHeartbeat();
       if (wantsStream && streamStarted) {
         emitSse("error", { ...payload, status });
         res.end();
@@ -2502,6 +2545,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       }
       res.status(status).json(payload);
     }
+    // Response close = client/proxy gone. Request close on POST fires too early.
+    res.on("close", stopHeartbeat);
 
     const aiConfig = resolveAiIdentifyConfig(process.env, { req });
     if (!aiConfig.enabled) {
@@ -2563,8 +2608,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
     };
     // Catalog match is best-effort for titles; launch scripts require IGDB so a
     // platform id can be written into the executable filename.
-    const { resolveTwitchAppCredentials } = require("../utils/twitchAppCredentials");
-    const resolvedCreds = resolveTwitchAppCredentials(req);
+    // Same credential path as single-game IGDB routes: headers (tunnel proxy) → stored → env.
+    const resolvedCreds = resolveTwitchAppCredentialsForServerIgdb(req);
     const canSearchCatalog = Boolean(resolvedCreds.clientId && resolvedCreds.clientSecret);
 
     function mapCatalogHits(raw) {

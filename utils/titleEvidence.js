@@ -303,10 +303,8 @@ function mergeGamesByTitleKey(games, normalizeTitleKey) {
   const normalize =
     typeof normalizeTitleKey === "function"
       ? normalizeTitleKey
-      : (title) =>
-          String(title || "")
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "");
+      : // Keep in sync with folderGameImport.normalizeTitleKey fallback shape.
+        require("./folderGameImport").normalizeTitleKey;
   const byKey = new Map();
   const order = [];
 

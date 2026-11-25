@@ -4,6 +4,7 @@ const path = require("path");
 const {
   guessTitleFromBasename,
   isJunkGameBasename,
+  normalizeTitleKey,
   pickBestIgdbMatch,
   isAcceptableIgdbMatch,
   resolveUserFolderPath,
@@ -12,6 +13,29 @@ const {
   findLaunchScriptsForGame,
   resolveExecutablePlatformId,
 } = require("../../utils/folderGameImport");
+
+describe("normalizeTitleKey", () => {
+  test("maps Roman sequel numerals to Arabic", () => {
+    expect(normalizeTitleKey("Descent II")).toBe("descent2");
+    expect(normalizeTitleKey("Descent 2")).toBe("descent2");
+    expect(normalizeTitleKey("Descent II")).toBe(normalizeTitleKey("Descent 2"));
+    expect(normalizeTitleKey("Final Fantasy VII")).toBe("finalfantasy7");
+    expect(normalizeTitleKey("Final Fantasy 7")).toBe("finalfantasy7");
+    expect(normalizeTitleKey("Grand Theft Auto IV")).toBe("grandtheftauto4");
+    expect(normalizeTitleKey("Metal Gear Solid V")).toBe("metalgearsolid5");
+  });
+
+  test("does not rewrite lone I/X or letters inside words", () => {
+    expect(normalizeTitleKey("I Am Alive")).toBe("iamalive");
+    expect(normalizeTitleKey("Mega Man X")).toBe("megamanx");
+    expect(normalizeTitleKey("X-Men")).toBe("xmen");
+    expect(normalizeTitleKey("Civilization")).toBe("civilization");
+    expect(normalizeTitleKey("Magic Carpet Plus")).toBe("magiccarpetplus");
+    expect(normalizeTitleKey("Magic Carpet 2")).not.toBe(
+      normalizeTitleKey("Magic Carpet Plus")
+    );
+  });
+});
 
 describe("guessTitleFromBasename", () => {
   test("strips extension and dump tags", () => {

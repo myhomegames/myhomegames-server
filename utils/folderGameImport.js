@@ -160,10 +160,42 @@ function guessTitleFromBasename(name) {
   return title;
 }
 
+/**
+ * Standalone Roman numerals → Arabic for title dedupe keys.
+ * Longest match first. Omits lone "i" / "x" (too many false positives:
+ * "I Am Alive", "Mega Man X", "X-Men").
+ */
+const ROMAN_NUMERAL_TOKENS = [
+  ["xviii", "18"],
+  ["xvii", "17"],
+  ["xvi", "16"],
+  ["xv", "15"],
+  ["xiv", "14"],
+  ["xiii", "13"],
+  ["xii", "12"],
+  ["xi", "11"],
+  ["xix", "19"],
+  ["xx", "20"],
+  ["viii", "8"],
+  ["vii", "7"],
+  ["iii", "3"],
+  ["ii", "2"],
+  ["iv", "4"],
+  ["ix", "9"],
+  ["vi", "6"],
+  ["v", "5"],
+];
+
 function normalizeTitleKey(title) {
-  return String(title || "")
+  let s = String(title || "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+    // Keep token boundaries so "ii" matches as a word, not inside other text.
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  for (const [roman, arabic] of ROMAN_NUMERAL_TOKENS) {
+    s = s.replace(new RegExp(`\\b${roman}\\b`, "g"), arabic);
+  }
+  return s.replace(/[^a-z0-9]+/g, "");
 }
 
 function shouldSkipDir(dirName) {
