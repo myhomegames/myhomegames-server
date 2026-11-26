@@ -119,9 +119,7 @@ const { resolveTwitchAppCredentialsForServerIgdb } = require("../utils/twitchApp
 const {
   getIGDBAccessToken,
   fetchIGDBGameSummaryAndKeywords,
-  fetchCatalogGameByIgdbId,
 } = require("./igdb");
-const { syncCompanyProfilesAfterGameImport } = require("../utils/catalogCompany");
 
 
 /**
@@ -2434,8 +2432,12 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
       writeCacheEntry,
     } = require("../utils/aiIdentifyCache");
     const { buildCompressedFindSkeleton } = require("../utils/pathSkeleton");
-    const { getIGDBAccessToken, runIGDBSearch } = require("./igdb");
-    const { formatIGDBReleaseDate } = require("../utils/dateUtils");
+    const {
+      searchIgdbGamesViaHttp,
+      fetchIgdbGameViaHttp,
+      syncCompanyProfilesViaIgdbHttp,
+      readTwitchApiEnabledSetting,
+    } = require("../utils/igdbCatalogHttp");
 
     const wantsStream =
       req.body?.stream === true ||
@@ -2606,59 +2608,22 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
         );
       }
     };
-    // Catalog match is best-effort for titles; launch scripts require IGDB so a
-    // platform id can be written into the executable filename.
-    // Same credential path as single-game IGDB routes: headers (tunnel proxy) → stored → env.
-    const resolvedCreds = resolveTwitchAppCredentialsForServerIgdb(req);
-    const canSearchCatalog = Boolean(resolvedCreds.clientId && resolvedCreds.clientSecret);
-
-    function mapCatalogHits(raw) {
-      return (Array.isArray(raw) ? raw : []).map((game) => {
-        const { releaseDate, releaseDateFull } = formatIGDBReleaseDate(game.first_release_date);
-        return {
-          id: game.id,
-          name: game.name,
-          summary: game.summary || "",
-          cover: game.cover
-            ? `https:${String(game.cover.url || "")
-                .replace("t_thumb", "t_1080p")
-                .replace("t_cover_big", "t_1080p")}`
-            : null,
-          releaseDate,
-          releaseDateFull,
-          first_release_date: game.first_release_date ?? null,
-          genres: game.genres ? game.genres.map((g) => g.name || g).filter(Boolean) : [],
-          platforms: Array.isArray(game.platforms)
-            ? game.platforms
-                .map((p) => {
-                  if (p == null) return null;
-                  if (typeof p === "string" || typeof p === "number") {
-                    return { id: null, name: String(p) };
-                  }
-                  const id = p.id != null ? p.id : null;
-                  const name = p.name != null ? String(p.name) : "";
-                  if (id == null && !name) return null;
-                  return { id, name };
-                })
-                .filter(Boolean)
-            : [],
-          criticRating: game.aggregated_rating ? Math.round(game.aggregated_rating / 10) : null,
-          userRating: game.rating ? Math.round(game.rating / 10) : null,
-        };
-      });
-    }
+    // Catalog enrichment goes through HTTP `/igdb/*` (Worker injects Twitch), same as Add Game.
+    // Import POST itself only needs OpenAI from the proxy — no Twitch headers on this route.
+    const canSearchCatalog = readTwitchApiEnabledSetting(metadataPath);
 
     async function searchCatalog(title, yearHint = null) {
       if (!canSearchCatalog) return [];
-      const accessToken = await getIGDBAccessToken(resolvedCreds.clientId, resolvedCreds.clientSecret);
-      const yearToFilter =
-        Number.isFinite(Number(yearHint)) && Number(yearHint) >= 1970 ? Number(yearHint) : null;
-      let raw = await runIGDBSearch(title, accessToken, resolvedCreds.clientId, yearToFilter);
+      let hits = await searchIgdbGamesViaHttp(req, title, yearHint);
       // If the AI year was wrong/too strict, retry without the year filter.
-      if (yearToFilter != null && (!Array.isArray(raw) || raw.length === 0)) {
-        raw = await runIGDBSearch(title, accessToken, resolvedCreds.clientId, null);
+      if (
+        Number.isFinite(Number(yearHint)) &&
+        Number(yearHint) >= 1970 &&
+        (!Array.isArray(hits) || hits.length === 0)
+      ) {
+        hits = await searchIgdbGamesViaHttp(req, title, null);
       }
-      return mapCatalogHits(raw);
+      return Array.isArray(hits) ? hits : [];
     }
 
     function importCatalogViaHandler(payload) {
@@ -3008,18 +2973,8 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
             entry.catalogName = match.name;
           } else {
             try {
-              // Same enrichment path as selecting a game from IGDB search (GET /igdb/game/:id).
-              const accessToken = await getIGDBAccessToken(
-                resolvedCreds.clientId,
-                resolvedCreds.clientSecret
-              );
-              const locale = resolveRequestLocale(req, metadataPath);
-              catalogDetail = await fetchCatalogGameByIgdbId(
-                match.id,
-                accessToken,
-                resolvedCreds.clientId,
-                { locale }
-              );
+              // Same enrichment path as Add Game: GET /igdb/game/:id (via Worker), then import.
+              catalogDetail = await fetchIgdbGameViaHttp(req, match.id);
               const imported = await importCatalogViaHandler({
                 gameId: catalogDetail.id,
                 name: catalogDetail.name,
@@ -3051,13 +3006,11 @@ function registerLibraryRoutes(app, requireToken, metadataPath, allGames, update
                 similarGames: catalogDetail.similarGames,
                 type: catalogDetail.type,
               });
-              // Same post-add company sync as web `syncCompanyProfilesAfterGameImport`.
+              // Same post-add company sync as web, via GET /igdb/company/:id.
               try {
-                await syncCompanyProfilesAfterGameImport(metadataPath, {
+                await syncCompanyProfilesViaIgdbHttp(req, {
                   developers: catalogDetail.developers,
                   publishers: catalogDetail.publishers,
-                  accessToken,
-                  clientId: resolvedCreds.clientId,
                 });
               } catch (companySyncErr) {
                 console.warn(
